@@ -25,6 +25,7 @@ import { getTranslations, getActivityDisplayName } from './utils/i18n';
 import {
   formatDateInTimeZone,
   formatTimeInTimeZone,
+  findTeacherLessonConflict,
   DEFAULT_STUDENT_TIMEZONE,
   DEFAULT_TEACHER_TIMEZONE,
 } from './utils/timezone';
@@ -835,6 +836,22 @@ export default function App() {
     teacherName: string;
     meetLink: string;
   }) => {
+    // Conflict Check (Strict Anti-Duplicity Rule 2)
+    const existingConflict = findTeacherLessonConflict(
+      lessonData.teacherEmail,
+      lessonData.startDateTime,
+      lessonData.endDateTime,
+      lessons
+    );
+    if (existingConflict) {
+      alert(
+        isTeacher
+          ? `Conflict Blocked: You already have another lesson scheduled at this time. Overlapping lessons are not allowed.`
+          : `Bloqueio de Conflito: O Amigo Nativo já possui uma aula agendada exatamente neste horário. Por favor, selecione outro horário disponível.`
+      );
+      return;
+    }
+
     const newLesson: LiveLesson = {
       id: `lesson-${Date.now()}`,
       title: lessonData.title,
@@ -913,8 +930,23 @@ export default function App() {
     }
   };
 
-  // Handler: Cancel lesson (preserves student balance)
-  const handleCancelLesson = async (lessonId: string, reason?: string) => {
+  // Handler: Cancel lesson (preserves student balance if teacher unforeseen)
+  const handleCancelLesson = async (
+    lessonId: string,
+    reason?: string,
+    cancelledByInput?: 'student' | 'teacher'
+  ) => {
+    const finalCancelledBy = cancelledByInput || (isTeacher ? 'teacher' : 'student');
+    const finalReason =
+      reason ||
+      (finalCancelledBy === 'teacher'
+        ? currentLanguage === 'en'
+          ? 'Native tutor unforeseen circumstances'
+          : 'Imprevisto do amigo nativo'
+        : currentLanguage === 'en'
+        ? 'Cancelled for personal reasons'
+        : 'Cancelado por motivo próprio');
+
     setLessons((prev) => {
       const target = prev.find((l) => l.id === lessonId);
       return prev.map((l) =>
@@ -928,8 +960,8 @@ export default function App() {
               ...l,
               status: 'cancelled',
               cancelledAt: new Date().toISOString(),
-              cancelledBy: isTeacher ? 'teacher' : 'student',
-              cancellationReason: reason || 'Cancelled by user',
+              cancelledBy: finalCancelledBy,
+              cancellationReason: finalReason,
             }
           : l
       );
@@ -939,8 +971,8 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cancelledBy: isTeacher ? 'teacher' : 'student',
-          reason: reason || 'Cancelled by user',
+          cancelledBy: finalCancelledBy,
+          reason: finalReason,
         }),
       });
     } catch {
@@ -952,9 +984,13 @@ export default function App() {
         id: `cancel-${Date.now()}`,
         message:
           currentLanguage === 'en'
-            ? 'The session has been cancelled. The student balance was not deducted.'
-            : 'A aula foi cancelada com sucesso. O saldo de aulas não foi deduzido.',
-        type: 'info',
+            ? finalCancelledBy === 'teacher'
+              ? 'The session was cancelled due to native tutor unforeseen circumstances. Your lesson balance was NOT deducted.'
+              : 'The session has been cancelled and counted in completed lessons.'
+            : finalCancelledBy === 'teacher'
+            ? 'A aula foi cancelada por imprevisto do amigo nativo. O seu saldo NÃO foi deduzido.'
+            : 'A aula foi cancelada por motivo próprio e contabilizada nas aulas realizadas.',
+        type: finalCancelledBy === 'teacher' ? 'success' : 'info',
         timestamp: new Date().toISOString(),
         read: false,
       },
@@ -999,6 +1035,27 @@ export default function App() {
     newEndIso: string,
     reason: string
   ) => {
+    // Conflict Check on Reschedule proposal
+    const targetLesson = lessons.find((l) => l.id === lessonId);
+    if (targetLesson) {
+      const teacherEmail = targetLesson.teacherEmail || targetLesson.tutorEmail || '';
+      const conflict = findTeacherLessonConflict(
+        teacherEmail,
+        newStartIso,
+        newEndIso,
+        lessons,
+        lessonId
+      );
+      if (conflict) {
+        alert(
+          isTeacher
+            ? `Conflict Blocked: The slot has another scheduled lesson. Please pick an open time.`
+            : `Bloqueio de Conflito: O Amigo Nativo já possui outra aula agendada neste horário.`
+        );
+        return;
+      }
+    }
+
     const proposedBy = isTeacher ? 'teacher' : 'student';
     const proposalStatus = isTeacher
       ? 'pending_student_reschedule'
@@ -1033,6 +1090,26 @@ export default function App() {
 
   // Handler: Accept Reschedule (Strictly updates existing lesson in place, no duplicates)
   const handleAcceptReschedule = async (lessonId: string) => {
+    const target = lessons.find((l) => l.id === lessonId);
+    if (target && target.proposedNewStartDateTime) {
+      const teacherEmail = target.teacherEmail || target.tutorEmail || '';
+      const conflict = findTeacherLessonConflict(
+        teacherEmail,
+        target.proposedNewStartDateTime,
+        target.proposedNewEndDateTime || target.endDateTime,
+        lessons,
+        lessonId
+      );
+      if (conflict) {
+        alert(
+          isTeacher
+            ? `Conflict: This proposed slot was booked by another lesson and cannot be accepted.`
+            : `Bloqueio de Conflito: Este horário já foi ocupado por outra aula e não pode ser aceito.`
+        );
+        return;
+      }
+    }
+
     setLessons((prev) =>
       prev.map((l) => {
         if (l.id === lessonId && l.proposedNewStartDateTime) {
@@ -2197,6 +2274,7 @@ export default function App() {
         students={studentsList}
         initialTeacherEmail={teacherEmailForConfig || userProfile.teacherEmail}
         teacherMeetSettings={teacherMeetSettings}
+        lessons={lessons}
         onSchedule={handleScheduleLesson}
         currentLanguage={isTeacher ? 'en' : currentLanguage}
         t={isTeacher ? getTranslations('en') : t}
@@ -2244,6 +2322,8 @@ export default function App() {
         }}
         lesson={activeLessonForAction}
         currentAccount={currentAccount}
+        lessons={lessons}
+        teacherMeetSettings={teacherMeetSettings}
         onConfirmReschedule={handleConfirmReschedule}
         currentLanguage={isTeacher ? 'en' : currentLanguage}
         timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}

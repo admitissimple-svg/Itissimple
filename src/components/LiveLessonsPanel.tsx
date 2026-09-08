@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   Video,
+  Calendar,
   Calendar as CalendarIcon,
   Clock,
   ExternalLink,
@@ -146,21 +147,22 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
   const defaultCount = 10;
   const studentContractedTotal = contractedLessons[primaryStudentEmail] ?? defaultCount;
 
-  const studentCompletedCount = completedLessons.filter(
-    (l) => (l.studentEmail || '').toLowerCase().trim() === primaryStudentEmail
-  ).length;
+  // 2. Realizadas: Quando o aluno confirma a aula através do botão "Realizada" ou quando o aluno cancela a aula por motivo próprio.
+  const studentRealizadasCount = lessons.filter((l) => {
+    const email = (l.studentEmail || '').toLowerCase().trim();
+    if (primaryStudentEmail && email !== primaryStudentEmail) return false;
+    if (l.status === 'completed') return true;
+    if (l.status === 'cancelled' && (l.cancelledBy === 'student' || !l.cancelledBy)) return true;
+    if (l.status === 'not_completed' && l.notCompletedResponsible === 'student') return true;
+    return false;
+  }).length;
 
-  const studentFaultNotCompletedCount = notCompletedLessons.filter(
-    (l) =>
-      (l.studentEmail || '').toLowerCase().trim() === primaryStudentEmail &&
-      l.notCompletedResponsible === 'student'
-  ).length;
+  // 3. Saldo restante = Contratadas - realizadas
+  const studentRemainingBalance = Math.max(0, studentContractedTotal - studentRealizadasCount);
 
-  const totalDeductedFromContract = studentCompletedCount + studentFaultNotCompletedCount;
-  const studentRemainingBalance = Math.max(0, studentContractedTotal - totalDeductedFromContract);
-
+  // 4. Agendadas = aulas agendadas ativas
   const studentScheduledCount = activeLessons.filter(
-    (l) => (l.studentEmail || '').toLowerCase().trim() === primaryStudentEmail
+    (l) => !primaryStudentEmail || (l.studentEmail || '').toLowerCase().trim() === primaryStudentEmail
   ).length;
 
   const handleStartEditContract = (emailToEdit: string, currentVal: number) => {
@@ -299,20 +301,18 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
           <div className="p-3 bg-[#9AB4FF]/15 rounded-xl border border-[#9AB4FF]/60 shadow-2xs">
             <span className="text-[10px] font-bold uppercase tracking-wider text-[#062863] block flex items-center gap-1">
               <CheckCircle className="w-3 h-3 text-[#1C4C96] shrink-0" />
-              <span>{isEn ? 'Deducted / Done' : 'Realizadas / Abatidas'}</span>
+              <span>{isEn ? 'Completed' : 'Realizadas'}</span>
             </span>
             <div className="flex items-baseline gap-1 mt-1">
               <span className="text-xl sm:text-2xl font-black text-[#062863]">
-                {totalDeductedFromContract}
+                {studentRealizadasCount}
               </span>
               <span className="text-[11px] text-[#062863] font-semibold">
-                {isEn ? 'deducted' : 'abatidas'}
+                {isEn ? 'completed' : 'realizadas'}
               </span>
             </div>
             <span className="text-[10px] text-[#607EC9] block mt-0.5">
-              {studentFaultNotCompletedCount > 0
-                ? `${studentCompletedCount} concl. + ${studentFaultNotCompletedCount} imp. aluno`
-                : isEn ? 'Deducted from balance' : 'Abatidas do contrato'}
+              {isEn ? 'Completed & student cancellations' : 'Concluídas e cancelamentos do aluno'}
             </span>
           </div>
 
@@ -529,92 +529,97 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
                     </div>
                   </div>
 
-                  {/* Actions Bar */}
-                  <div className="pt-2.5 border-t border-slate-100 space-y-2">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-1.5">
-                        <a
-                          href={activeMeetUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-3 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl font-extrabold text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
-                        >
-                          <Video className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                          <span>{t.joinMeetBtn}</span>
-                          <ExternalLink className="w-3 h-3 opacity-80" />
-                        </a>
+                  {/* Single Compact & Fluid Actions Bar (All 6 in One Row) */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 flex-wrap">
+                    {/* 1. Meet */}
+                    <a
+                      href={activeMeetUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition shadow-2xs cursor-pointer shrink-0"
+                      title={t.joinMeetBtn}
+                    >
+                      <Video className="w-3 h-3 text-emerald-100 shrink-0" />
+                      <span>Meet</span>
+                      <ExternalLink className="w-2.5 h-2.5 text-emerald-200 shrink-0" />
+                    </a>
 
-                        <a
-                          href={directCalendarUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-2.5 py-1.5 bg-white hover:bg-[#9AB4FF]/15 rounded-xl text-[#062863] border border-[#607EC9]/40 text-[11px] font-bold flex items-center gap-1 transition cursor-pointer"
-                        >
-                          <CalendarPlus className="w-3.5 h-3.5 text-[#1C4C96]" />
-                          <span className="hidden sm:inline">Google Calendar</span>
-                        </a>
-                      </div>
+                    {/* 2. Google Calendar */}
+                    <a
+                      href={directCalendarUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-2.5 py-1 bg-white hover:bg-[#9AB4FF]/15 border border-[#607EC9]/40 text-[#062863] rounded-lg text-[11px] font-bold flex items-center gap-1 transition shadow-2xs cursor-pointer shrink-0"
+                      title={isEn ? 'Sync with Google Calendar' : 'Sincronizar com o Google Calendar'}
+                    >
+                      <Calendar className="w-3 h-3 text-[#1C4C96] shrink-0" />
+                      <span>Calendar</span>
+                      <ExternalLink className="w-2.5 h-2.5 text-[#607EC9] shrink-0" />
+                    </a>
 
-                      <button
-                        type="button"
-                        onClick={() => onRescheduleLesson(lesson)}
-                        className="px-3 py-1.5 bg-white hover:bg-[#9AB4FF]/15 text-[#062863] border border-[#607EC9]/40 rounded-full text-xs font-black transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                      >
-                        <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500 shrink-0" />
-                        <span>{isEn ? 'Reschedule' : 'Reagendar'}</span>
-                      </button>
-                    </div>
+                    {/* 3. Remarcar */}
+                    <button
+                      type="button"
+                      onClick={() => onRescheduleLesson(lesson)}
+                      className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-300 text-[#062863] rounded-lg text-[11px] font-bold cursor-pointer transition flex items-center gap-1 shadow-2xs shrink-0"
+                      title={isEn ? 'Reschedule date/time' : 'Remarcar data/horário'}
+                    >
+                      <RotateCcw className="w-3 h-3 text-[#1C4C96] shrink-0" />
+                      <span>{isEn ? 'Reschedule' : 'Remarcar'}</span>
+                    </button>
 
-                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                isEn
-                                  ? 'Confirm lesson completed? 1 lesson will be deducted from contracted lessons balance and archived to completed history.'
-                                  : 'Confirmar aula como concluída? 1 aula será abatida do saldo de aulas contratadas e arquivada no histórico.'
-                              )
-                            ) {
-                              onCompleteLesson(lesson.id);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer border bg-[#062863] hover:bg-[#000035] text-white border-[#1C4C96] shadow-2xs"
-                        >
-                          <CheckCircle className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                          <span>{isEn ? 'Completed' : 'Concluir Aula'}</span>
-                        </button>
+                    {/* 4. Cancelar */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            isEn
+                              ? 'Are you sure you want to cancel this scheduled lesson?'
+                              : 'Tem certeza que deseja cancelar esta aula agendada?'
+                          )
+                        ) {
+                          onCancelLesson(lesson.id);
+                        }
+                      }}
+                      className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-lg text-[11px] font-bold cursor-pointer transition flex items-center gap-1 shadow-2xs shrink-0"
+                      title={t.cancelLessonBtn}
+                    >
+                      <Trash2 className="w-3 h-3 text-rose-500 shrink-0" />
+                      <span>{isEn ? 'Cancel' : 'Cancelar'}</span>
+                    </button>
 
-                        <button
-                          type="button"
-                          onClick={() => onMarkNotCompleted(lesson)}
-                          className="px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer border bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300"
-                        >
-                          <XCircle className="w-3.5 h-3.5 text-amber-700" />
-                          <span>{isEn ? 'Not Completed' : 'Não Realizada'}</span>
-                        </button>
-                      </div>
+                    {/* 5. Realizada */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            isEn
+                              ? 'Confirm lesson completed? 1 lesson will be deducted from contracted lessons balance.'
+                              : 'Confirmar aula como realizada? 1 aula será contabilizada nas aulas realizadas e deduzida do saldo.'
+                          )
+                        ) {
+                          onCompleteLesson(lesson.id);
+                        }
+                      }}
+                      className="px-2.5 py-1 bg-[#062863] hover:bg-[#000035] text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition cursor-pointer shadow-2xs border border-[#1C4C96] shrink-0"
+                      title={isEn ? 'Confirm lesson was completed' : 'Confirmar se a aula foi realizada'}
+                    >
+                      <CheckCircle className="w-3 h-3 text-[#9AB4FF] shrink-0" />
+                      <span>{isEn ? 'Completed' : 'Realizada'}</span>
+                    </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              isEn
-                                ? 'Are you sure you want to delete this scheduled lesson?'
-                                : 'Tem certeza que deseja excluir esta aula agendada?'
-                            )
-                          ) {
-                            onCancelLesson(lesson.id);
-                          }
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition cursor-pointer"
-                        title={t.cancelLessonBtn}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    {/* 6. Não Realizada */}
+                    <button
+                      type="button"
+                      onClick={() => onMarkNotCompleted(lesson)}
+                      className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-lg text-[11px] font-bold flex items-center gap-1 transition cursor-pointer shadow-2xs shrink-0"
+                      title={isEn ? 'Mark as not held / not completed' : 'Informar que a aula não foi realizada'}
+                    >
+                      <XCircle className="w-3 h-3 text-amber-700 shrink-0" />
+                      <span>{isEn ? 'Not Done' : 'Não Realizada'}</span>
+                    </button>
                   </div>
                 </div>
               );

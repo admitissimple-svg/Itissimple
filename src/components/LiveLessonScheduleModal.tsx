@@ -16,7 +16,7 @@ import {
   AlertTriangle,
   Globe,
 } from 'lucide-react';
-import { GoogleAccount, TeacherMeetSettings, DayOfWeek, Language, UserProfile } from '../types';
+import { GoogleAccount, TeacherMeetSettings, DayOfWeek, Language, UserProfile, LiveLesson } from '../types';
 import { Translations } from '../utils/i18n';
 import { generateGoogleCalendarWebLink } from '../utils/calendar';
 import {
@@ -25,6 +25,7 @@ import {
   getTimezoneDisplayLabel,
   generate30MinTimeSlots,
   formatTimeSlot12h,
+  findTeacherLessonConflict,
   DEFAULT_STUDENT_TIMEZONE,
   DEFAULT_TEACHER_TIMEZONE,
 } from '../utils/timezone';
@@ -35,6 +36,7 @@ interface LiveLessonScheduleModalProps {
   currentAccount: GoogleAccount | null;
   teachers: GoogleAccount[];
   students: GoogleAccount[];
+  lessons?: LiveLesson[];
   initialTeacherEmail?: string;
   teacherMeetSettings: Record<string, TeacherMeetSettings>;
   onSchedule: (lessonData: {
@@ -60,6 +62,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   currentAccount,
   teachers,
   students,
+  lessons = [],
   initialTeacherEmail,
   teacherMeetSettings,
   onSchedule,
@@ -179,12 +182,49 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     email: selectedStudentEmail,
   };
 
+  // Check which day of week is selected
+  const selectedDayKey = useMemo(() => {
+    try {
+      const [y, m, d] = selectedDate.split('-').map(Number);
+      const dateObj = new Date(y, m - 1, d);
+      const dayIndex = dateObj.getDay();
+      const map: Record<number, DayOfWeek> = {
+        0: 'sunday',
+        1: 'monday',
+        2: 'tuesday',
+        3: 'wednesday',
+        4: 'thursday',
+        5: 'friday',
+        6: 'saturday',
+      };
+      return map[dayIndex] || 'monday';
+    } catch {
+      return 'monday';
+    }
+  }, [selectedDate]);
+
+  const isDayAvailable = useMemo(() => {
+    if (!activeTeacherSettings.availableDays || activeTeacherSettings.availableDays.length === 0) return true;
+    return activeTeacherSettings.availableDays.includes(selectedDayKey);
+  }, [activeTeacherSettings.availableDays, selectedDayKey]);
+
+  // Generate 30-minute time slots based on teacher settings
   const timeSlots = useMemo(() => {
+    if (activeTeacherSettings.availableHours && activeTeacherSettings.availableHours.length > 0) {
+      return [...activeTeacherSettings.availableHours].sort();
+    }
     return generate30MinTimeSlots(
       activeTeacherSettings.workingHoursStart || '08:00',
       activeTeacherSettings.workingHoursEnd || '20:00'
     );
-  }, [activeTeacherSettings.workingHoursStart, activeTeacherSettings.workingHoursEnd]);
+  }, [activeTeacherSettings.availableHours, activeTeacherSettings.workingHoursStart, activeTeacherSettings.workingHoursEnd]);
+
+  // Adjust selectedStartTime if not in timeSlots
+  React.useEffect(() => {
+    if (timeSlots.length > 0 && !timeSlots.includes(selectedStartTime)) {
+      setSelectedStartTime(timeSlots[0]);
+    }
+  }, [timeSlots]);
 
   // Calculate start and end ISO
   const calculateEndDateTime = () => {
@@ -205,8 +245,48 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     return start.toISOString();
   };
 
+  // 🌟 ANTI-DUPLICITY CONFLICT DETECTION
+  const currentConflict = useMemo(() => {
+    if (!selectedDate || !selectedStartTime || !selectedTeacherObj.email) return null;
+    const startIso = calculateStartDateTime();
+    const endIso = calculateEndDateTime();
+    if (!startIso || !endIso) return null;
+    return findTeacherLessonConflict(selectedTeacherObj.email, startIso, endIso, lessons);
+  }, [selectedDate, selectedStartTime, durationMinutes, selectedTeacherObj.email, lessons]);
+
+  // Slot conflict checker for dropdown options
+  const checkSlotIsBooked = (slot: string) => {
+    if (!selectedDate || !selectedTeacherObj.email) return false;
+    const [hours, mins] = slot.split(':').map(Number);
+    const start = new Date(selectedDate + 'T00:00:00');
+    start.setHours(hours, mins, 0, 0);
+    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    const conflict = findTeacherLessonConflict(selectedTeacherObj.email, start.toISOString(), end.toISOString(), lessons);
+    return Boolean(conflict);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Absolute conflict blocking
+    if (currentConflict) {
+      alert(
+        isEn
+          ? `Conflict Blocked: The Native Friend ${cleanTeacherName(selectedTeacherObj.name)} already has a lesson scheduled at this time. Please choose another slot.`
+          : `Bloqueio de Conflito: O Amigo Nativo ${cleanTeacherName(selectedTeacherObj.name)} já possui uma aula agendada neste horário. Por favor, selecione outro horário.`
+      );
+      return;
+    }
+
+    if (!isDayAvailable) {
+      alert(
+        isEn
+          ? `The Native Friend is not available on ${selectedDayKey}. Please select an open day.`
+          : `O Amigo Nativo não atende às ${selectedDayKey === 'sunday' ? 'domingos' : selectedDayKey === 'saturday' ? 'sábados' : 'segundas-feiras'}. Por favor, escolha um dia disponível.`
+      );
+      return;
+    }
+
     setIsSubmitting(true);
 
     const startIso = calculateStartDateTime();
@@ -261,11 +341,16 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               <CalendarPlus className="w-5 h-5 text-[#9AB4FF]" />
             </div>
             <div>
-              <h3 className="font-black text-base sm:text-lg text-white">
-                {isEn ? 'Schedule Live 1-on-1 Lesson' : 'Agendar Aula Ao Vivo (Google Meet)'}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-black text-base sm:text-lg text-white">
+                  {isEn ? 'Schedule Live 1-on-1 Lesson' : 'Agendar Aula Ao Vivo (Google Meet)'}
+                </h3>
+                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#9AB4FF] border border-[#9AB4FF]/30">
+                  30-min Grid
+                </span>
+              </div>
               <p className="text-xs text-[#9AB4FF] font-medium">
-                {isEn ? 'Real-time synchronization with Google Calendar' : 'Sincronização com Google Calendar e Meet'}
+                {isEn ? 'Fixed 30-min blocks • Anti-duplicity schedule lock' : 'Blocos de 30 min • Trava anti-duplicidade'}
               </p>
             </div>
           </div>
@@ -358,21 +443,58 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Start Time' : 'Horário de Início'}
+                {isEn ? 'Start Time (30-min Block)' : 'Horário de Início (Blocos de 30 min)'}
               </label>
               <select
                 value={selectedStartTime}
                 onChange={(e) => setSelectedStartTime(e.target.value)}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               >
-                {timeSlots.map((slot) => (
-                  <option key={slot} value={slot}>
-                    {formatTimeSlot12h(slot)}
-                  </option>
-                ))}
+                {timeSlots.map((slot) => {
+                  const isOccupied = checkSlotIsBooked(slot);
+                  return (
+                    <option key={slot} value={slot}>
+                      {formatTimeSlot12h(slot)} {isOccupied ? (isEn ? '• ❌ [BUSY / BOOKED]' : '• ❌ [OCUPADO / JÁ AGENDADO]') : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>
+
+          {/* Warning if Day is Not in Teacher's Available Days */}
+          {!isDayAvailable && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-start gap-2 animate-in fade-in">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] leading-relaxed">
+                {isEn
+                  ? `Notice: The Native Friend is not normally scheduled for teaching on ${selectedDayKey}. Please choose an open day or coordinate with the teacher.`
+                  : `Atenção: O Amigo Nativo não configurou atendimento neste dia da semana (${selectedDayKey}). Por favor, selecione outro dia da semana.`}
+              </p>
+            </div>
+          )}
+
+          {/* 🚨 CONFLICT ALERT BANNER (Rule 2) */}
+          {currentConflict && (
+            <div className="p-4 bg-rose-50 border-2 border-rose-400 rounded-2xl text-xs text-rose-950 space-y-1.5 animate-in fade-in">
+              <div className="flex items-center gap-2 font-black text-rose-800">
+                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span className="text-sm">
+                  {isEn ? 'Time Slot Already Booked (Schedule Conflict)' : 'Horário Já Ocupado (Conflito de Horário)'}
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-rose-900 font-medium">
+                {isEn
+                  ? `The Native Friend ${cleanTeacherName(selectedTeacherObj.name)} already has another lesson scheduled on this exact slot (${formatTimeInTimeZone(currentConflict.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict.endDateTime, activeTz)}${currentConflict.studentName ? ` with ${currentConflict.studentName}` : ''}). Double bookings are strictly blocked by system rules.`
+                  : `O Amigo Nativo ${cleanTeacherName(selectedTeacherObj.name)} já possui uma aula agendada exatamente neste mesmo horário (${formatTimeInTimeZone(currentConflict.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict.endDateTime, activeTz)}${currentConflict.studentName ? ` com ${currentConflict.studentName}` : ''}). O sistema bloqueia conflitos e não permite duas aulas no mesmo slot.`}
+              </p>
+              <p className="text-[11px] font-black text-rose-700">
+                {isEn
+                  ? '👉 Please select another date or available 30-minute time slot to proceed.'
+                  : '👉 Por favor, selecione outro horário disponível na grade de 30 minutos.'}
+              </p>
+            </div>
+          )}
 
           {/* Duration & Timezone */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -385,8 +507,9 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               >
-                <option value={25}>25 {isEn ? 'minutes' : 'minutos'}</option>
-                <option value={50}>50 {isEn ? 'minutes' : 'minutos'}</option>
+                <option value={25}>25 {isEn ? 'minutes (1 slot)' : 'minutos (1 bloco)'}</option>
+                <option value={30}>30 {isEn ? 'minutes (1 slot)' : 'minutos (1 bloco)'}</option>
+                <option value={50}>50 {isEn ? 'minutes (2 slots)' : 'minutos (2 blocos)'}</option>
               </select>
             </div>
 
@@ -412,6 +535,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 required
                 value={customTitle}
                 onChange={(e) => setCustomTitle(e.target.value)}
+                placeholder={isEn ? 'e.g. Daily English Conversation Practice' : 'Ex.: Prática de Conversação Diária'}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               />
             </div>
@@ -424,7 +548,8 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96] resize-none font-medium"
+                placeholder={isEn ? 'Focus on vocabulary, listening, job interview...' : 'Foco em vocabulário, rotina de estudos...'}
+                className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               />
             </div>
           </div>
@@ -463,11 +588,21 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="px-6 py-2.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
+                disabled={isSubmitting || Boolean(currentConflict)}
+                className={`px-6 py-2.5 rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-md ${
+                  currentConflict
+                    ? 'bg-slate-300 text-slate-500 border border-slate-300 cursor-not-allowed shadow-none'
+                    : 'bg-[#1C4C96] hover:bg-[#062863] text-white cursor-pointer'
+                }`}
               >
                 <CalendarPlus className="w-4 h-4 text-[#9AB4FF]" />
-                <span>{isSubmitting ? (isEn ? 'Scheduling...' : 'Agendando...') : isEn ? 'Confirm & Schedule' : 'Confirmar Agendamento'}</span>
+                <span>
+                  {isSubmitting
+                    ? (isEn ? 'Scheduling...' : 'Agendando...')
+                    : currentConflict
+                    ? (isEn ? 'Slot Unavailable (Already Booked)' : 'Horário Indisponível (Já Ocupado)')
+                    : isEn ? 'Confirm & Schedule' : 'Confirmar Agendamento'}
+                </span>
               </button>
             </div>
           </div>
@@ -476,3 +611,4 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     </div>
   );
 };
+

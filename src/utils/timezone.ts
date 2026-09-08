@@ -142,3 +142,79 @@ export function generate30MinTimeSlots(startHour: string = '07:00', endHour: str
   return slots;
 }
 
+// Fixed 30-minute slots from 06:00 to 22:30 for Native Friends availability
+export const FIXED_30MIN_AVAILABILITY_SLOTS: string[] = generate30MinTimeSlots('06:00', '23:00');
+
+// Default popular teacher availability hours (08:00 to 18:00)
+export const DEFAULT_TEACHER_AVAILABILITY_HOURS: string[] = generate30MinTimeSlots('08:00', '18:00');
+
+/**
+ * Checks if two time intervals overlap: [startA, endA) and [startB, endB)
+ */
+export function checkTimeRangesOverlap(
+  startA: string | number | Date,
+  endA: string | number | Date,
+  startB: string | number | Date,
+  endB: string | number | Date
+): boolean {
+  const sA = startA instanceof Date ? startA.getTime() : new Date(startA).getTime();
+  const eA = endA instanceof Date ? endA.getTime() : new Date(endA).getTime();
+  const sB = startB instanceof Date ? startB.getTime() : new Date(startB).getTime();
+  const eB = endB instanceof Date ? endB.getTime() : new Date(endB).getTime();
+
+  if (isNaN(sA) || isNaN(eA) || isNaN(sB) || isNaN(eB)) return false;
+  return sA < eB && eA > sB;
+}
+
+/**
+ * Finds if there is an existing scheduled lesson conflicting with the proposed time range for a teacher
+ */
+export function findTeacherLessonConflict<T extends {
+  id?: string;
+  teacherEmail?: string;
+  tutorEmail?: string;
+  status?: string;
+  startDateTime?: string;
+  endDateTime?: string;
+  [key: string]: any;
+}>(
+  teacherEmail: string,
+  proposedStartIso: string,
+  proposedEndIso: string,
+  lessons: T[],
+  excludeLessonId?: string
+): T | null {
+  if (!teacherEmail || !proposedStartIso || !proposedEndIso || !Array.isArray(lessons)) {
+    return null;
+  }
+
+  const cleanTeacher = teacherEmail.toLowerCase().trim();
+  const pStart = new Date(proposedStartIso).getTime();
+  const pEnd = new Date(proposedEndIso).getTime();
+
+  if (isNaN(pStart) || isNaN(pEnd) || pStart >= pEnd) return null;
+
+  for (const l of lessons) {
+    if (excludeLessonId && l.id === excludeLessonId) continue;
+    // Cancelled lessons do not occupy slots
+    if (l.status === 'cancelled') continue;
+
+    const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+    if (lTeacher !== cleanTeacher) continue;
+
+    if (!l.startDateTime || !l.endDateTime) continue;
+    const lStart = new Date(l.startDateTime).getTime();
+    const lEnd = new Date(l.endDateTime).getTime();
+
+    if (isNaN(lStart) || isNaN(lEnd)) continue;
+
+    // Check overlap: lStart < pEnd && lEnd > pStart
+    if (lStart < pEnd && lEnd > pStart) {
+      return l;
+    }
+  }
+
+  return null;
+}
+
+

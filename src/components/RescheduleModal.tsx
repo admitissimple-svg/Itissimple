@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   Calendar,
@@ -6,15 +6,24 @@ import {
   Heart,
   Send,
   AlertCircle,
+  AlertTriangle,
 } from 'lucide-react';
-import { LiveLesson, GoogleAccount, Language } from '../types';
-import { generate30MinTimeSlots, formatDateInTimeZone, formatTimeInTimeZone, formatTimeSlot12h } from '../utils/timezone';
+import { LiveLesson, GoogleAccount, Language, TeacherMeetSettings } from '../types';
+import {
+  generate30MinTimeSlots,
+  formatDateInTimeZone,
+  formatTimeInTimeZone,
+  formatTimeSlot12h,
+  findTeacherLessonConflict,
+} from '../utils/timezone';
 
 interface RescheduleModalProps {
   isOpen: boolean;
   onClose: () => void;
   lesson: LiveLesson | null;
   currentAccount: GoogleAccount | null;
+  lessons?: LiveLesson[];
+  teacherMeetSettings?: Record<string, TeacherMeetSettings>;
   onConfirmReschedule: (
     lessonId: string,
     newStartIso: string,
@@ -30,6 +39,8 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
   onClose,
   lesson,
   currentAccount,
+  lessons = [],
+  teacherMeetSettings = {},
   onConfirmReschedule,
   currentLanguage,
   timeZone = 'America/Sao_Paulo',
@@ -48,19 +59,65 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
     }
   }, [lesson]);
 
-  const timeSlots = generate30MinTimeSlots('07:00', '21:00');
+  const teacherEmail = (lesson?.teacherEmail || lesson?.tutorEmail || '').toLowerCase().trim();
+  const activeSettings = teacherMeetSettings[teacherEmail];
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!lesson || !newDate || !newStartTime) return;
+  const timeSlots = useMemo(() => {
+    if (activeSettings?.availableHours && activeSettings.availableHours.length > 0) {
+      return [...activeSettings.availableHours].sort();
+    }
+    return generate30MinTimeSlots('07:00', '22:00');
+  }, [activeSettings]);
 
+  // Check proposed start and end
+  const proposedIso = useMemo(() => {
+    if (!newDate || !newStartTime) return null;
     const [h, m] = newStartTime.split(':').map(Number);
     const start = new Date(newDate + 'T00:00:00');
     start.setHours(h, m, 0, 0);
-
     const end = new Date(start.getTime() + 30 * 60 * 1000);
+    return {
+      startIso: start.toISOString(),
+      endIso: end.toISOString(),
+    };
+  }, [newDate, newStartTime]);
 
-    onConfirmReschedule(lesson.id, start.toISOString(), end.toISOString(), reason.trim());
+  // Conflict validation (Rule 2)
+  const currentConflict = useMemo(() => {
+    if (!lesson || !proposedIso || !teacherEmail) return null;
+    return findTeacherLessonConflict(
+      teacherEmail,
+      proposedIso.startIso,
+      proposedIso.endIso,
+      lessons,
+      lesson.id
+    );
+  }, [lesson, proposedIso, teacherEmail, lessons]);
+
+  const checkSlotIsBooked = (slot: string) => {
+    if (!newDate || !teacherEmail || !lesson) return false;
+    const [h, m] = slot.split(':').map(Number);
+    const start = new Date(newDate + 'T00:00:00');
+    start.setHours(h, m, 0, 0);
+    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    const conflict = findTeacherLessonConflict(teacherEmail, start.toISOString(), end.toISOString(), lessons, lesson.id);
+    return Boolean(conflict);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lesson || !newDate || !newStartTime || !proposedIso) return;
+
+    if (currentConflict) {
+      alert(
+        isEn
+          ? `Conflict Blocked: The Native Friend already has another lesson scheduled at this time. Please pick an open slot.`
+          : `Bloqueio de Conflito: O Amigo Nativo já possui outra aula agendada neste horário. Por favor, escolha outro slot livre.`
+      );
+      return;
+    }
+
+    onConfirmReschedule(lesson.id, proposedIso.startIso, proposedIso.endIso, reason.trim());
     onClose();
   };
 
@@ -119,21 +176,39 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'New Time Slot' : 'Novo Horário (30 min)'}
+                {isEn ? 'New Time Slot (30 min)' : 'Novo Horário (30 min)'}
               </label>
               <select
                 value={newStartTime}
                 onChange={(e) => setNewStartTime(e.target.value)}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs text-[#000035]"
               >
-                {timeSlots.map((slot) => (
-                  <option key={slot} value={slot}>
-                    {formatTimeSlot12h(slot)}
-                  </option>
-                ))}
+                {timeSlots.map((slot) => {
+                  const isOccupied = checkSlotIsBooked(slot);
+                  return (
+                    <option key={slot} value={slot}>
+                      {formatTimeSlot12h(slot)} {isOccupied ? (isEn ? '• ❌ [BOOKED]' : '• ❌ [OCUPADO]') : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>
+
+          {/* Conflict Alert Banner */}
+          {currentConflict && (
+            <div className="p-3.5 bg-rose-50 border-2 border-rose-400 rounded-xl text-xs text-rose-950 space-y-1 animate-in fade-in">
+              <div className="flex items-center gap-1.5 font-black text-rose-800">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{isEn ? 'Slot Already Booked' : 'Horário Já Ocupado'}</span>
+              </div>
+              <p className="text-[11px] text-rose-900 font-medium">
+                {isEn
+                  ? `The Native Friend already has another lesson scheduled on this exact time slot. The system does not allow overlapping bookings.`
+                  : `O Amigo Nativo já possui outra aula agendada neste mesmo horário. O sistema bloqueia duplicidades.`}
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-bold text-[#000035] mb-1">
@@ -167,10 +242,19 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-5 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              disabled={Boolean(currentConflict)}
+              className={`px-5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+                currentConflict
+                  ? 'bg-slate-300 text-slate-500 border border-slate-300 cursor-not-allowed'
+                  : 'bg-[#1C4C96] hover:bg-[#062863] text-white cursor-pointer'
+              }`}
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{isEn ? 'Send Reschedule Request' : 'Solicitar Reagendamento'}</span>
+              <span>
+                {currentConflict
+                  ? (isEn ? 'Slot Unavailable' : 'Horário Indisponível')
+                  : isEn ? 'Send Reschedule Request' : 'Solicitar Reagendamento'}
+              </span>
             </button>
           </div>
         </form>

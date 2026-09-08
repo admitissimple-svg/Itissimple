@@ -2355,6 +2355,28 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
   if (Array.isArray(lessons)) {
     db.liveLessons = lessons;
   } else if (newLesson && newLesson.id) {
+    // Conflict Check (Strict Anti-Duplicity Rule)
+    const proposedTeacher = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
+    if (proposedTeacher && newLesson.startDateTime && newLesson.endDateTime && newLesson.status !== 'cancelled') {
+      const pStart = new Date(newLesson.startDateTime).getTime();
+      const pEnd = new Date(newLesson.endDateTime).getTime();
+      const conflict = (db.liveLessons || []).find((l: any) => {
+        if (l.id === newLesson.id || l.status === 'cancelled') return false;
+        const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+        if (lTeacher !== proposedTeacher) return false;
+        if (!l.startDateTime || !l.endDateTime) return false;
+        const lStart = new Date(l.startDateTime).getTime();
+        const lEnd = new Date(l.endDateTime).getTime();
+        return lStart < pEnd && lEnd > pStart;
+      });
+      if (conflict) {
+        return res.status(409).json({
+          error: 'Conflito de Horário: O Amigo Nativo já possui uma aula agendada neste horário.',
+          conflict,
+        });
+      }
+    }
+
     const idx = (db.liveLessons || []).findIndex((l: any) => l.id === newLesson.id);
     if (idx >= 0) {
       db.liveLessons[idx] = newLesson;

@@ -7,6 +7,7 @@ import {
   User,
   CheckCircle2,
   Trash2,
+  GraduationCap,
 } from 'lucide-react';
 import { LiveLesson, Language } from '../types';
 import { formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
@@ -15,7 +16,11 @@ interface CancelLessonModalProps {
   isOpen: boolean;
   onClose: () => void;
   lesson: LiveLesson | null;
-  onConfirmCancel: (lessonId: string, reason?: string) => void;
+  onConfirmCancel: (
+    lessonId: string,
+    reason?: string,
+    cancelledBy?: 'student' | 'teacher'
+  ) => void;
   currentLanguage: Language;
   timeZone?: string;
 }
@@ -28,6 +33,7 @@ export const CancelLessonModal: React.FC<CancelLessonModalProps> = ({
   currentLanguage,
   timeZone,
 }) => {
+  const [cancelledBy, setCancelledBy] = useState<'student' | 'teacher'>('student');
   const [reason, setReason] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
@@ -38,7 +44,7 @@ export const CancelLessonModal: React.FC<CancelLessonModalProps> = ({
   const handleConfirm = async () => {
     setIsSubmitting(true);
     try {
-      await onConfirmCancel(lesson.id, reason.trim() || undefined);
+      await onConfirmCancel(lesson.id, reason.trim() || undefined, cancelledBy);
       setReason('');
       onClose();
     } finally {
@@ -106,15 +112,74 @@ export const CancelLessonModal: React.FC<CancelLessonModalProps> = ({
             )}
           </div>
 
-          {/* Balance Protection Reassurance Notice */}
-          <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-start gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-            <p className="text-xs text-emerald-900 leading-relaxed font-medium">
-              {isEn
-                ? 'Your lesson balance will NOT be deducted. You can reschedule or book another session at any time.'
-                : 'O seu saldo de aulas NÃO será descontado. Você poderá agendar outra sessão quando desejar.'}
-            </p>
+          {/* Cancellation Responsibility Selector */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-[#000035]">
+              {isEn ? 'Cancellation Responsibility / Motive:' : 'Responsabilidade pelo Cancelamento:'}
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setCancelledBy('student')}
+                className={`p-3 rounded-2xl border text-left transition cursor-pointer flex flex-col gap-1 ${
+                  cancelledBy === 'student'
+                    ? 'bg-rose-50/90 border-rose-500 shadow-2xs'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <User className={`w-3.5 h-3.5 ${cancelledBy === 'student' ? 'text-rose-600' : 'text-slate-500'}`} />
+                  <span className={`text-xs font-bold ${cancelledBy === 'student' ? 'text-rose-950' : 'text-[#000035]'}`}>
+                    {isEn ? 'Personal Reason' : 'Motivo Próprio'}
+                  </span>
+                </div>
+                <span className={`text-[10px] ${cancelledBy === 'student' ? 'text-rose-800 font-semibold' : 'text-slate-500'}`}>
+                  {isEn ? 'Deducted from balance' : 'Abate do saldo de aulas'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCancelledBy('teacher')}
+                className={`p-3 rounded-2xl border text-left transition cursor-pointer flex flex-col gap-1 ${
+                  cancelledBy === 'teacher'
+                    ? 'bg-emerald-50/90 border-emerald-500 shadow-2xs'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <GraduationCap className={`w-3.5 h-3.5 ${cancelledBy === 'teacher' ? 'text-emerald-600' : 'text-slate-500'}`} />
+                  <span className={`text-xs font-bold ${cancelledBy === 'teacher' ? 'text-emerald-950' : 'text-[#000035]'}`}>
+                    {isEn ? 'Tutor Unforeseen' : 'Imprevisto Amigo Nativo'}
+                  </span>
+                </div>
+                <span className={`text-[10px] ${cancelledBy === 'teacher' ? 'text-emerald-800 font-semibold' : 'text-slate-500'}`}>
+                  {isEn ? 'Keeps balance intact' : 'Não desconta saldo'}
+                </span>
+              </button>
+            </div>
           </div>
+
+          {/* Cancellation Dynamic Notice */}
+          {cancelledBy === 'student' ? (
+            <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-2.5">
+              <AlertOctagon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-900 leading-relaxed font-medium">
+                {isEn
+                  ? 'Cancelling a lesson for personal reasons will be counted as a completed lesson and deducted from your balance.'
+                  : 'O cancelamento da aula por motivo próprio será contabilizado nas aulas realizadas e deduzido do saldo restante.'}
+              </p>
+            </div>
+          ) : (
+            <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-emerald-900 leading-relaxed font-medium">
+                {isEn
+                  ? 'Cancelling due to native tutor unforeseen circumstances will NOT be deducted from your lesson balance.'
+                  : 'O cancelamento por imprevisto do amigo nativo NÃO será deduzido do saldo de aulas do aluno.'}
+              </p>
+            </div>
+          )}
 
           {/* Optional cancellation reason */}
           <div className="space-y-1.5">

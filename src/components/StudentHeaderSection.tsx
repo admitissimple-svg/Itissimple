@@ -29,7 +29,11 @@ interface StudentHeaderSectionProps {
   onUpdateContractedLessons?: (studentEmail: string, totalContracted: number) => void;
   onOpenScheduleModal: () => void;
   onOpenManageSubscription?: () => void;
-  onCancelLesson?: (lessonId: string, reason?: string) => void;
+  onCancelLesson?: (
+    lessonId: string,
+    reason?: string,
+    cancelledBy?: 'student' | 'teacher'
+  ) => void;
   onAcceptReschedule?: (lessonId: string) => void;
   onDeclineReschedule?: (lessonId: string) => void;
   onCompleteLesson?: (lessonId: string) => void;
@@ -87,13 +91,19 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
     (l) => (l.studentEmail || '').toLowerCase() === studentEmail.toLowerCase()
   );
 
-  const studentCompletedCount = studentLessons.filter((l) => l.status === 'completed').length;
-  const studentFaultNotCompletedCount = studentLessons.filter(
-    (l) => l.status === 'not_completed' && l.notCompletedResponsible === 'student'
-  ).length;
-  const totalDeductedFromContract = studentCompletedCount + studentFaultNotCompletedCount;
-  const studentRemainingBalance = Math.max(0, totalContractedCount - totalDeductedFromContract);
-  const activeScheduledLessons = studentLessons.filter((l) => l.status === 'scheduled');
+  // 2. Realizadas: Quando o aluno confirma a aula através do botão "Realizada" ou quando o aluno cancela a aula por motivo próprio
+  const studentRealizadasCount = studentLessons.filter((l) => {
+    if (l.status === 'completed') return true;
+    if (l.status === 'cancelled' && (l.cancelledBy === 'student' || !l.cancelledBy)) return true;
+    if (l.status === 'not_completed' && l.notCompletedResponsible === 'student') return true;
+    return false;
+  }).length;
+
+  // 3. Saldo restante = Contratadas - realizadas
+  const studentRemainingBalance = Math.max(0, totalContractedCount - studentRealizadasCount);
+
+  // 4. Agendadas = aulas agendadas ativas
+  const activeScheduledLessons = studentLessons.filter((l) => l.status === 'scheduled' && !l.cancelledAt);
   const studentScheduledCount = activeScheduledLessons.length;
 
   const handleSaveContract = (e: React.FormEvent) => {
@@ -182,18 +192,18 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
               </div>
             </div>
 
-            {/* Metric 2: Deducted / Done */}
+            {/* Metric 2: Realizadas */}
             <div className="py-1 px-2 bg-[#9AB4FF]/10 rounded-xl border border-[#9AB4FF]/40 flex flex-col justify-center">
               <span className="text-[8.5px] font-bold uppercase tracking-wider text-[#062863] leading-none flex items-center gap-0.5">
                 <CheckCircle className="w-2.5 h-2.5 text-[#1C4C96] shrink-0" />
-                <span className="truncate">{isEn ? 'Done / Deducted' : 'Realizadas / Abatidas'}</span>
+                <span className="truncate">{isEn ? 'Completed' : 'Realizadas'}</span>
               </span>
               <div className="flex items-baseline gap-1 mt-0.5">
                 <span className="text-sm sm:text-base font-black text-[#062863] leading-none">
-                  {totalDeductedFromContract}
+                  {studentRealizadasCount}
                 </span>
                 <span className="text-[9px] text-[#062863] font-medium leading-none">
-                  {isEn ? 'deducted' : 'abatidas'}
+                  {isEn ? 'completed' : 'realizadas'}
                 </span>
               </div>
             </div>

@@ -25,7 +25,11 @@ interface LiveMeetLessonsPanelProps {
   selectedStudentFilter?: string;
   onOpenScheduleModal: () => void;
   onRescheduleLesson?: (lesson: LiveLesson) => void;
-  onCancelLesson?: (lessonId: string, reason?: string) => void;
+  onCancelLesson?: (
+    lessonId: string,
+    reason?: string,
+    cancelledBy?: 'student' | 'teacher'
+  ) => void;
   onAcceptReschedule?: (lessonId: string) => void;
   onDeclineReschedule?: (lessonId: string) => void;
   onCompleteLesson?: (lessonId: string) => void;
@@ -189,154 +193,154 @@ export const LiveMeetLessonsPanel: React.FC<LiveMeetLessonsPanelProps> = ({
               return (
                 <div
                   key={lesson.id}
-                  className={`p-3.5 rounded-2xl border shadow-2xs transition flex flex-col justify-between gap-3 ${
+                  className={`p-4 rounded-2xl border shadow-xs transition flex flex-col justify-between gap-3 ${
                     hasPendingProposal
                       ? 'bg-amber-50/70 border-amber-300'
-                      : 'bg-slate-50/90 border-[#607EC9]/30 hover:border-[#607EC9]'
+                      : 'bg-white border-[#607EC9]/30 hover:border-[#607EC9]/70'
                   }`}
                 >
-                    <div className="space-y-2.5">
-                      {/* Top Row: Lesson info on the left, Meet, Calendar, Remarcar e Cancelar on the right */}
-                      <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-9 h-9 rounded-xl bg-[#000035] text-[#9AB4FF] flex items-center justify-center shrink-0 border border-[#9AB4FF]/30">
-                            <Video className="w-4 h-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-xs font-black text-[#000035] truncate">
-                                {isTeacher
-                                  ? lesson.studentName || lesson.studentEmail || (isEn ? 'Student' : 'Aluno')
-                                  : lesson.title || (isEn ? 'Conversation Practice' : 'Prática de Conversação')}
-                              </span>
-                            </div>
-                            {isTeacher && lesson.title && (
-                              <p className="text-[11px] text-[#000035] font-semibold truncate mt-0.5">
-                                {lesson.title}
-                              </p>
-                            )}
-                            <p className="text-[11px] text-[#607EC9] mt-0.5 flex items-center gap-1 whitespace-nowrap">
-                              <Clock className="w-3 h-3 text-[#1C4C96] shrink-0" />
-                              <span>
-                                {formatDateInTimeZone(lesson.startDateTime, timeZone, isEn ? 'en' : 'pt')} • {formatTimeInTimeZone(lesson.startDateTime, timeZone)}
-                              </span>
-                            </p>
-                          </div>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    {/* Left Column: Icon + Title/Date on top, Realizada + Não Realizada on bottom */}
+                    <div className="flex-1 flex flex-col justify-between gap-3 min-w-0">
+                      {/* Top: Icon + Title & Date/Time */}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-11 h-11 rounded-2xl bg-[#000035] text-white flex items-center justify-center shrink-0 shadow-2xs">
+                          <Video className="w-5 h-5 text-white" />
                         </div>
-
-                        {/* Botões na Linha de Cima: Meet, Google Calendar, Remarcar e Cancelar */}
-                        <div className="flex items-center gap-1.5 shrink-0 ml-auto sm:ml-0 flex-wrap">
-                          {/* Meet Room Link */}
-                          {lesson.meetLink && (
-                            <a
-                              href={lesson.meetLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-bold flex items-center gap-1 transition shadow-2xs cursor-pointer"
-                              title={isEn ? 'Join Google Meet' : 'Acessar sala do Google Meet'}
-                            >
-                              <span>Meet</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
+                        <div className="min-w-0">
+                          <h5 className="text-sm sm:text-base font-bold text-[#000035] truncate leading-tight">
+                            {isTeacher
+                              ? lesson.studentName || lesson.studentEmail || (isEn ? 'Student' : 'Aluno')
+                              : lesson.title || (isEn ? 'Conversation Practice' : 'Prática de Conversação')}
+                          </h5>
+                          {isTeacher && lesson.title && (
+                            <p className="text-[11px] text-[#000035] font-semibold truncate mt-0.5">
+                              {lesson.title}
+                            </p>
                           )}
-
-                          {/* Sincronização / Link do Google Calendar */}
-                          <a
-                            href={calendarUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2.5 py-1.5 bg-white hover:bg-[#9AB4FF]/15 border border-[#607EC9]/40 text-[#062863] rounded-xl text-[11px] font-bold flex items-center gap-1 transition shadow-2xs cursor-pointer shrink-0"
-                            title={isEn ? 'Sync with Google Calendar' : 'Sincronizar com o Google Calendar'}
-                          >
-                            <Calendar className="w-3 h-3 text-[#1C4C96]" />
-                            <span className="hidden sm:inline">Google Calendar</span>
-                            <span className="sm:hidden">Calendar</span>
-                            <ExternalLink className="w-2.5 h-2.5 text-[#607EC9]" />
-                          </a>
-
-                          {/* Remarcar */}
-                          {onRescheduleLesson && (
-                            <button
-                              type="button"
-                              onClick={() => onRescheduleLesson(lesson)}
-                              className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-[#062863] rounded-xl text-[11px] font-bold cursor-pointer transition flex items-center gap-1 shadow-2xs"
-                              title={isEn ? 'Reschedule lesson' : 'Remarcar data/horário'}
-                            >
-                              <RotateCcw className="w-3 h-3 text-[#1C4C96]" />
-                              <span>{isEn ? 'Reschedule' : 'Remarcar'}</span>
-                            </button>
-                          )}
-
-                          {/* Cancelar */}
-                          {onCancelLesson && (
-                            <button
-                              type="button"
-                              onClick={() => handleCancelClick(lesson)}
-                              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-xl text-[11px] font-bold cursor-pointer transition flex items-center gap-1 shadow-2xs"
-                              title={isEn ? 'Cancel lesson (no deduction)' : 'Cancelar aula (não desconta saldo)'}
-                            >
-                              <span>{isEn ? 'Cancel' : 'Cancelar'}</span>
-                            </button>
-                          )}
+                          <div className="text-xs text-[#607EC9] font-medium mt-1 flex items-center gap-1.5 whitespace-nowrap">
+                            <Clock className="w-3.5 h-3.5 text-[#1C4C96] shrink-0" />
+                            <span>
+                              {formatDateInTimeZone(lesson.startDateTime, timeZone, isEn ? 'en' : 'pt')} • {formatTimeInTimeZone(lesson.startDateTime, timeZone)}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
-                      {/* Bottom Row: Confirmação de Aula Realizada e Não Realizada */}
-                      {(onCompleteLesson || onMarkNotCompleted) && (
-                        <div className="pt-2 border-t border-slate-200/70 flex items-center justify-end gap-2 flex-wrap">
-                          {/* Confirmação de Aula Realizada */}
-                          {confirmingCompleteLessonId === lesson.id ? (
-                            <div className="flex items-center gap-1 bg-emerald-50 border border-emerald-300 px-2 py-1 rounded-xl text-[11px] animate-in fade-in shadow-2xs">
-                              <span className="font-bold text-emerald-950 text-[10px] whitespace-nowrap">
-                                {isEn ? 'Confirm completed?' : 'Confirmar realizada?'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (onCompleteLesson) onCompleteLesson(lesson.id);
-                                  setConfirmingCompleteLessonId(null);
-                                }}
-                                className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-black transition cursor-pointer"
-                              >
-                                {isEn ? 'Yes' : 'Sim'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmingCompleteLessonId(null)}
-                                className="px-1.5 py-0.5 bg-white border border-slate-300 text-slate-700 rounded-lg text-[10px] font-semibold transition cursor-pointer"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ) : (
-                            onCompleteLesson && (
-                              <button
-                                type="button"
-                                onClick={() => setConfirmingCompleteLessonId(lesson.id)}
-                                className="px-3 py-1.5 bg-[#062863] hover:bg-[#000035] text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs border border-[#1C4C96]"
-                                title={isEn ? 'Confirm lesson was completed' : 'Confirmar se a aula foi realizada'}
-                              >
-                                <CheckCircle className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                                <span>{isEn ? 'Completed' : 'Realizada'}</span>
-                              </button>
-                            )
-                          )}
+                      {/* Subtle divider */}
+                      <div className="h-px bg-slate-100 my-0.5" />
 
-                          {/* Confirmação de Aula Não Realizada */}
-                          {onMarkNotCompleted && (
+                      {/* Bottom of Left Column: Realizada & Não Realizada */}
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        {/* Realizada */}
+                        {confirmingCompleteLessonId === lesson.id ? (
+                          <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 px-3 py-1.5 rounded-xl text-xs shadow-2xs">
+                            <span className="font-bold text-emerald-950 text-xs whitespace-nowrap">
+                              {isEn ? 'Confirm?' : 'Confirmar?'}
+                            </span>
                             <button
                               type="button"
-                              onClick={() => onMarkNotCompleted(lesson)}
-                              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-                              title={isEn ? 'Mark as not held / not completed' : 'Informar que a aula não foi realizada'}
+                              onClick={() => {
+                                if (onCompleteLesson) onCompleteLesson(lesson.id);
+                                setConfirmingCompleteLessonId(null);
+                              }}
+                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black transition cursor-pointer"
                             >
-                              <XCircle className="w-3.5 h-3.5 text-amber-700" />
-                              <span>{isEn ? 'Not Done' : 'Não Realizada'}</span>
+                              {isEn ? 'Yes' : 'Sim'}
                             </button>
-                          )}
-                        </div>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingCompleteLessonId(null)}
+                              className="px-2 py-1 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          onCompleteLesson && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingCompleteLessonId(lesson.id)}
+                              className="px-4 py-2 bg-[#062863] hover:bg-[#000035] text-white rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer shadow-2xs"
+                              title={isEn ? 'Mark as completed' : 'Confirmar se a aula foi realizada'}
+                            >
+                              <CheckCircle className="w-4 h-4 text-white" />
+                              <span>{isEn ? 'Completed' : 'Realizada'}</span>
+                            </button>
+                          )
+                        )}
+
+                        {/* Não Realizada */}
+                        {onMarkNotCompleted && (
+                          <button
+                            type="button"
+                            onClick={() => onMarkNotCompleted(lesson)}
+                            className="px-4 py-2 bg-[#FFFBEB] hover:bg-amber-100/70 border border-amber-300 text-amber-900 rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer shadow-2xs"
+                            title={isEn ? 'Mark as not held / not completed' : 'Informar que a aula não foi realizada'}
+                          >
+                            <XCircle className="w-4 h-4 text-amber-700" />
+                            <span>{isEn ? 'Not Done' : 'Não Realizada'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right Column: Calendar+Meet, Remarcar, Cancelar */}
+                    <div className="w-full md:w-44 shrink-0 flex flex-col gap-2 pt-2 md:pt-0 border-t md:border-t-0 md:border-l border-slate-100 md:pl-4">
+                      {/* Row 1: Calendar + Meet */}
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={calendarUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-10 h-9 bg-white hover:bg-slate-50 border border-slate-200 text-[#1C4C96] rounded-xl flex items-center justify-center transition shadow-2xs cursor-pointer shrink-0"
+                          title={isEn ? 'Sync with Google Calendar' : 'Sincronizar com o Google Calendar'}
+                        >
+                          <Calendar className="w-4 h-4 text-[#1C4C96]" />
+                        </a>
+
+                        {lesson.meetLink && (
+                          <a
+                            href={lesson.meetLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer px-2"
+                            title={isEn ? 'Join Google Meet' : 'Acessar sala do Google Meet'}
+                          >
+                            <Video className="w-4 h-4 text-white shrink-0" />
+                            <span>Meet</span>
+                            <ExternalLink className="w-3 h-3 text-white/80 shrink-0" />
+                          </a>
+                        )}
+                      </div>
+
+                      {/* Row 2: Remarcar */}
+                      {onRescheduleLesson && (
+                        <button
+                          type="button"
+                          onClick={() => onRescheduleLesson(lesson)}
+                          className="w-full h-9 bg-white hover:bg-slate-50 border border-slate-200 text-[#062863] rounded-xl text-xs font-bold cursor-pointer transition flex items-center justify-center gap-2 shadow-2xs"
+                          title={isEn ? 'Reschedule lesson' : 'Remarcar data/horário'}
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-[#1C4C96]" />
+                          <span>{isEn ? 'Reschedule' : 'Remarcar'}</span>
+                        </button>
+                      )}
+
+                      {/* Row 3: Cancelar */}
+                      {onCancelLesson && (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelClick(lesson)}
+                          className="w-full h-9 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 rounded-xl text-xs font-bold cursor-pointer transition flex items-center justify-center gap-1.5 shadow-2xs"
+                          title={isEn ? 'Cancel lesson' : 'Cancelar aula'}
+                        >
+                          <X className="w-3.5 h-3.5 text-rose-500" />
+                          <span>{isEn ? 'Cancel' : 'Cancelar'}</span>
+                        </button>
                       )}
                     </div>
+                  </div>
 
                     {/* Reschedule Proposal Details & Action Buttons */}
                     {isProposalForMe && lesson.proposedNewStartDateTime && (
@@ -411,9 +415,9 @@ export const LiveMeetLessonsPanel: React.FC<LiveMeetLessonsPanelProps> = ({
         isOpen={!!lessonToCancel}
         onClose={() => setLessonToCancel(null)}
         lesson={lessonToCancel}
-        onConfirmCancel={(lessonId, reason) => {
+        onConfirmCancel={(lessonId, reason, cancelledBy) => {
           if (onCancelLesson) {
-            onCancelLesson(lessonId, reason);
+            onCancelLesson(lessonId, reason, cancelledBy);
           }
           setLessonToCancel(null);
         }}

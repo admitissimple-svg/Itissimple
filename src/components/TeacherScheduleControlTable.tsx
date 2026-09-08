@@ -47,7 +47,11 @@ interface TeacherScheduleControlTableProps {
   onCompleteLesson: (lessonId: string) => void;
   onMarkNotCompleted: (lesson: LiveLesson) => void;
   onRescheduleLesson: (lesson: LiveLesson) => void;
-  onCancelLesson?: (lessonId: string, reason?: string) => void;
+  onCancelLesson?: (
+    lessonId: string,
+    reason?: string,
+    cancelledBy?: 'student' | 'teacher'
+  ) => void;
   onAcceptReschedule?: (lessonId: string) => void;
   onDeclineReschedule?: (lessonId: string) => void;
   currentLanguage: Language;
@@ -548,9 +552,9 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
         isOpen={!!lessonToCancel}
         onClose={() => setLessonToCancel(null)}
         lesson={lessonToCancel}
-        onConfirmCancel={(lessonId, reason) => {
+        onConfirmCancel={(lessonId, reason, cancelledBy) => {
           if (onCancelLesson) {
-            onCancelLesson(lessonId, reason);
+            onCancelLesson(lessonId, reason, cancelledBy);
           }
           setLessonToCancel(null);
         }}
