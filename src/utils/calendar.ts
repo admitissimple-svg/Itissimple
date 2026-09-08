@@ -141,7 +141,7 @@ export function generateTeacherAvailableSlots(
   dateString: string,
   teacherSettings: TeacherMeetSettings,
   busyEvents: any[] = [],
-  durationMinutes: 25 | 30 = 25,
+  durationMinutes: 25 | 50 = 25,
   existingLessons: LiveLesson[] = [],
   excludeLessonId?: string,
   studentEmail?: string,
@@ -252,6 +252,18 @@ export function generateTeacherAvailableSlots(
             break;
           }
         }
+      }
+    }
+
+    // For 50-minute lessons, ensure consecutive slot is also open and present
+    if (isAvailable && durationMinutes === 50) {
+      const nextMin = m + 30;
+      const nextH = h + Math.floor(nextMin / 60);
+      const nextM = nextMin % 60;
+      const nextTimeStr = `${String(nextH).padStart(2, '0')}:${String(nextM).padStart(2, '0')}`;
+      if (!enabledTimeSlots.includes(nextTimeStr)) {
+        isAvailable = false;
+        conflictReason = 'Consecutive block not in schedule';
       }
     }
 

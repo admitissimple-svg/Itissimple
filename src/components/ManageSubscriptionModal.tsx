@@ -386,7 +386,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                   <span className="text-base font-black text-[#000035]">
                     R$ {selectedTutorForPurchase.pricePerSessionBrl || 95}
                   </span>
-                  <span className="text-[10px] text-[#607EC9] font-semibold block">/ 30 min</span>
+                  <span className="text-[10px] text-[#607EC9] font-semibold block">/ {isEn ? 'session' : 'sessão'}</span>
                 </div>
               </div>
 
@@ -793,7 +793,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                               <span className="text-xs font-black text-[#000035]">
                                 R$ {tutor.pricePerSessionBrl || 95}
                               </span>
-                              <span className="text-[10px] text-[#607EC9]"> / 30 min</span>
+                              <span className="text-[10px] text-[#607EC9]"> / {isEn ? 'session' : 'sessão'}</span>
                             </div>
 
                             {/* Actions */}

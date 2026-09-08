@@ -105,7 +105,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         }
       });
     }
-    return Math.max(count, 35); // Display 35 as in model or actual if higher
+    return count;
   }, [routinesByDay]);
 
   const studentEmail = userProfile?.email || '';

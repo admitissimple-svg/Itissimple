@@ -382,7 +382,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <Calendar className="w-5 h-5 text-[#1C4C96] shrink-0 mt-0.5" />
                 <div>
                   <h4 className="font-bold text-slate-900 text-sm mb-0.5">
-                    {isEn ? '2. Live 30-min Sessions' : '2. Aulas Ao Vivo de 30 minutos'}
+                    {isEn ? '2. Live 25 or 50-min Sessions' : '2. Aulas Ao Vivo de 25 ou 50 minutos'}
                   </h4>
                   <p className="leading-relaxed">
                     {isEn

@@ -486,7 +486,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Rate per 30-min Session (USD)
+                        Rate per Session (USD)
                       </label>
                       <div className="relative">
                         <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -518,7 +518,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-2">
-                      Available Days for 30-min Sessions
+                      Available Days for Sessions
                     </label>
                     <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                       {(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as DayOfWeek[]).map((d) => {

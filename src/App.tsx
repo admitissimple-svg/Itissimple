@@ -199,6 +199,7 @@ export default function App() {
   const [isEditTutorProfileOpen, setIsEditTutorProfileOpen] = useState<boolean>(false);
   const [isStudentProfileOpen, setIsStudentProfileOpen] = useState<boolean>(false);
   const [isPersonalDictionaryOpen, setIsPersonalDictionaryOpen] = useState<boolean>(false);
+  const [studentDictionaryEntries, setStudentDictionaryEntries] = useState<StudentDictionaryEntry[]>([]);
   const [isManageSubscriptionOpen, setIsManageSubscriptionOpen] = useState<boolean>(false);
   const [subscriptionTargetTutor, setSubscriptionTargetTutor] = useState<NativeFriendTutor | null>(null);
 
@@ -416,7 +417,18 @@ export default function App() {
       }
       loadTeacherProfile();
     }
-  }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid]);
+
+    // Fetch user-isolated student dictionary entries
+    const dictEmail = role === 'student' ? email : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '');
+    if (dictEmail || (role === 'student' && uid)) {
+      fetch(`/api/student-dictionary?studentEmail=${encodeURIComponent(dictEmail)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          if (Array.isArray(data)) setStudentDictionaryEntries(data);
+        })
+        .catch((err) => console.warn('Could not fetch student dictionary:', err));
+    }
+  }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter]);
 
   // Handler: Manage/Update Native Friend Subscription
   const handleUpdateSubscription = async (teacherEmail: string | null, teacherName: string | null) => {
@@ -852,14 +864,22 @@ export default function App() {
       return;
     }
 
+    const finalStudentEmail = (lessonData.studentEmail && lessonData.studentEmail.trim() !== '')
+      ? lessonData.studentEmail.trim().toLowerCase()
+      : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : '');
+
+    const finalStudentName = (lessonData.studentName && lessonData.studentName.trim() !== '')
+      ? lessonData.studentName.trim()
+      : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : 'Aluno');
+
     const newLesson: LiveLesson = {
       id: `lesson-${Date.now()}`,
       title: lessonData.title,
       description: lessonData.description,
       startDateTime: lessonData.startDateTime,
       endDateTime: lessonData.endDateTime,
-      studentEmail: lessonData.studentEmail,
-      studentName: lessonData.studentName,
+      studentEmail: finalStudentEmail,
+      studentName: finalStudentName,
       teacherEmail: lessonData.teacherEmail,
       teacherName: lessonData.teacherName,
       meetLink: lessonData.meetLink,
@@ -871,7 +891,7 @@ export default function App() {
 
     // Update students state so student appears immediately in teacher's filter and list
     setStudents((prev) => {
-      const cleanEmail = lessonData.studentEmail.toLowerCase().trim();
+      const cleanEmail = finalStudentEmail;
       const exists = prev.some((s) => (s.email || s.studentEmail || '').toLowerCase().trim() === cleanEmail);
       if (exists) {
         return prev.map((s) =>
@@ -1194,14 +1214,90 @@ export default function App() {
       )
     );
 
+    // Auto-migrate vocabulary notes to student's personal dictionary
+    const targetLesson = lessons.find((l) => l.id === lessonId);
+    const targetStudentEmail = targetLesson?.studentEmail || (selectedStudentFilter !== 'all' ? selectedStudentFilter : '');
+    if (notes.vocabularyNotes && notes.vocabularyNotes.length > 0 && targetStudentEmail) {
+      const dictEntries: StudentDictionaryEntry[] = notes.vocabularyNotes.map((vn) => ({
+        id: vn.id || `dict_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        word: vn.word,
+        partOfSpeech: vn.partOfSpeech || '',
+        definitionEn: vn.meaningOrTip || '',
+        exampleSentenceEn: vn.exampleSentence || '',
+        learnedAt: new Date().toISOString(),
+        source: vn.source || 'api',
+        sourceActivityName: `Live Session with ${currentAccount?.name || 'Native Friend'}`,
+      }));
+      handleAddWordsToDictionary(dictEntries, targetStudentEmail);
+    }
+
     try {
       await fetch(`/api/lessons/${lessonId}/notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(notes),
+        body: JSON.stringify({
+          ...notes,
+          studentEmail: targetStudentEmail,
+          teacherEmail: currentAccount?.email,
+          teacherName: currentAccount?.name,
+        }),
       });
     } catch {
       // local fallback
+    }
+  };
+
+  // Handler: Add words to Student Personal Dictionary (auto-migrated from lesson notes)
+  const handleAddWordsToDictionary = async (entries: StudentDictionaryEntry[], studentEmail?: string) => {
+    if (!entries || entries.length === 0) return;
+    const targetEmail = (studentEmail || (selectedStudentFilter !== 'all' ? selectedStudentFilter : currentAccount?.email) || '').toLowerCase().trim();
+
+    setStudentDictionaryEntries((prev) => {
+      const map = new Map<string, StudentDictionaryEntry>();
+      prev.forEach((e) => map.set(e.word.toLowerCase(), e));
+      entries.forEach((e) => map.set(e.word.toLowerCase(), e));
+      return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+    });
+
+    if (targetEmail) {
+      try {
+        await fetch('/api/student-dictionary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentEmail: targetEmail,
+            teacherEmail: currentAccount?.email,
+            teacherName: currentAccount?.name,
+            entries,
+          }),
+        });
+      } catch (err) {
+        console.warn('Failed to sync student dictionary entries:', err);
+      }
+    }
+  };
+
+  // Handler: Save manual entry in Personal Dictionary
+  const handleSaveCustomDictionaryEntry = async (entry: StudentDictionaryEntry) => {
+    setStudentDictionaryEntries((prev) => {
+      const existing = prev.filter((e) => e.word.toLowerCase() !== entry.word.toLowerCase());
+      return [...existing, entry].sort((a, b) => a.word.localeCompare(b.word));
+    });
+
+    if (currentAccount?.email) {
+      try {
+        await fetch('/api/student-dictionary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentEmail: currentAccount.email,
+            studentUid: currentAccount.uid,
+            entry,
+          }),
+        });
+      } catch (err) {
+        console.warn('Failed to save student dictionary entry:', err);
+      }
     }
   };
 
@@ -2061,6 +2157,7 @@ export default function App() {
                       currentAccount={currentAccount}
                       selectedStudentFilter={selectedStudentFilter}
                       onSaveLessonNotes={handleSaveLessonNotes}
+                      onAddWordsToDictionary={handleAddWordsToDictionary}
                       onAddWordsToWeeklyActivity={handleAddWordsToWeeklyActivity}
                       onSendStudentNotification={handleSendStudentNotification}
                       timeZone={DEFAULT_TEACHER_TIMEZONE}
@@ -2430,6 +2527,8 @@ export default function App() {
         isOpen={isPersonalDictionaryOpen}
         onClose={() => setIsPersonalDictionaryOpen(false)}
         wordsFromRoutines={wordsFromRoutines}
+        customSavedEntries={studentDictionaryEntries}
+        onSaveCustomEntry={handleSaveCustomDictionaryEntry}
         currentLanguage={currentLanguage}
       />
     </div>

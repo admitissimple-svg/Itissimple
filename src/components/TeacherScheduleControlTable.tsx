@@ -365,6 +365,11 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                           {formatTimeInTimeZone(lesson.startDateTime, timeZone)} -{' '}
                           {formatTimeInTimeZone(lesson.endDateTime, timeZone)}
                         </span>
+                        {lesson.endDateTime && (
+                          <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#1C4C96]/10 text-[#1C4C96]">
+                            {Math.round((new Date(lesson.endDateTime).getTime() - new Date(lesson.startDateTime).getTime()) / (60 * 1000)) >= 45 ? '50m' : '25m'}
+                          </span>
+                        )}
                       </div>
                     </td>
 

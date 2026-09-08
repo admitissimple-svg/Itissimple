@@ -62,6 +62,12 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
   const teacherEmail = (lesson?.teacherEmail || lesson?.tutorEmail || '').toLowerCase().trim();
   const activeSettings = teacherMeetSettings[teacherEmail];
 
+  const lessonDurationMinutes = useMemo(() => {
+    if (!lesson?.startDateTime || !lesson?.endDateTime) return 25;
+    const diff = Math.round((new Date(lesson.endDateTime).getTime() - new Date(lesson.startDateTime).getTime()) / (60 * 1000));
+    return diff >= 45 ? 50 : 25;
+  }, [lesson]);
+
   const timeSlots = useMemo(() => {
     if (activeSettings?.availableHours && activeSettings.availableHours.length > 0) {
       return [...activeSettings.availableHours].sort();
@@ -75,12 +81,12 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
     const [h, m] = newStartTime.split(':').map(Number);
     const start = new Date(newDate + 'T00:00:00');
     start.setHours(h, m, 0, 0);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    const end = new Date(start.getTime() + lessonDurationMinutes * 60 * 1000);
     return {
       startIso: start.toISOString(),
       endIso: end.toISOString(),
     };
-  }, [newDate, newStartTime]);
+  }, [newDate, newStartTime, lessonDurationMinutes]);
 
   // Conflict validation (Rule 2)
   const currentConflict = useMemo(() => {
@@ -99,9 +105,20 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
     const [h, m] = slot.split(':').map(Number);
     const start = new Date(newDate + 'T00:00:00');
     start.setHours(h, m, 0, 0);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    const end = new Date(start.getTime() + lessonDurationMinutes * 60 * 1000);
     const conflict = findTeacherLessonConflict(teacherEmail, start.toISOString(), end.toISOString(), lessons, lesson.id);
-    return Boolean(conflict);
+    if (conflict) return true;
+
+    if (lessonDurationMinutes === 50 && activeSettings?.availableHours && activeSettings.availableHours.length > 0) {
+      const nextMin = m + 30;
+      const nextH = h + Math.floor(nextMin / 60);
+      const nextM = nextMin % 60;
+      const nextSlot = `${String(nextH).padStart(2, '0')}:${String(nextM).padStart(2, '0')}`;
+      if (!activeSettings.availableHours.includes(nextSlot)) {
+        return true;
+      }
+    }
+    return false;
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -115,6 +132,22 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
           : `Bloqueio de Conflito: O Amigo Nativo já possui outra aula agendada neste horário. Por favor, escolha outro slot livre.`
       );
       return;
+    }
+
+    if (lessonDurationMinutes === 50 && activeSettings?.availableHours && activeSettings.availableHours.length > 0) {
+      const [h, m] = newStartTime.split(':').map(Number);
+      const nextMin = m + 30;
+      const nextH = h + Math.floor(nextMin / 60);
+      const nextM = nextMin % 60;
+      const nextSlot = `${String(nextH).padStart(2, '0')}:${String(nextM).padStart(2, '0')}`;
+      if (!activeSettings.availableHours.includes(nextSlot)) {
+        alert(
+          isEn
+            ? `For a 50-minute lesson, both consecutive 30-minute blocks must be open on the Native Friend's schedule.`
+            : `Para uma aula de 50 minutos, ambos os blocos de 30 minutos precisam estar disponíveis na grade do Amigo Nativo.`
+        );
+        return;
+      }
     }
 
     onConfirmReschedule(lesson.id, proposedIso.startIso, proposedIso.endIso, reason.trim());
@@ -152,9 +185,14 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
         {/* Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="p-3 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs text-[#062863] space-y-1">
-            <span className="font-bold text-[#000035] block">
-              {isEn ? 'Current Lesson Time:' : 'Horário Atual da Aula:'}
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-[#000035] block">
+                {isEn ? 'Current Lesson Time:' : 'Horário Atual da Aula:'}
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-[#1C4C96]/15 text-[#062863]">
+                {lessonDurationMinutes} min
+              </span>
+            </div>
             <p>
               {formatDateInTimeZone(lesson.startDateTime, timeZone, isEn ? 'en' : 'pt')} • {formatTimeInTimeZone(lesson.startDateTime, timeZone)} - {formatTimeInTimeZone(lesson.endDateTime, timeZone)}
             </p>
@@ -176,7 +214,7 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'New Time Slot (30 min)' : 'Novo Horário (30 min)'}
+                {isEn ? `New Time Slot (${lessonDurationMinutes} min)` : `Novo Horário (${lessonDurationMinutes} min)`}
               </label>
               <select
                 value={newStartTime}

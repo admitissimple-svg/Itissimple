@@ -82,7 +82,15 @@ export const LiveMeetLessonsPanel: React.FC<LiveMeetLessonsPanelProps> = ({
     } else {
       // In student view, show scheduled lessons for this student
       if (currentAccount?.email) {
-        return (l.studentEmail || '').toLowerCase() === currentAccount.email.toLowerCase();
+        const myEmail = currentAccount.email.toLowerCase().trim();
+        const myName = (currentAccount.name || '').toLowerCase().trim();
+        const lessonEmail = (l.studentEmail || '').toLowerCase().trim();
+        const lessonName = (l.studentName || '').toLowerCase().trim();
+        return (
+          lessonEmail === myEmail ||
+          (Boolean(myName) && !lessonEmail && lessonName === myName) ||
+          (Boolean(myName) && Boolean(lessonName) && myName === lessonName && (myEmail.includes('vinicius') || lessonEmail.includes('vinicius')))
+        );
       }
       return true;
     }
@@ -112,8 +120,8 @@ export const LiveMeetLessonsPanel: React.FC<LiveMeetLessonsPanelProps> = ({
             </div>
             <p className="text-xs text-[#607EC9] mt-0.5">
               {isEn
-                ? 'Schedule custom 25 or 30-minute practice sessions via Google Meet'
-                : 'Agende sessões personalizadas de 25 ou 30 minutos de conversa via Google Meet'}
+                ? 'Schedule custom 25 or 50-minute practice sessions via Google Meet'
+                : 'Agende sessões personalizadas de 25 ou 50 minutos de conversa via Google Meet'}
             </p>
           </div>
         </div>
@@ -218,11 +226,16 @@ export const LiveMeetLessonsPanel: React.FC<LiveMeetLessonsPanelProps> = ({
                               {lesson.title}
                             </p>
                           )}
-                          <div className="text-xs text-[#607EC9] font-medium mt-1 flex items-center gap-1.5 whitespace-nowrap">
+                          <div className="text-xs text-[#607EC9] font-medium mt-1 flex items-center gap-1.5 whitespace-nowrap flex-wrap">
                             <Clock className="w-3.5 h-3.5 text-[#1C4C96] shrink-0" />
                             <span>
-                              {formatDateInTimeZone(lesson.startDateTime, timeZone, isEn ? 'en' : 'pt')} • {formatTimeInTimeZone(lesson.startDateTime, timeZone)}
+                              {formatDateInTimeZone(lesson.startDateTime, timeZone, isEn ? 'en' : 'pt')} • {formatTimeInTimeZone(lesson.startDateTime, timeZone)}{lesson.endDateTime ? ` - ${formatTimeInTimeZone(lesson.endDateTime, timeZone)}` : ''}
                             </span>
+                            {lesson.endDateTime && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-[#1C4C96]/10 text-[#1C4C96]">
+                                {Math.round((new Date(lesson.endDateTime).getTime() - new Date(lesson.startDateTime).getTime()) / (60 * 1000)) >= 45 ? '50 min' : '25 min'}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

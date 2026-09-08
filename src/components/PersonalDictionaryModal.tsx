@@ -4,27 +4,21 @@ import {
   BookOpen,
   Search,
   Volume2,
-  Sparkles,
-  Tag,
   Plus,
   Check,
-  Calendar,
   Globe,
-  Clock,
-  BookMarked,
   Loader2,
   AlertCircle,
 } from 'lucide-react';
 import { StudentDictionaryEntry, Language, DayOfWeek } from '../types';
 import { speakText } from '../utils/audio';
-import { getDictionaryDefinition, COMMON_ROUTINE_DICTIONARY } from '../data/dictionaryDatabase';
 import { lookupWord, getInstantOrCachedWord } from '../utils/dictionaryService';
 
 interface PersonalDictionaryModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentLanguage: Language;
-  wordsFromRoutines: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
+  wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   customSavedEntries?: StudentDictionaryEntry[];
   onSaveCustomEntry?: (entry: StudentDictionaryEntry) => void;
 }
@@ -38,7 +32,6 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
   onSaveCustomEntry,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [newWord, setNewWord] = useState('');
   const [newPartOfSpeech, setNewPartOfSpeech] = useState('');
@@ -46,7 +39,6 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
   const [newExample, setNewExample] = useState('');
   const [newTranslation, setNewTranslation] = useState('');
   const [isLookingUpApi, setIsLookingUpApi] = useState(false);
-  const [lookupSource, setLookupSource] = useState<'api' | 'offline_dict' | 'fallback' | 'not_found' | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [apiEnrichedEntries, setApiEnrichedEntries] = useState<Record<string, Partial<StudentDictionaryEntry>>>({});
 
@@ -62,8 +54,8 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
 
     if (wordsToFetch.length === 0) return;
 
-    // Concurrently fetch definitions for routine words
-    wordsToFetch.slice(0, 10).forEach(async (w) => {
+    // Fetch definitions for words entered in routine
+    wordsToFetch.slice(0, 15).forEach(async (w) => {
       try {
         const res = await lookupWord(w);
         if (res && res.definitionEn) {
@@ -80,33 +72,24 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
           }));
         }
       } catch (err) {
-        // preserve local
+        console.warn('Routine word background lookup error:', err);
       }
     });
   }, [isOpen, wordsFromRoutines]);
 
-  // Merge routine words and dictionary definitions
+  // Merge student's saved dictionary entries and routine words (without test words)
   const allDictionaryEntries: StudentDictionaryEntry[] = useMemo(() => {
     const map = new Map<string, StudentDictionaryEntry>();
 
-    // 1. First add all predefined common words
-    Object.entries(COMMON_ROUTINE_DICTIONARY).forEach(([key, val]) => {
-      const lower = key.toLowerCase();
-      const enriched = apiEnrichedEntries[lower];
-      map.set(lower, {
-        id: `dict-${key}`,
-        word: val.word,
-        definitionEn: enriched?.definitionEn || val.definitionEn,
-        partOfSpeech: enriched?.partOfSpeech || val.partOfSpeech,
-        exampleSentenceEn: enriched?.exampleSentenceEn || val.exampleSentenceEn,
-        translationPt: val.translationPt,
-        sourceActivityName: 'Routine Vocabulary',
-        phonetic: enriched?.phonetic,
-        source: (enriched?.source as any) || 'offline_dict',
-      });
+    // 1. Add custom saved entries (from live lessons or student inputs)
+    (customSavedEntries || []).forEach((entry) => {
+      const clean = (entry.word || '').trim();
+      if (!clean) return;
+      const lower = clean.toLowerCase();
+      map.set(lower, entry);
     });
 
-    // 2. Add all words typed by the student in their routines
+    // 2. Add words actively typed by the student in daily routines
     (wordsFromRoutines || []).forEach((item) => {
       const cleanWord = (item.word || '').trim();
       if (!cleanWord) return;
@@ -117,115 +100,108 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
       if (existing) {
         map.set(lower, {
           ...existing,
-          definitionEn: enriched?.definitionEn || existing.definitionEn,
-          exampleSentenceEn: enriched?.exampleSentenceEn || existing.exampleSentenceEn,
-          partOfSpeech: enriched?.partOfSpeech || existing.partOfSpeech,
-          sourceActivityName: item.sourceActivityName || existing.sourceActivityName,
-          sourceDay: item.sourceDay || existing.sourceDay,
-          source: (enriched?.source as any) || existing.source,
-          notFound: enriched?.notFound || existing.notFound || false,
+          definitionEn: existing.definitionEn || enriched?.definitionEn || '',
+          exampleSentenceEn: existing.exampleSentenceEn || enriched?.exampleSentenceEn || '',
+          partOfSpeech: existing.partOfSpeech || enriched?.partOfSpeech || '',
+          sourceActivityName: existing.sourceActivityName || item.sourceActivityName,
+          sourceDay: existing.sourceDay || item.sourceDay,
+          source: existing.source || (enriched?.source as any) || 'api',
+          notFound: existing.notFound ?? enriched?.notFound ?? false,
         });
       } else {
         const cached = getInstantOrCachedWord(cleanWord, item.sourceActivityName);
         map.set(lower, {
-          id: `routine-${lower}`,
+          id: `routine_${lower}_${Date.now()}`,
           word: cleanWord,
-          definitionEn: enriched?.definitionEn || cached.definitionEn,
-          partOfSpeech: enriched?.partOfSpeech || cached.partOfSpeech,
-          exampleSentenceEn: enriched?.exampleSentenceEn || cached.exampleSentenceEn,
-          translationPt: cached.translationPt,
+          definitionEn: enriched?.definitionEn || cached.definitionEn || '',
+          partOfSpeech: enriched?.partOfSpeech || cached.partOfSpeech || '',
+          exampleSentenceEn: enriched?.exampleSentenceEn || cached.exampleSentenceEn || '',
+          translationPt: cached.translationPt || '',
           sourceActivityName: item.sourceActivityName || 'Daily Routine',
           sourceDay: item.sourceDay,
           phonetic: enriched?.phonetic,
-          source: (enriched?.source as any) || (cached.source as any) || 'api',
-          notFound: enriched?.notFound || cached.notFound || false,
+          source: (enriched?.source as any) || 'api',
+          notFound: enriched?.notFound || false,
         });
       }
     });
 
-    // 3. Add custom saved entries
-    (customSavedEntries || []).forEach((entry) => {
-      map.set(entry.word.toLowerCase(), entry);
-    });
-
-    return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+    // Strictly sort in ascending alphabetical order
+    return Array.from(map.values()).sort((a, b) =>
+      (a.word || '').toLowerCase().localeCompare((b.word || '').toLowerCase())
+    );
   }, [wordsFromRoutines, customSavedEntries, apiEnrichedEntries]);
 
-  // Filter entries
+  // Filter entries by search term
   const filteredEntries = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return allDictionaryEntries;
+
     return allDictionaryEntries.filter((item) => {
-      const matchesSearch =
-        item.word.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        item.definitionEn.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.translationPt && item.translationPt.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.sourceActivityName && item.sourceActivityName.toLowerCase().includes(searchTerm.toLowerCase()));
-
-      if (!matchesSearch) return false;
-
-      if (selectedCategory === 'all') return true;
-      if (selectedCategory === 'routine' && item.sourceActivityName) return true;
-      if (selectedCategory === 'verbs' && item.partOfSpeech?.includes('verb')) return true;
-      if (selectedCategory === 'nouns' && item.partOfSpeech?.includes('noun')) return true;
-
-      return true;
+      const w = (item.word || '').toLowerCase();
+      const d = (item.definitionEn || '').toLowerCase();
+      const e = (item.exampleSentenceEn || '').toLowerCase();
+      const t = (item.translationPt || '').toLowerCase();
+      return w.includes(term) || d.includes(term) || e.includes(term) || t.includes(term);
     });
-  }, [allDictionaryEntries, searchTerm, selectedCategory]);
+  }, [allDictionaryEntries, searchTerm]);
 
+  // Lookup word via external Free Dictionary API
   const handleLookupWordFromDictionary = async () => {
-    if (!newWord.trim()) return;
+    const term = newWord.trim();
+    if (!term) return;
+
     setIsLookingUpApi(true);
-    setLookupSource(null);
     setLookupError(null);
+
     try {
-      const res = await lookupWord(newWord.trim());
-      if (res.notFound) {
+      const res = await lookupWord(term);
+      if (res.notFound || !res.definitionEn) {
         setLookupError(
           isEn
-            ? `The word "${newWord.trim()}" was not found in the official dictionary.`
-            : `A palavra "${newWord.trim()}" não foi localizada no dicionário oficial.`
+            ? `The word "${term}" was not found in the official Free Dictionary API.`
+            : `A palavra "${term}" não foi encontrada na Free Dictionary API.`
         );
         setNewDefinition('');
         setNewExample('');
         setNewPartOfSpeech('');
-        setLookupSource('not_found');
       } else {
         setNewDefinition(res.definitionEn || '');
         setNewExample(res.exampleSentenceEn || '');
         setNewPartOfSpeech(res.partOfSpeech || '');
         if (res.translationPt) setNewTranslation(res.translationPt);
-        setLookupSource('api');
         setLookupError(null);
       }
-    } catch (e) {
+    } catch {
       setLookupError(
         isEn
-          ? `The word "${newWord.trim()}" was not found in the official dictionary.`
-          : `A palavra "${newWord.trim()}" não foi localizada no dicionário oficial.`
+          ? 'Error contacting the Free Dictionary API. Please try again.'
+          : 'Erro ao consultar a Free Dictionary API. Tente novamente.'
       );
-      setLookupSource('not_found');
     } finally {
       setIsLookingUpApi(false);
     }
   };
 
+  // Submit manual word to dictionary
   const handleAddWordSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newWord.trim()) return;
+    if (!newWord.trim() || !newDefinition.trim()) return;
 
-    const entry: StudentDictionaryEntry = {
-      id: `custom-${Date.now()}`,
+    const newEntry: StudentDictionaryEntry = {
+      id: `custom_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       word: newWord.trim(),
       partOfSpeech: newPartOfSpeech.trim() || undefined,
-      definitionEn: newDefinition.trim() || `Vocabulary practiced in everyday English.`,
-      exampleSentenceEn: newExample.trim() || `I use "${newWord.trim()}" in daily conversation.`,
-      translationPt: newTranslation.trim() || 'Vocabulário praticado',
-      sourceActivityName: 'Personal Note',
-      source: lookupSource || 'api',
+      definitionEn: newDefinition.trim(),
+      exampleSentenceEn: newExample.trim(),
+      translationPt: newTranslation.trim() || undefined,
       learnedAt: new Date().toISOString(),
+      source: 'api',
+      sourceActivityName: isEn ? 'Personal Addition' : 'Adição Manual',
     };
 
     if (onSaveCustomEntry) {
-      onSaveCustomEntry(entry);
+      onSaveCustomEntry(newEntry);
     }
 
     setNewWord('');
@@ -233,87 +209,77 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
     setNewDefinition('');
     setNewExample('');
     setNewTranslation('');
-    setLookupSource(null);
     setIsAddingCustom(false);
+    setLookupError(null);
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#000035]/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto" id="personal-dictionary-modal">
-      <div className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-[#607EC9]/40 overflow-hidden flex flex-col max-h-[90vh] my-auto animate-in fade-in zoom-in duration-200">
-        {/* Modal Top Header */}
-        <div className="p-6 bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] text-white flex items-center justify-between border-b border-[#607EC9]/40 shrink-0">
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-[#1C4C96] flex items-center justify-center text-[#F4CA54] shadow-md border border-[#9AB4FF]/50">
-              <BookMarked className="w-6 h-6" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-[#000035]/60 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl shadow-2xl border border-[#607EC9]/30 w-full max-w-5xl h-[90vh] max-h-[820px] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="p-5 sm:p-6 bg-gradient-to-r from-[#000035] to-[#1C4C96] text-white flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-[#9AB4FF]/20 border border-[#9AB4FF]/30 flex items-center justify-center text-[#9AB4FF]">
+              <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">
-                  {isEn ? 'My English Dictionary' : 'Meu Dicionário de Inglês'}
-                </h2>
-                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-[#F4CA54] text-[#000035] uppercase">
-                  {allDictionaryEntries.length} {isEn ? 'words' : 'palavras'}
-                </span>
-              </div>
-              <p className="text-xs text-[#9AB4FF] mt-0.5">
+              <h2 className="text-lg sm:text-xl font-black tracking-tight">
+                {isEn ? 'My Dictionary' : 'Meu Dicionário'}
+              </h2>
+              <p className="text-xs text-[#9AB4FF]">
                 {isEn
-                  ? 'All words and expressions learned in your daily routine, with English definitions.'
-                  : 'Todas as palavras da sua rotina diária com definições pedagógicas 100% em inglês.'}
+                  ? 'Vocabulary learned in live sessions and daily routines'
+                  : 'Vocabulário aprendido nas aulas ao vivo e na sua rotina diária'}
               </p>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-white/10 transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-white/10 text-white border border-white/15">
+              {allDictionaryEntries.length} {allDictionaryEntries.length === 1 ? 'palavra' : 'palavras'}
+            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              title={isEn ? 'Close' : 'Fechar'}
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Controls Toolbar: Search & Categories */}
-        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row items-center gap-3 shrink-0">
-          <div className="relative flex-1 w-full">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+        {/* Toolbar: Search, Counter & Add Button */}
+        <div className="p-4 sm:px-6 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+          {/* Search Box */}
+          <div className="relative w-full sm:w-80">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder={isEn ? 'Search word, meaning, or context...' : 'Buscar palavra, significado ou contexto...'}
-              className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] focus:border-transparent transition placeholder:text-slate-400"
+              placeholder={isEn ? 'Search word, meaning, example...' : 'Buscar palavra, significado, exemplo...'}
+              className="w-full pl-9 pr-4 py-2 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] focus:border-transparent transition shadow-2xs"
             />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 text-xs"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-            <div className="flex items-center gap-1.5 overflow-x-auto">
-              {[
-                { id: 'all', label: isEn ? 'All' : 'Todas' },
-                { id: 'routine', label: isEn ? 'Routine' : 'Rotina' },
-                { id: 'verbs', label: isEn ? 'Verbs' : 'Verbos' },
-                { id: 'nouns', label: isEn ? 'Nouns' : 'Substantivos' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setSelectedCategory(tab.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
-                    selectedCategory === tab.id
-                      ? 'bg-[#000035] text-white shadow-xs'
-                      : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
             <button
               type="button"
               onClick={() => setIsAddingCustom(!isAddingCustom)}
-              className="px-3 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 shadow-xs"
+              className="px-3.5 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>{isEn ? 'Add Word' : 'Nova Palavra'}</span>
@@ -321,16 +287,16 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
           </div>
         </div>
 
-        {/* Add Word Form Accordion */}
+        {/* Add Word Form (Free Dictionary API powered) */}
         {isAddingCustom && (
           <form
             onSubmit={handleAddWordSubmit}
-            className="p-5 bg-blue-50/70 border-b border-blue-100 space-y-3.5 shrink-0"
+            className="p-5 bg-blue-50/80 border-b border-blue-200 space-y-3.5 shrink-0"
           >
             <div className="flex items-center justify-between">
               <span className="text-xs font-extrabold text-[#000035] flex items-center gap-1.5">
-                <BookOpen className="w-4 h-4 text-[#1C4C96]" />
-                <span>{isEn ? 'Add Word via Free Dictionary API' : 'Buscar Palavra na Free Dictionary API'}</span>
+                <Globe className="w-4 h-4 text-[#1C4C96]" />
+                <span>{isEn ? 'Look up Word in Free Dictionary API' : 'Buscar Palavra na Free Dictionary API'}</span>
               </span>
               <button
                 type="button"
@@ -338,7 +304,7 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
                   setIsAddingCustom(false);
                   setLookupError(null);
                 }}
-                className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
+                className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
               >
                 {isEn ? 'Cancel' : 'Cancelar'}
               </button>
@@ -368,22 +334,22 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
                         handleLookupWordFromDictionary();
                       }
                     }}
-                    placeholder="e.g. coffee, streamline"
+                    placeholder="e.g. coffee, schedule"
                     className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
                   />
                   <button
                     type="button"
                     onClick={handleLookupWordFromDictionary}
                     disabled={isLookingUpApi || !newWord.trim()}
-                    className="px-2.5 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-[10px] font-bold disabled:opacity-50 transition cursor-pointer shrink-0 flex items-center gap-1"
-                    title={isEn ? 'Look up official definition in Free Dictionary API' : 'Consultar Free Dictionary API'}
+                    className="px-3 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold disabled:opacity-50 transition cursor-pointer shrink-0 flex items-center gap-1"
+                    title="Buscar na Free Dictionary API"
                   >
                     {isLookingUpApi ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <>
                         <Globe className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">API</span>
+                        <span>API</span>
                       </>
                     )}
                   </button>
@@ -405,158 +371,171 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
 
               <div className="sm:col-span-5">
                 <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  {isEn ? 'English Definition' : 'Definição Oficial (em Inglês)'} *
+                  {isEn ? 'English Definition' : 'Significado (em Inglês)'} *
                 </label>
                 <input
                   type="text"
                   required
                   value={newDefinition}
                   onChange={(e) => setNewDefinition(e.target.value)}
-                  placeholder="Official definition in English..."
+                  placeholder="Meaning from Free Dictionary API..."
                   className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
                 />
               </div>
 
-              <div className="sm:col-span-8">
+              <div className="sm:col-span-9">
                 <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  {isEn ? 'Authentic Example Sentence' : 'Frase de Exemplo Real'}
+                  {isEn ? 'Example in a Sentence' : 'Exemplo em uma Frase'}
                 </label>
                 <input
                   type="text"
                   value={newExample}
                   onChange={(e) => setNewExample(e.target.value)}
-                  placeholder="e.g. He ordered a hot coffee with milk."
+                  placeholder="Example sentence from Free Dictionary API..."
                   className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
                 />
               </div>
 
-              <div className="sm:col-span-4 flex items-end">
+              <div className="sm:col-span-3 flex items-end">
                 <button
                   type="submit"
                   className="w-full py-2 bg-[#000035] hover:bg-[#1C4C96] text-white rounded-xl text-xs font-black transition cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
                 >
                   <Check className="w-3.5 h-3.5 text-[#F4CA54]" />
-                  <span>{isEn ? 'Save to Dictionary' : 'Salvar no Dicionário'}</span>
+                  <span>{isEn ? 'Save Word' : 'Salvar Palavra'}</span>
                 </button>
               </div>
             </div>
           </form>
         )}
 
-        {/* Dictionary Entries List (Scrollable) */}
-        <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-3">
+        {/* Dictionary Table View (Organized by Ascending Order) */}
+        <div className="flex-1 overflow-auto">
           {filteredEntries.length === 0 ? (
-            <div className="text-center py-12 space-y-3">
+            <div className="text-center py-16 px-4 space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
                 <BookOpen className="w-7 h-7" />
               </div>
-              <p className="text-sm font-bold text-slate-600">
-                {isEn ? 'No dictionary entries found.' : 'Nenhuma palavra encontrada no dicionário.'}
+              <p className="text-sm font-bold text-slate-700">
+                {searchTerm
+                  ? (isEn ? 'No words matching your search.' : 'Nenhuma palavra corresponde à busca.')
+                  : (isEn ? 'Your dictionary is ready for your first words!' : 'Seu dicionário está pronto para receber suas primeiras palavras!')}
               </p>
-              <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                {isEn
-                  ? 'Words typed during your daily routines will automatically appear here with their English definitions.'
-                  : 'As palavras digitadas na sua rotina diária aparecerão automaticamente aqui com suas definições em inglês.'}
+              <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                {searchTerm
+                  ? (isEn ? 'Try adjusting your search keywords.' : 'Tente pesquisar por outro termo.')
+                  : (isEn
+                      ? 'Vocabulary saved by your Native Friend in live coaching sessions or practiced in daily routines will automatically appear here in alphabetical order.'
+                      : 'O vocabulário salvo pelo seu Amigo Nativo nas aulas ao vivo ou praticado na sua rotina diária aparecerá automaticamente aqui em formato tabela por ordem alfabética.')}
               </p>
             </div>
           ) : (
-            filteredEntries.map((entry) => (
-              <div
-                key={entry.id}
-                className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 hover:border-[#607EC9]/70 hover:shadow-md transition group space-y-2.5"
-              >
-                {/* Word Header */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-baseline gap-2.5 flex-wrap">
-                    <h3 className="text-base sm:text-lg font-black text-[#000035] tracking-tight">
-                      {entry.word}
-                    </h3>
-                    {(entry as any).phonetic && (
-                      <span className="text-[11px] font-mono text-slate-400 font-normal">
-                        {(entry as any).phonetic}
-                      </span>
-                    )}
-                    {entry.partOfSpeech && (
-                      <span className="text-[11px] font-semibold text-[#1C4C96] bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
-                        {entry.partOfSpeech}
-                      </span>
-                    )}
-                    {entry.sourceActivityName && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#9AB4FF]/20 text-[#062863] border border-[#607EC9]/30">
-                        {entry.sourceActivityName}
-                      </span>
-                    )}
-                    {((entry as any).source === 'api' || entry.source === 'api') && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-                        <Globe className="w-2.5 h-2.5" />
-                        <span>Free Dict API</span>
-                      </span>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => speakText(entry.word)}
-                    className="p-2 rounded-xl bg-slate-100 hover:bg-[#1C4C96] text-slate-600 hover:text-white transition cursor-pointer shrink-0 shadow-2xs"
-                    title={isEn ? 'Listen pronunciation' : 'Ouvir pronúncia'}
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="bg-slate-100/80 border-b border-slate-200 text-[11px] font-black uppercase tracking-wider text-[#000035] sticky top-0 z-10 backdrop-blur-xs">
+                  <th className="py-3 px-4 sm:px-6 w-1/4">
+                    {isEn ? 'Word' : 'Palavra'}
+                  </th>
+                  <th className="py-3 px-4 sm:px-6 w-2/5">
+                    {isEn ? 'Meaning' : 'Significado'}
+                  </th>
+                  <th className="py-3 px-4 sm:px-6 w-1/3">
+                    {isEn ? 'Example' : 'Exemplo'}
+                  </th>
+                  <th className="py-3 px-3 text-right w-16">
+                    {isEn ? 'Audio' : 'Áudio'}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredEntries.map((entry, index) => (
+                  <tr
+                    key={entry.id || `${entry.word}_${index}`}
+                    className="hover:bg-blue-50/50 transition-colors group"
                   >
-                    <Volume2 className="w-4 h-4" />
-                  </button>
-                </div>
+                    {/* 1. Palavra / Word */}
+                    <td className="py-3.5 px-4 sm:px-6 align-top">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className="text-sm font-bold text-[#000035] tracking-tight group-hover:text-[#1C4C96] transition-colors">
+                          {entry.word}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {entry.partOfSpeech && (
+                            <span className="text-[10px] font-semibold text-[#1C4C96] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                              {entry.partOfSpeech}
+                            </span>
+                          )}
+                          {(entry as any).phonetic && (
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {(entry as any).phonetic}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
 
-                {/* English Definition Box */}
-                <div className={`p-3 rounded-xl border ${entry.notFound ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
-                  {entry.notFound ? (
-                    <p className="text-xs sm:text-sm text-amber-700 italic font-medium flex items-center gap-1.5">
-                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>{isEn ? 'Word not found in the official dictionary.' : 'Palavra não localizada no dicionário oficial.'}</span>
-                    </p>
-                  ) : (
-                    <p className="text-xs sm:text-sm text-slate-800 font-medium leading-relaxed">
-                      <span className="font-bold text-[#1C4C96] mr-1.5">Definition:</span>
-                      {entry.definitionEn}
-                    </p>
-                  )}
-                </div>
+                    {/* 2. Significado / Meaning */}
+                    <td className="py-3.5 px-4 sm:px-6 align-top">
+                      {entry.notFound ? (
+                        <span className="text-xs text-amber-700 italic">
+                          {isEn ? 'Word not found in dictionary.' : 'Palavra não encontrada no dicionário.'}
+                        </span>
+                      ) : entry.definitionEn ? (
+                        <p className="text-xs text-slate-700 leading-relaxed">
+                          {entry.definitionEn}
+                        </p>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic">
+                          {isEn ? 'Definition pending' : 'Definição pendente'}
+                        </span>
+                      )}
+                    </td>
 
-                {/* Example Sentence */}
-                {!entry.notFound && entry.exampleSentenceEn && (
-                  <div className="flex items-start gap-2 text-xs text-slate-600">
-                    <span className="font-bold text-slate-400 shrink-0">Ex:</span>
-                    <p className="italic text-slate-700">“{entry.exampleSentenceEn}”</p>
-                  </div>
-                )}
+                    {/* 3. Exemplo / Example */}
+                    <td className="py-3.5 px-4 sm:px-6 align-top">
+                      {entry.exampleSentenceEn ? (
+                        <p className="text-xs text-slate-600 italic leading-relaxed">
+                          “{entry.exampleSentenceEn}”
+                        </p>
+                      ) : (
+                        <span className="text-xs text-slate-300 italic">—</span>
+                      )}
+                    </td>
 
-                {/* Translation hint footer */}
-                {entry.translationPt && (
-                  <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
-                    <span>
-                      {isEn ? 'Portuguese meaning:' : 'Significado:'}{' '}
-                      <span className="text-slate-600 font-medium">{entry.translationPt}</span>
-                    </span>
-                    {entry.sourceDay && (
-                      <span className="capitalize text-[10px] text-slate-400">
-                        {entry.sourceDay}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))
+                    {/* 4. Audio Pronunciation Button */}
+                    <td className="py-3.5 px-3 align-top text-right">
+                      <button
+                        type="button"
+                        onClick={() => speakText(entry.word)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-[#1C4C96] hover:bg-blue-50 transition cursor-pointer"
+                        title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="p-4 bg-slate-100 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 shrink-0">
-          <span>
-            {isEn ? 'Definitions are curated in natural English.' : 'Definições formuladas em inglês natural e pedagógico.'}
-          </span>
+        {/* Footer */}
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 shrink-0">
+          <div className="flex items-center gap-1.5 text-slate-500">
+            <Globe className="w-3.5 h-3.5 text-[#1C4C96]" />
+            <span>
+              {isEn
+                ? 'Definitions sourced directly from Free Dictionary API'
+                : 'Definições extraídas 100% da Free Dictionary API oficial'}
+            </span>
+          </div>
           <button
             type="button"
             onClick={onClose}
             className="px-5 py-2 bg-[#000035] hover:bg-[#1C4C96] text-white rounded-xl font-bold transition cursor-pointer"
           >
-            {isEn ? 'Close Dictionary' : 'Fechar Dicionário'}
+            {isEn ? 'Close' : 'Fechar'}
           </button>
         </div>
       </div>

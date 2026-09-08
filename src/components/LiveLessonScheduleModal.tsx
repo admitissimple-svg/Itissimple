@@ -146,6 +146,17 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     !isTeacher && currentAccount ? currentAccount.email : defaultStudent.email
   );
 
+  // Synchronize student email whenever modal opens or account changes
+  React.useEffect(() => {
+    if (!isTeacher && currentAccount?.email) {
+      setSelectedStudentEmail(currentAccount.email);
+    } else if (isTeacher && students.length > 0) {
+      if (!selectedStudentEmail || !students.some((s) => s.email === selectedStudentEmail)) {
+        setSelectedStudentEmail(students[0].email);
+      }
+    }
+  }, [isOpen, isTeacher, currentAccount?.email, students]);
+
   const todayStr = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [selectedStartTime, setSelectedStartTime] = useState<string>('09:00');
@@ -177,9 +188,17 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
       email: selectedTeacherEmail,
     };
 
-  const selectedStudentObj = students.find((s) => s.email === selectedStudentEmail) || {
-    name: !isTeacher && currentAccount ? currentAccount.name : defaultStudent.name,
-    email: selectedStudentEmail,
+  const effectiveStudentEmail = (!isTeacher && currentAccount?.email)
+    ? currentAccount.email.trim().toLowerCase()
+    : (selectedStudentEmail || (currentAccount?.email ?? '')).trim().toLowerCase();
+
+  const effectiveStudentName = (!isTeacher && currentAccount?.name)
+    ? currentAccount.name.trim()
+    : (students.find((s) => (s.email || '').toLowerCase() === effectiveStudentEmail)?.name || currentAccount?.name || 'Aluno').trim();
+
+  const selectedStudentObj = {
+    name: effectiveStudentName,
+    email: effectiveStudentEmail,
   };
 
   // Check which day of week is selected
@@ -290,8 +309,31 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     start.setHours(hours, mins, 0, 0);
     const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
     const conflict = findTeacherLessonConflict(selectedTeacherObj.email, start.toISOString(), end.toISOString(), combinedLessons);
-    return Boolean(conflict);
+    if (conflict) return true;
+
+    // For 50-minute lessons (2 blocks), ensure consecutive 30-min block is configured if teacher has specific availableHours
+    if (durationMinutes === 50 && activeTeacherSettings.availableHours && activeTeacherSettings.availableHours.length > 0) {
+      const nextMin = mins + 30;
+      const nextH = hours + Math.floor(nextMin / 60);
+      const nextM = nextMin % 60;
+      const nextSlot = `${String(nextH).padStart(2, '0')}:${String(nextM).padStart(2, '0')}`;
+      if (!activeTeacherSettings.availableHours.includes(nextSlot)) {
+        return true;
+      }
+    }
+    return false;
   };
+
+  const isConsecutiveSlotMissing = useMemo(() => {
+    if (durationMinutes !== 50 || !selectedStartTime) return false;
+    if (!activeTeacherSettings.availableHours || activeTeacherSettings.availableHours.length === 0) return false;
+    const [hours, mins] = selectedStartTime.split(':').map(Number);
+    const nextMin = mins + 30;
+    const nextH = hours + Math.floor(nextMin / 60);
+    const nextM = nextMin % 60;
+    const nextSlot = `${String(nextH).padStart(2, '0')}:${String(nextM).padStart(2, '0')}`;
+    return !activeTeacherSettings.availableHours.includes(nextSlot);
+  }, [durationMinutes, selectedStartTime, activeTeacherSettings.availableHours]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -306,11 +348,29 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
       return;
     }
 
+    if (isConsecutiveSlotMissing) {
+      alert(
+        isEn
+          ? `For a 50-minute lesson (2 blocks), both consecutive time slots must be available on the Native Friend's schedule.`
+          : `Para uma aula de 50 minutos (2 blocos), ambos os horários consecutivos precisam estar disponíveis na grade do Amigo Nativo.`
+      );
+      return;
+    }
+
     if (!isDayAvailable) {
       alert(
         isEn
           ? `The Native Friend is not available on ${selectedDayKey}. Please select an open day.`
           : `O Amigo Nativo não atende às ${selectedDayKey === 'sunday' ? 'domingos' : selectedDayKey === 'saturday' ? 'sábados' : 'segundas-feiras'}. Por favor, escolha um dia disponível.`
+      );
+      return;
+    }
+
+    if (!selectedStudentObj.email) {
+      alert(
+        isEn
+          ? 'Error: Student email not identified. Please make sure you are signed in.'
+          : 'Erro: Não foi possível identificar o e-mail do aluno. Verifique se está conectado à sua conta.'
       );
       return;
     }
@@ -524,6 +584,18 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
             </div>
           )}
 
+          {/* Consecutive slot missing alert for 50-minute lessons */}
+          {isConsecutiveSlotMissing && !currentConflict && (
+            <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-start gap-2 animate-in fade-in">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] leading-relaxed">
+                {isEn
+                  ? `Notice: A 50-minute lesson requires two consecutive 30-minute blocks. The consecutive block starting after ${selectedStartTime} is not open on the teacher's schedule. Please select an earlier or different slot.`
+                  : `Atenção: Aulas de 50 minutos requerem dois blocos consecutivos de 30 minutos. O bloco seguinte a partir de ${selectedStartTime} não está disponível na grade do professor. Selecione outro horário com ambos os blocos livres.`}
+              </p>
+            </div>
+          )}
+
           {/* Duration & Timezone */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -536,7 +608,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               >
                 <option value={25}>25 {isEn ? 'minutes (1 slot)' : 'minutos (1 bloco)'}</option>
-                <option value={30}>30 {isEn ? 'minutes (1 slot)' : 'minutos (1 bloco)'}</option>
+                <option value={50}>50 {isEn ? 'minutes (2 slots)' : 'minutos (2 blocos)'}</option>
               </select>
             </div>
 

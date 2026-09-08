@@ -68,10 +68,10 @@ export async function fetchFromFreeDictionaryApi(rawWord: string): Promise<Dicti
     try {
       const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term.toLowerCase())}`;
       
-      // Use standard fetch without custom headers to avoid unnecessary CORS preflight issues
+      // 8-second timeout for reliable external API response
       let signal: AbortSignal | undefined;
       if (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
-        signal = AbortSignal.timeout(3000);
+        signal = AbortSignal.timeout(8000);
       }
 
       const res = await fetch(url, {
@@ -243,47 +243,31 @@ export async function lookupWord(
 
   const cacheKey = cleanWord.toLowerCase();
 
-  // 1. Check cache first
+  // 1. Check session memory cache first
   const cached = memoryCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  // 2. Check local curated dictionary for instant reliable definition
-  if (COMMON_ROUTINE_DICTIONARY[cacheKey]) {
-    const local = COMMON_ROUTINE_DICTIONARY[cacheKey];
-    const result: DictionaryLookupResult = {
-      word: local.word,
-      partOfSpeech: local.partOfSpeech || 'noun',
-      definitionEn: local.definitionEn,
-      exampleSentenceEn: local.exampleSentenceEn,
-      translationPt: local.translationPt,
-      source: 'api',
-      notFound: false,
-    };
-    memoryCache.set(cacheKey, result);
-    return result;
-  }
-
-  // 3. Query Free Dictionary API
+  // 2. Query external Free Dictionary API directly (client-side)
   const apiResult = await fetchFromFreeDictionaryApi(cleanWord);
   if (apiResult && !apiResult.notFound && apiResult.definitionEn) {
     memoryCache.set(cacheKey, apiResult);
     return apiResult;
   }
 
-  // 4. Query backend dictionary endpoint (/api/dictionary/define)
+  // 3. Query backend dictionary proxy endpoint (/api/dictionary/define)
   const backendResult = await fetchFromBackendApi(cleanWord, context);
   if (backendResult && !backendResult.notFound && backendResult.definitionEn) {
     memoryCache.set(cacheKey, backendResult);
     return backendResult;
   }
 
-  // 5. If not found in any authoritative source
+  // 4. If not found in Free Dictionary API, return clean notFound
   const notFoundResult: DictionaryLookupResult = {
     word: cleanWord,
     partOfSpeech: '',
-    definitionEn: 'Palavra não localizada no dicionário oficial.',
+    definitionEn: '',
     exampleSentenceEn: '',
     source: 'not_found',
     notFound: true,
@@ -294,7 +278,7 @@ export async function lookupWord(
 }
 
 /**
- * Returns instant synchronous cached result or curated entry
+ * Returns instant synchronous cached result or pending placeholder
  */
 export function getInstantOrCachedWord(
   rawWord: string,
@@ -306,20 +290,6 @@ export function getInstantOrCachedWord(
   const cached = memoryCache.get(cacheKey);
   if (cached) {
     return cached;
-  }
-
-  // Check local curated dictionary for instant synchronous zero-delay response
-  if (COMMON_ROUTINE_DICTIONARY[cacheKey]) {
-    const local = COMMON_ROUTINE_DICTIONARY[cacheKey];
-    return {
-      word: local.word,
-      partOfSpeech: local.partOfSpeech || 'noun',
-      definitionEn: local.definitionEn,
-      exampleSentenceEn: local.exampleSentenceEn,
-      translationPt: local.translationPt,
-      source: 'api',
-      notFound: false,
-    };
   }
 
   return {
