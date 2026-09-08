@@ -140,8 +140,8 @@ export function generateWeeklyHomework(
   studentEmail?: string,
   studentName?: string
 ): WeeklyHomeworkData {
-  const email = studentEmail || userProfile?.email || 'reginahelena1980@gmail.com';
-  const name = studentName || userProfile?.name || 'Regina Helena';
+  const email = studentEmail || userProfile?.email || '';
+  const name = studentName || userProfile?.name || (email ? email.split('@')[0] : 'Student');
 
   // 1. Gather all words typed across the entire week
   const rawWords: HomeworkVocabItem[] = [];

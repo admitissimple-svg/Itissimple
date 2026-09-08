@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   User,
@@ -31,45 +31,126 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
   currentLanguage,
 }) => {
   const isEn = currentLanguage === 'en';
-  const [name, setName] = useState(userProfile.name || currentAccount?.name || '');
-  const [avatar, setAvatar] = useState(
-    currentAccount?.picture ||
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=250&auto=format&fit=crop&q=80'
+
+  // Strict check: Only trust userProfile if its email matches currentAccount email
+  const isAccountMatch = Boolean(
+    currentAccount?.email &&
+      userProfile?.email &&
+      userProfile.email.toLowerCase().trim() === currentAccount.email.toLowerCase().trim()
   );
+
+  const activeProfile = isAccountMatch ? userProfile : null;
+
+  // Never inherit photo or name from an unrelated profile in memory
+  const initialName = activeProfile?.name || currentAccount?.name || '';
+  const initialAvatar =
+    (activeProfile?.avatar && activeProfile.avatar.trim() !== '' ? activeProfile.avatar : '') ||
+    (activeProfile?.picture && activeProfile.picture.trim() !== '' ? activeProfile.picture : '') ||
+    (currentAccount?.picture && currentAccount.picture.trim() !== '' ? currentAccount.picture : '') ||
+    '';
+
+  const [name, setName] = useState(initialName);
+  const [avatar, setAvatar] = useState(initialAvatar);
   const [level, setLevel] = useState<EnglishLevel>(
-    userProfile.level || EnglishLevel.BEGINNER
+    activeProfile?.level || EnglishLevel.BEGINNER
   );
   const [goal, setGoal] = useState(
-    userProfile.learningGoal || 'Daily routine conversation, travel, and career English'
+    activeProfile?.learningGoal || ''
   );
   const [dailyGoalMinutes, setDailyGoalMinutes] = useState(
-    userProfile.dailyGoalMinutes || 30
+    activeProfile?.dailyGoalMinutes || 30
+  );
+  const [routineVideoTime, setRoutineVideoTime] = useState(
+    activeProfile?.routineVideoTime || ''
+  );
+  const [routineAudioTime, setRoutineAudioTime] = useState(
+    activeProfile?.routineAudioTime || ''
+  );
+  const [dailyPhraseTime, setDailyPhraseTime] = useState(
+    activeProfile?.dailyPhraseTime || ''
   );
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Synchronize state whenever modal is opened or active profile/account updates
+  useEffect(() => {
+    if (isOpen) {
+      const match = Boolean(
+        currentAccount?.email &&
+          userProfile?.email &&
+          userProfile.email.toLowerCase().trim() === currentAccount.email.toLowerCase().trim()
+      );
+      const safeProfile = match ? userProfile : null;
+
+      setName(safeProfile?.name || currentAccount?.name || '');
+      const safeAvatar =
+        (safeProfile?.avatar && safeProfile.avatar.trim() !== '' ? safeProfile.avatar : '') ||
+        (safeProfile?.picture && safeProfile.picture.trim() !== '' ? safeProfile.picture : '') ||
+        (currentAccount?.picture && currentAccount.picture.trim() !== '' ? currentAccount.picture : '') ||
+        '';
+      setAvatar(safeAvatar);
+      setLevel(safeProfile?.level || EnglishLevel.BEGINNER);
+      setGoal(safeProfile?.learningGoal || '');
+      setDailyGoalMinutes(safeProfile?.dailyGoalMinutes || 30);
+      setRoutineVideoTime(safeProfile?.routineVideoTime || '');
+      setRoutineAudioTime(safeProfile?.routineAudioTime || '');
+      setDailyPhraseTime(safeProfile?.dailyPhraseTime || '');
+      setSavedSuccess(false);
+    }
+  }, [isOpen, userProfile, currentAccount]);
+
+  // Support ESC key to easily dismiss the profile modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
+    const cleanId =
+      currentAccount?.id ||
+      userProfile?.id ||
+      (cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : 'usr-default');
+    const cleanAvatar = avatar.trim();
+    const cleanName = name.trim();
+
     const updated: UserProfile = {
-      ...userProfile,
-      name: name.trim() || userProfile.name,
+      ...(isAccountMatch ? userProfile : {}),
+      id: cleanId,
+      email: cleanEmail,
+      name: cleanName,
       level,
       learningGoal: goal.trim(),
       dailyGoalMinutes: Number(dailyGoalMinutes) || 30,
+      routineVideoTime,
+      routineAudioTime,
+      dailyPhraseTime,
+      avatar: cleanAvatar,
+      picture: cleanAvatar,
     };
-    onSave(updated, avatar);
+    onSave(updated, cleanAvatar);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
       onClose();
-    }, 1000);
+    }, 800);
   };
 
   return (
     <div
       className="fixed inset-0 z-50 bg-[#000035]/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
       id="student-profile-modal"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-[#607EC9]/40 overflow-hidden flex flex-col max-h-[92vh] my-auto animate-in fade-in zoom-in duration-200">
         {/* Header */}
@@ -79,13 +160,20 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
               <User className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-lg sm:text-xl font-black text-white">
-                {isEn ? 'Your Profile & Photo' : 'Seu Perfil & Sua Foto'}
-              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg sm:text-xl font-black text-white">
+                  {isEn ? 'Your Profile & Photo' : 'Seu Perfil & Sua Foto'}
+                </h2>
+                {currentAccount?.email && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/15 text-white/90 border border-white/20">
+                    {currentAccount.email}
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-[#9AB4FF]">
                 {isEn
-                  ? 'Personalize your photo, name, and English goals.'
-                  : 'Personalize sua foto, seu nome e seus objetivos com o inglês.'}
+                  ? 'Personalize your photo, name, and English goals strictly for your user account.'
+                  : 'Personalize sua foto, seu nome e seus objetivos vinculados exclusivamente ao seu ID de usuário.'}
               </p>
             </div>
           </div>
@@ -94,6 +182,8 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
             type="button"
             onClick={onClose}
             className="p-2 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-white/10 transition cursor-pointer"
+            aria-label="Close"
+            title="Fechar (Esc)"
           >
             <X className="w-5 h-5" />
           </button>
@@ -136,7 +226,7 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full p-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] font-semibold focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
-                placeholder="Ex: Regina Helena"
+                placeholder={isEn ? 'e.g., Alex Silva' : 'Ex: Seu Nome Completo'}
               />
             </div>
 
@@ -176,6 +266,48 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
                     value={dailyGoalMinutes}
                     onChange={(e) => setDailyGoalMinutes(Number(e.target.value))}
                     className="w-full pl-9 pr-3 py-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] font-semibold"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Daily Routine Schedule */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <label className="block text-xs font-black text-[#062863]">
+                ⏰ {isEn ? 'Daily Routine Habit Times' : 'Horários das suas Rotinas Diárias'}
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <span className="block text-[11px] font-bold text-slate-600 mb-1">
+                    🎬 {isEn ? 'Video Habit Time' : 'Horário do Vídeo'}
+                  </span>
+                  <input
+                    type="time"
+                    value={routineVideoTime}
+                    onChange={(e) => setRoutineVideoTime(e.target.value)}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-[#000035]"
+                  />
+                </div>
+                <div>
+                  <span className="block text-[11px] font-bold text-slate-600 mb-1">
+                    🎧 {isEn ? 'Audio Habit Time' : 'Horário do Áudio'}
+                  </span>
+                  <input
+                    type="time"
+                    value={routineAudioTime}
+                    onChange={(e) => setRoutineAudioTime(e.target.value)}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-[#000035]"
+                  />
+                </div>
+                <div>
+                  <span className="block text-[11px] font-bold text-slate-600 mb-1">
+                    ✍️ {isEn ? 'Daily Phrase Time' : 'Horário da Frase'}
+                  </span>
+                  <input
+                    type="time"
+                    value={dailyPhraseTime}
+                    onChange={(e) => setDailyPhraseTime(e.target.value)}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-[#000035]"
                   />
                 </div>
               </div>

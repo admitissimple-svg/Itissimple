@@ -48,6 +48,7 @@ import {
 } from '../utils/spotify';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { checkStudentWritingApi } from '../utils/writingChecker';
+import { getInstantOrCachedWord } from '../utils/dictionaryService';
 
 
 interface VideoLearningWorkspaceProps {
@@ -126,7 +127,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
   const [teacherInputUrl, setTeacherInputUrl] = useState<string>('');
   const [teacherInputTitle, setTeacherInputTitle] = useState<string>('');
   const [teacherInputInstructions, setTeacherInputInstructions] = useState<string>(
-    activity.teacherNotes || 'Pay close attention to vocabulary, expressions, and native pronunciation in this video.'
+    activity.teacherNotes || ''
   );
   const [teacherSelectedDays, setTeacherSelectedDays] = useState<DayOfWeek[]>(() => [activity.dayOfWeek || 'monday']);
   const [teacherSaveSuccess, setTeacherSaveSuccess] = useState<boolean>(false);
@@ -158,13 +159,13 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
       setTeacherInputInstructions(
         assignedVideo.instructions ||
           activity.teacherNotes ||
-          'Pay close attention to vocabulary, expressions, and native pronunciation in this video.'
+          ''
       );
     } else {
       setTeacherInputUrl('');
       setTeacherInputTitle('');
       setTeacherInputInstructions(
-        activity.teacherNotes || 'Pay close attention to vocabulary, expressions, and native pronunciation in this video.'
+        activity.teacherNotes || ''
       );
     }
 
@@ -173,18 +174,13 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
       setTeacherSpotifyTitle(activity.teacherSpotify.title || '');
       setTeacherSpotifyType(activity.teacherSpotify.type || 'podcast');
       setTeacherSpotifyArtist(activity.teacherSpotify.artistOrHost || '');
-      setTeacherSpotifyInstructions(
-        activity.teacherSpotify.instructions ||
-          'Sugestão diária do Teacher: Ouça com foco na compreensão auditiva e entonação natural.'
-      );
+      setTeacherSpotifyInstructions(activity.teacherSpotify.instructions || '');
     } else {
       setTeacherSpotifyUrl('');
       setTeacherSpotifyTitle('');
       setTeacherSpotifyType('podcast');
       setTeacherSpotifyArtist('');
-      setTeacherSpotifyInstructions(
-        'Sugestão diária do Teacher: Ouça com foco na compreensão auditiva e entonação natural.'
-      );
+      setTeacherSpotifyInstructions('');
     }
 
     setUrlError(null);
@@ -277,7 +273,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
   };
 
   const handleApplyAllCorrections = () => {
-    if (!writingEvaluation?.wordFeedbacks) return;
+    if (!writingEvaluation?.wordFeedbacks || !Array.isArray(writingEvaluation.wordFeedbacks)) return;
     let newWords = [...words];
     writingEvaluation.wordFeedbacks.forEach((wf) => {
       if (wf.hasError && wf.corrected) {
@@ -1026,6 +1022,15 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
                     <Check className="w-4 h-4 text-[#1C4C96] shrink-0" />
                   )}
                 </div>
+                {word.trim() && (
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 rounded-lg border border-slate-200 text-[11px] text-slate-600 truncate mt-1"
+                    title={getInstantOrCachedWord(word.trim()).definitionEn}
+                  >
+                    <BookOpen className="w-3 h-3 text-[#1C4C96] shrink-0" />
+                    <span className="truncate">{getInstantOrCachedWord(word.trim()).definitionEn}</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>

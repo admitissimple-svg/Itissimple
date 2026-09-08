@@ -137,9 +137,14 @@ const ACTIVITY_NAMES_MAP: Record<string, Record<Language, string>> = {
   },
 };
 
-export const getActivityDisplayName = (activityId: string, lang: Language): string => {
-  if (ACTIVITY_NAMES_MAP[activityId] && ACTIVITY_NAMES_MAP[activityId][lang]) {
-    return ACTIVITY_NAMES_MAP[activityId][lang];
+export const getActivityDisplayName = (
+  activity: string | { activityName?: string; id?: string } | null | undefined,
+  lang: Language
+): string => {
+  if (!activity) return '';
+  const key = typeof activity === 'string' ? activity : (activity.activityName || activity.id || '');
+  if (key && ACTIVITY_NAMES_MAP[key] && ACTIVITY_NAMES_MAP[key][lang]) {
+    return ACTIVITY_NAMES_MAP[key][lang];
   }
-  return activityId;
+  return typeof activity === 'string' ? activity : (activity.activityName || activity.id || '');
 };

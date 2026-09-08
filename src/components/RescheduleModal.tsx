@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Calendar,
@@ -8,7 +8,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { LiveLesson, GoogleAccount, Language } from '../types';
-import { generate30MinTimeSlots, formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
+import { generate30MinTimeSlots, formatDateInTimeZone, formatTimeInTimeZone, formatTimeSlot12h } from '../utils/timezone';
 
 interface RescheduleModalProps {
   isOpen: boolean;
@@ -34,21 +34,25 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
   currentLanguage,
   timeZone = 'America/Sao_Paulo',
 }) => {
-  if (!isOpen || !lesson) return null;
-
-  const isEn = currentLanguage === 'en';
   const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
+  const isEn = currentLanguage === 'en' || isTeacher;
 
-  const defaultDate = lesson.startDateTime.split('T')[0];
+  const defaultDate = lesson?.startDateTime ? lesson.startDateTime.split('T')[0] : '';
   const [newDate, setNewDate] = useState<string>(defaultDate);
   const [newStartTime, setNewStartTime] = useState<string>('10:00');
   const [reason, setReason] = useState<string>('');
+
+  useEffect(() => {
+    if (lesson?.startDateTime) {
+      setNewDate(lesson.startDateTime.split('T')[0]);
+    }
+  }, [lesson]);
 
   const timeSlots = generate30MinTimeSlots('07:00', '21:00');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDate || !newStartTime) return;
+    if (!lesson || !newDate || !newStartTime) return;
 
     const [h, m] = newStartTime.split(':').map(Number);
     const start = new Date(newDate + 'T00:00:00');
@@ -59,6 +63,8 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
     onConfirmReschedule(lesson.id, start.toISOString(), end.toISOString(), reason.trim());
     onClose();
   };
+
+  if (!isOpen || !lesson) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
@@ -122,7 +128,7 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
               >
                 {timeSlots.map((slot) => (
                   <option key={slot} value={slot}>
-                    {slot}
+                    {formatTimeSlot12h(slot)}
                   </option>
                 ))}
               </select>
@@ -142,20 +148,29 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
             />
           </div>
 
+          <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-[11px] leading-relaxed">
+              {isEn
+                ? 'Your reschedule proposal will be sent to the other participant. The lesson time will only move once they confirm.'
+                : 'A solicitação de reagendamento será enviada ao outro participante. A aula só mudará de horário após a confirmação dele(a).'}
+            </p>
+          </div>
+
           <div className="pt-2 flex justify-end gap-2 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold"
+              className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
             >
-              {isEn ? 'Cancel' : 'Cancelar'}
+              {isEn ? 'Cancel' : 'Voltar'}
             </button>
             <button
               type="submit"
-              className="px-5 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+              className="px-5 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{isEn ? 'Send Reschedule' : 'Confirmar Reagendamento'}</span>
+              <span>{isEn ? 'Send Reschedule Request' : 'Solicitar Reagendamento'}</span>
             </button>
           </div>
         </form>

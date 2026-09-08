@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   CheckCircle2,
@@ -18,66 +18,137 @@ import { ImageUploadInput } from './ImageUploadInput';
 interface BecomeTutorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentLanguage: Language;
+  currentLanguage?: Language;
   onRegisteredSuccess?: (tutorData: any) => void;
+  onRegisterSuccess?: (tutorData: any) => void;
 }
 
 export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
   isOpen,
   onClose,
-  currentLanguage,
   onRegisteredSuccess,
+  onRegisterSuccess,
 }) => {
-  const isEn = currentLanguage === 'en';
-
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=250&auto=format&fit=crop&q=80',
-    country: 'United States',
-    accent: 'American (Standard)',
-    nativeLanguage: 'English',
+    avatar: '',
+    country: '',
+    accent: '',
+    nativeLanguage: '',
     headline: '',
     bio: '',
     videoUrl: '',
-    priceUsd: '20',
-    meetUrl: 'https://meet.google.com/new',
-    availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] as DayOfWeek[],
+    priceUsd: '',
+    meetUrl: '',
+    availableDays: [] as DayOfWeek[],
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [emailWarning, setEmailWarning] = useState<string | null>(null);
+  const [nameWarning, setNameWarning] = useState<string | null>(null);
+  const [lastCreatedTutor, setLastCreatedTutor] = useState<any>(null);
+
+  // Support ESC key to easily dismiss the initial registration modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
+  const checkEmailExists = async (emailToCheck: string) => {
+    const clean = emailToCheck.trim().toLowerCase();
+    if (!clean || !clean.includes('@')) {
+      setEmailWarning(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/auth/check-user?email=${encodeURIComponent(clean)}&role=teacher`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.emailExists) {
+          setEmailWarning(`This email is already registered (${clean}). Please log in or use another email.`);
+        } else {
+          setEmailWarning(null);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const checkNameExists = async (nameToCheck: string) => {
+    const clean = nameToCheck.trim();
+    if (!clean || clean.length < 3) {
+      setNameWarning(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/auth/check-user?name=${encodeURIComponent(clean)}&role=teacher`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.nameExists) {
+          setNameWarning(`A Native Friend with the name "${clean}" already exists. Please include your surname.`);
+        } else {
+          setNameWarning(null);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (emailWarning || nameWarning) {
+      setErrorMessage(emailWarning || nameWarning);
+      return;
+    }
     setIsSubmitting(true);
+    setErrorMessage(null);
 
     try {
       // Register with backend
       const tutorPayload = {
-        name: formData.name,
+        name: formData.name.trim(),
         email: formData.email.toLowerCase().trim(),
-        avatar: formData.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=250&auto=format&fit=crop&q=80',
+        avatar: formData.avatar || '',
         role: 'teacher',
         country: formData.country,
         accent: formData.accent,
         headline: formData.headline,
         bio: formData.bio,
         videoIntroUrl: formData.videoUrl,
-        pricePerSessionUsd: Number(formData.priceUsd) || 18,
-        pricePerSessionBrl: Math.round((Number(formData.priceUsd) || 18) * 5.5),
+        pricePerSessionUsd: Number(formData.priceUsd) || 20,
+        pricePerSessionBrl: Math.round((Number(formData.priceUsd) || 20) * 5.5),
         availableDays: formData.availableDays,
         approvalStatus: 'pending',
         registeredByAdmin: false,
       };
 
-      await fetch('/api/tutors', {
+      const res = await fetch('/api/tutors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tutor: tutorPayload }),
       });
+
+      const resData = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setErrorMessage(resData.error || 'Erro ao realizar cadastro de Amigo Nativo.');
+        return;
+      }
+
+      const createdTutor = resData.tutor || tutorPayload;
 
       // Save meet settings
       await fetch('/api/meet-settings', {
@@ -97,12 +168,14 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
       });
 
       setIsSubmitted(true);
-      if (onRegisteredSuccess) {
-        onRegisteredSuccess(tutorPayload);
+      setLastCreatedTutor(createdTutor);
+      const callback = onRegisteredSuccess || onRegisterSuccess;
+      if (callback) {
+        callback(createdTutor);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error registering tutor:', err);
-      setIsSubmitted(true);
+      setErrorMessage('Falha ao conectar com o servidor. Tente novamente.');
     } finally {
       setIsSubmitting(false);
     }
@@ -118,12 +191,19 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-8 shadow-2xl border border-[#607EC9]/30 relative my-8 animate-in fade-in zoom-in duration-200">
         <button
           type="button"
           onClick={onClose}
-          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 transition cursor-pointer"
+          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 hover:text-slate-900 transition cursor-pointer z-10"
+          aria-label="Close"
+          title="Fechar (Esc)"
         >
           <X className="w-4 h-4" />
         </button>
@@ -134,43 +214,45 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
               <CheckCircle2 className="w-9 h-9" />
             </div>
             <h3 className="text-2xl font-black text-[#000035]">
-              {isEn ? 'Application Received!' : 'Cadastro Enviado com Sucesso!'}
+              Application Submitted Successfully!
             </h3>
             <p className="text-sm text-slate-600 leading-relaxed max-w-md mx-auto">
-              {isEn
-                ? 'Thank you for applying to be a Native Friend! Your profile has been sent for administrative approval. Once approved, your profile will be published on the platform.'
-                : 'Obrigado pelo seu cadastro como Amigo Nativo! Seu perfil foi encaminhado para aprovação do administrador. Assim que aprovado, seu perfil será publicado na plataforma.'}
+              Thank you for applying to become a Native Friend! Your profile has been sent for administrative review. Once approved, your profile will be published on the platform for students to book sessions.
             </p>
             <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-2xl text-xs text-[#062863] max-w-md mx-auto">
               <p className="font-bold">
-                {isEn ? 'Status: Pending Administrator Review' : 'Status: Aguardando Aprovação do Administrador'}
+                Status: Pending Administrator Review
               </p>
             </div>
             <div className="pt-4">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={() => {
+                  const callback = onRegisteredSuccess || onRegisterSuccess;
+                  if (callback && lastCreatedTutor) {
+                    callback(lastCreatedTutor);
+                  }
+                  onClose();
+                }}
                 className="px-6 py-2.5 rounded-xl bg-[#062863] text-white hover:bg-[#000035] font-bold text-sm shadow-xs transition cursor-pointer"
               >
-                {isEn ? 'Done / Back to Home' : 'Concluir / Voltar ao Início'}
+                Done / Back to Home
               </button>
             </div>
           </div>
         ) : (
           <div>
-            {/* Header */}
+            {/* Header - 100% in English */}
             <div className="space-y-1 mb-6">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#062863]/10 text-[#062863] text-xs font-bold">
                 <Sparkles className="w-3.5 h-3.5 text-[#1C4C96]" />
-                <span>{isEn ? 'Become a Native Friend' : 'Seja um Amigo Nativo'}</span>
+                <span>Become a Native Friend</span>
               </div>
               <h2 className="text-2xl sm:text-3xl font-black text-[#000035] tracking-tight">
-                {isEn ? 'Share English by Living Life' : 'Ensine Inglês Vivendo a Vida'}
+                Teach English by Living Life
               </h2>
               <p className="text-xs sm:text-sm text-slate-600">
-                {isEn
-                  ? 'No grammar textbooks. Connect with Brazilian learners through daily routine conversations.'
-                  : 'Sem livros chatos de gramática. Conecte-se com alunos através de conversas práticas sobre o dia a dia.'}
+                No boring grammar textbooks. Connect with Brazilian learners through practical, real-world conversation about daily routines and habits.
               </p>
             </div>
 
@@ -186,7 +268,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                 }`}
               >
                 <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">1</span>
-                <span>{isEn ? 'Personal Info' : 'Dados Pessoais'}</span>
+                <span>Personal Info</span>
               </button>
 
               <button
@@ -199,7 +281,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                 }`}
               >
                 <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">2</span>
-                <span>{isEn ? 'Bio & Video' : 'Bio & Apresentação'}</span>
+                <span>Bio & Video Intro</span>
               </button>
 
               <button
@@ -212,64 +294,94 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                 }`}
               >
                 <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">3</span>
-                <span>{isEn ? 'Schedule & Rate' : 'Horários & Preço'}</span>
+                <span>Schedule & Pricing</span>
               </button>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {errorMessage && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2 animate-in fade-in">
+                  <span className="font-bold shrink-0 text-sm leading-none">⚠️</span>
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
               {/* Step 1: Personal info */}
               {step === 1 && (
                 <div className="space-y-3 animate-in fade-in duration-150">
                   <ImageUploadInput
-                    label={isEn ? 'Profile Photo / Avatar (Upload from device or choose)' : 'Foto de Perfil / Avatar (Carregar foto do dispositivo)'}
+                    label="Profile Photo / Avatar (Upload from device)"
                     value={formData.avatar}
                     onChange={(newAvatar) => setFormData({ ...formData, avatar: newAvatar })}
-                    currentLanguage={currentLanguage}
-                    helperText={
-                      isEn
-                        ? 'Upload a friendly, clear headshot photo for your Native Friend profile.'
-                        : 'Carregue uma foto nítida e simpática para o seu perfil de Amigo Nativo.'
-                    }
+                    currentLanguage="en"
+                    helperText="Upload a friendly, clear headshot photo for your Native Friend profile."
                   />
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {isEn ? 'Full Name *' : 'Nome Completo *'}
+                      Full Name *
                     </label>
                     <input
                       type="text"
                       required
                       value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      placeholder="Ex: Charles Lambert"
-                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#607EC9]/30 rounded-xl text-sm text-[#000035] focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
+                      onChange={(e) => {
+                        setFormData({ ...formData, name: e.target.value });
+                        if (nameWarning) setNameWarning(null);
+                      }}
+                      onBlur={() => checkNameExists(formData.name)}
+                      placeholder="Ex: Sarah Jenkins"
+                      className={`w-full px-3.5 py-2 bg-slate-50 border rounded-xl text-sm text-[#000035] focus:bg-white focus:outline-hidden focus:ring-2 ${
+                        nameWarning
+                          ? 'border-amber-400 ring-2 ring-amber-400/20'
+                          : 'border-[#607EC9]/30 focus:ring-[#1C4C96]'
+                      }`}
                     />
+                    {nameWarning && (
+                      <p className="mt-1 text-xs text-amber-700 font-semibold bg-amber-50 p-2 rounded-lg border border-amber-200">
+                        ⚠️ {nameWarning}
+                      </p>
+                    )}
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {isEn ? 'Email Address (Google/Gmail) *' : 'Endereço de E-mail (Gmail) *'}
+                      Email Address (Google/Gmail) *
                     </label>
                     <input
                       type="email"
                       required
                       value={formData.email}
-                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      placeholder="Ex: charles.lambert1939@gmail.com"
-                      className="w-full px-3.5 py-2 bg-slate-50 border border-[#607EC9]/30 rounded-xl text-sm text-[#000035] focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
+                      onChange={(e) => {
+                        setFormData({ ...formData, email: e.target.value });
+                        if (emailWarning) setEmailWarning(null);
+                      }}
+                      onBlur={() => checkEmailExists(formData.email)}
+                      placeholder="Ex: native.friend@gmail.com"
+                      className={`w-full px-3.5 py-2 bg-slate-50 border rounded-xl text-sm text-[#000035] focus:bg-white focus:outline-hidden focus:ring-2 ${
+                        emailWarning
+                          ? 'border-rose-400 ring-2 ring-rose-400/20'
+                          : 'border-[#607EC9]/30 focus:ring-[#1C4C96]'
+                      }`}
                     />
+                    {emailWarning && (
+                      <p className="mt-1 text-xs text-rose-700 font-semibold bg-rose-50 p-2 rounded-lg border border-rose-200">
+                        ⚠️ {emailWarning}
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        {isEn ? 'Native Country' : 'País de Origem'}
+                        Native Country
                       </label>
                       <select
                         value={formData.country}
                         onChange={(e) => setFormData({ ...formData, country: e.target.value })}
                         className="w-full px-3 py-2 bg-slate-50 border border-[#607EC9]/30 rounded-xl text-sm text-[#000035] focus:bg-white focus:outline-hidden"
                       >
+                        <option value="">Select country...</option>
                         <option value="United States">🇺🇸 United States</option>
                         <option value="Canada">🇨🇦 Canada</option>
                         <option value="United Kingdom">🇬🇧 United Kingdom</option>
@@ -282,7 +394,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
 
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        {isEn ? 'Accent/Region' : 'Sotaque / Região'}
+                        Accent / Region
                       </label>
                       <input
                         type="text"
@@ -298,10 +410,10 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setStep(2)}
-                      disabled={!formData.name || !formData.email}
+                      disabled={!formData.name || !formData.email || Boolean(emailWarning) || Boolean(nameWarning)}
                       className="px-5 py-2.5 rounded-xl bg-[#062863] text-white hover:bg-[#000035] font-bold text-xs sm:text-sm disabled:opacity-50 cursor-pointer transition"
                     >
-                      {isEn ? 'Next: Bio & Video →' : 'Avançar: Bio & Vídeo →'}
+                      Next: Bio & Video Intro →
                     </button>
                   </div>
                 </div>
@@ -312,7 +424,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                 <div className="space-y-3 animate-in fade-in duration-150">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {isEn ? 'Short Catchy Headline' : 'Título Curto do Perfil'}
+                      Short Catchy Headline
                     </label>
                     <input
                       type="text"
@@ -325,7 +437,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {isEn ? 'About You & Teaching Approach' : 'Sobre Você e Método de Ensino'}
+                      About You & Teaching Approach
                     </label>
                     <textarea
                       rows={3}
@@ -338,7 +450,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {isEn ? 'YouTube Video Intro Link (Optional)' : 'Link do Vídeo de Apresentação no YouTube (Opcional)'}
+                      YouTube Video Intro Link (Optional)
                     </label>
                     <input
                       type="url"
@@ -355,14 +467,14 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                       onClick={() => setStep(1)}
                       className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
                     >
-                      ← {isEn ? 'Back' : 'Voltar'}
+                      ← Back
                     </button>
                     <button
                       type="button"
                       onClick={() => setStep(3)}
                       className="px-5 py-2.5 rounded-xl bg-[#062863] text-white hover:bg-[#000035] font-bold text-xs sm:text-sm cursor-pointer transition"
                     >
-                      {isEn ? 'Next: Schedule & Rate →' : 'Avançar: Horários & Preço →'}
+                      Next: Schedule & Pricing →
                     </button>
                   </div>
                 </div>
@@ -374,7 +486,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        {isEn ? 'Rate per 30-min Session (USD)' : 'Valor por Sessão de 30 min (USD)'}
+                        Rate per 30-min Session (USD)
                       </label>
                       <div className="relative">
                         <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -386,13 +498,13 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                         />
                       </div>
                       <span className="text-[10px] text-slate-500 mt-1 block">
-                        ≈ R$ {Math.round(Number(formData.priceUsd || 18) * 5.5)} BRL
+                        ≈ R$ {Math.round(Number(formData.priceUsd || 20) * 5.5)} BRL
                       </span>
                     </div>
 
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        {isEn ? 'Personal Google Meet Link' : 'Link Padrão do Google Meet'}
+                        Default Google Meet Link
                       </label>
                       <input
                         type="url"
@@ -406,7 +518,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-2">
-                      {isEn ? 'Available Days for 30-min Sessions' : 'Dias Disponíveis para Aulas'}
+                      Available Days for 30-min Sessions
                     </label>
                     <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                       {(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as DayOfWeek[]).map((d) => {
@@ -436,7 +548,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                       onClick={() => setStep(2)}
                       className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold text-xs cursor-pointer"
                     >
-                      ← {isEn ? 'Back' : 'Voltar'}
+                      ← Back
                     </button>
                     <button
                       type="submit"
@@ -444,7 +556,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                       className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm shadow-md transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
                     >
                       <Send className="w-4 h-4" />
-                      <span>{isSubmitting ? (isEn ? 'Submitting...' : 'Enviando...') : (isEn ? 'Complete Registration' : 'Concluir Cadastro')}</span>
+                      <span>{isSubmitting ? 'Submitting Application...' : 'Complete Registration'}</span>
                     </button>
                   </div>
                 </div>

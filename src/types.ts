@@ -57,6 +57,8 @@ export interface NativeFriendTutor {
   languagesSpoken: string[];
   approvalStatus?: 'approved' | 'pending' | 'rejected';
   appliedAt?: string;
+  meetUrl?: string;
+  photoUrl?: string;
 }
 
 export interface AdminLandingContent {
@@ -88,20 +90,31 @@ export interface StudentDictionaryEntry {
   word: string;
   definitionEn: string;
   partOfSpeech?: string;
+  phonetic?: string;
   exampleSentenceEn?: string;
   translationPt?: string;
   sourceActivityName?: string;
   sourceDay?: DayOfWeek;
+  source?: 'api' | 'offline_dict' | 'fallback' | 'custom' | 'not_found' | string;
   learnedAt?: string;
   customNotes?: string;
+  notFound?: boolean;
 }
 
 export interface GoogleAccount {
   id?: string;
+  uid?: string;
   email: string;
   name: string;
   role: UserRole;
   picture?: string;
+  avatar?: string;
+  teacherEmail?: string;
+  teacherName?: string;
+  level?: string;
+  studentLevel?: string;
+  studentName?: string;
+  studentEmail?: string;
   registeredByAdmin?: boolean;
 }
 
@@ -153,8 +166,14 @@ export interface UserProfile {
   id?: string;
   name: string;
   email: string;
+  picture?: string;
+  avatar?: string;
   level: EnglishLevel;
   teacherEmail?: string;
+  teacherName?: string;
+  routineVideoTime?: string;
+  routineAudioTime?: string;
+  dailyPhraseTime?: string;
   enrollmentStatus?: 'active' | 'not_enrolled' | 'cancelled';
   enrolledAt?: string;
   learningGoal?: string;
@@ -227,6 +246,35 @@ export interface TeacherMeetSettings {
   timezone?: string;
 }
 
+export interface LiveLessonVocabNote {
+  id: string;
+  word: string;
+  meaningOrTip?: string;
+  exampleSentence?: string;
+  partOfSpeech?: string;
+  phonetic?: string;
+  audioUrl?: string;
+  source?: 'api' | 'offline_dict' | 'fallback' | 'custom' | string;
+}
+
+export interface LiveLessonNote {
+  id: string;
+  lessonId?: string;
+  teacherEmail: string;
+  teacherName?: string;
+  studentEmail: string;
+  studentName?: string;
+  topic?: string;
+  sessionDate: string;
+  vocabulary: LiveLessonVocabNote[];
+  pronunciationNotes?: string;
+  grammarAndPhrasing?: string;
+  generalNotes: string;
+  recommendations: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface LiveLesson {
   id: string;
   teacherEmail: string;
@@ -270,6 +318,14 @@ export interface LiveLesson {
     endDateTime: string;
   };
   createdAt?: string;
+
+  // In-Session Notes & Recommendations
+  liveNotes?: string;
+  recommendations?: string;
+  pronunciationNotes?: string;
+  grammarAndPhrasing?: string;
+  vocabularyNotes?: LiveLessonVocabNote[];
+  notesLastSavedAt?: string;
 }
 
 export interface ChatMessage {

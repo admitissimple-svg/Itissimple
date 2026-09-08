@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   UserCheck,
@@ -11,6 +11,10 @@ import {
   ShieldCheck,
   Video,
   ExternalLink,
+  Trash2,
+  RefreshCw,
+  Calendar,
+  Sparkles,
 } from 'lucide-react';
 import { NativeFriendTutor, Language } from '../types';
 
@@ -20,6 +24,9 @@ interface AdminApprovalsModalProps {
   tutors: NativeFriendTutor[];
   onApproveTutor: (tutorId: string) => void;
   onRejectTutor: (tutorId: string) => void;
+  onDeleteTutor?: (tutorId: string, tutorEmail?: string) => Promise<void> | void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
   currentLanguage: Language;
 }
 
@@ -29,9 +36,27 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
   tutors,
   onApproveTutor,
   onRejectTutor,
+  onDeleteTutor,
+  onRefresh,
+  isRefreshing = false,
   currentLanguage,
 }) => {
   const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [actionNotification, setActionNotification] = useState<string | null>(null);
+
+  // Support ESC key to easily dismiss modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -46,7 +71,13 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
   const pendingCount = tutors.filter((t) => (t.approvalStatus || 'approved') === 'pending').length;
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#000035]/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto" id="admin-approvals-modal">
+    <div
+      className="fixed inset-0 z-50 bg-[#000035]/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      id="admin-approvals-modal"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-[#607EC9]/40 overflow-hidden flex flex-col max-h-[90vh] my-auto animate-in fade-in zoom-in duration-200">
         {/* Header */}
         <div className="p-6 bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] text-white flex items-center justify-between border-b border-[#607EC9]/40 shrink-0">
@@ -73,13 +104,28 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-white/10 transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-[#9AB4FF] hover:text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                title={isEn ? 'Refresh list' : 'Atualizar lista'}
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#F4CA54]' : ''}`} />
+                <span className="hidden sm:inline">{isEn ? 'Refresh' : 'Atualizar'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-white/10 transition cursor-pointer"
+              aria-label="Close"
+              title="Fechar (Esc)"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Filter bar */}
@@ -110,6 +156,23 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
           ))}
         </div>
 
+        {/* Action feedback toast */}
+        {actionNotification && (
+          <div className="mx-6 mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-center justify-between animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{actionNotification}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionNotification(null)}
+              className="text-emerald-700 hover:text-emerald-900 font-black cursor-pointer px-1"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Tutors list */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {filteredTutors.length === 0 ? (
@@ -122,6 +185,12 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
           ) : (
             filteredTutors.map((tutor) => {
               const status = tutor.approvalStatus || 'approved';
+              const avatarSrc =
+                tutor.avatar ||
+                tutor.photoUrl ||
+                (tutor as any).picture ||
+                '';
+
               return (
                 <div
                   key={tutor.id}
@@ -129,16 +198,31 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
                 >
                   {/* Tutor Info */}
                   <div className="flex items-start gap-4 flex-1">
-                    <img
-                      src={tutor.photoUrl}
-                      alt={tutor.name}
-                      referrerPolicy="no-referrer"
-                      className="w-16 h-16 rounded-2xl object-cover border-2 border-[#1C4C96]/20 shrink-0 shadow-xs"
-                    />
+                    {/* Tutor Avatar with Flag Badge */}
+                    <div className="relative shrink-0">
+                      {avatarSrc && avatarSrc.trim() !== '' ? (
+                        <img
+                          src={avatarSrc}
+                          alt={tutor.name}
+                          referrerPolicy="no-referrer"
+                          className="w-20 h-20 rounded-2xl object-cover border-2 border-[#1C4C96]/30 shrink-0 shadow-sm bg-slate-100"
+                        />
+                      ) : (
+                        <div className="w-20 h-20 rounded-2xl border-2 border-[#1C4C96]/30 shrink-0 shadow-sm bg-[#062863]/10 flex items-center justify-center text-[#1C4C96] font-bold text-2xl">
+                          {tutor.name?.charAt(0) || 'T'}
+                        </div>
+                      )}
+                      <div className="absolute -bottom-1 -right-1 bg-[#000035] text-white text-[10px] font-black px-1.5 py-0.5 rounded-md border border-white shadow-xs">
+                        {tutor.flag || '🇺🇸'}
+                      </div>
+                    </div>
+
                     <div className="space-y-1.5 flex-1">
                       <div className="flex items-center gap-2.5 flex-wrap">
                         <h3 className="text-base font-black text-[#000035]">{tutor.name}</h3>
-                        <span className="text-xs text-slate-500 font-medium">({tutor.headline})</span>
+                        {tutor.headline && (
+                          <span className="text-xs text-slate-500 font-medium">({tutor.headline})</span>
+                        )}
 
                         {status === 'pending' && (
                           <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
@@ -167,30 +251,86 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
                         </span>
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                          {tutor.location} • {tutor.nativeCountry}
+                          {tutor.country || (tutor as any).nativeCountry || (tutor as any).location || 'United States'}
+                          {tutor.accent ? ` • ${tutor.accent}` : ''}
                         </span>
                         <span className="flex items-center gap-1 font-bold text-slate-700">
                           <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                          ${tutor.hourlyRateUsd}/h
+                          ${tutor.pricePerSessionUsd || (tutor as any).hourlyRateUsd || 20} USD
+                          {tutor.pricePerSessionBrl ? ` (R$ ${tutor.pricePerSessionBrl})` : ''} / sessão
                         </span>
                       </div>
 
-                      <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2">
-                        {tutor.bio}
-                      </p>
-
-                      {tutor.videoIntroUrl && (
-                        <a
-                          href={tutor.videoIntroUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 text-xs text-[#1C4C96] hover:underline font-bold mt-1"
-                        >
-                          <Video className="w-3.5 h-3.5" />
-                          <span>{isEn ? 'Watch presentation video' : 'Ver vídeo de apresentação'}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
+                      {/* Bio */}
+                      {tutor.bio && (
+                        <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2 leading-relaxed">
+                          {tutor.bio}
+                        </p>
                       )}
+
+                      {/* Specialties Chips */}
+                      {Array.isArray(tutor?.specialties) && tutor.specialties.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          <span className="text-[10px] font-bold text-slate-400">
+                            {isEn ? 'Focus:' : 'Especialidades:'}
+                          </span>
+                          {tutor.specialties.map((spec, sIdx) => (
+                            <span
+                              key={sIdx}
+                              className="px-2 py-0.5 rounded-lg bg-indigo-50 border border-indigo-200/70 text-indigo-800 text-[10px] font-bold"
+                            >
+                              {spec}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Google Meet & Video Intro */}
+                      <div className="flex items-center gap-3 flex-wrap pt-1">
+                        {tutor.meetUrl && (
+                          <a
+                            href={tutor.meetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-lg font-bold transition"
+                          >
+                            <Video className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Google Meet: {tutor.meetUrl}</span>
+                            <ExternalLink className="w-3 h-3 text-emerald-500" />
+                          </a>
+                        )}
+
+                        {tutor.videoIntroUrl && (
+                          <a
+                            href={tutor.videoIntroUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs text-[#1C4C96] hover:underline font-bold"
+                          >
+                            <Video className="w-3.5 h-3.5" />
+                            <span>{isEn ? 'Watch presentation video' : 'Ver vídeo de apresentação'}</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+
+                      {/* Availability & Applied Date */}
+                      <div className="flex items-center gap-4 text-[11px] text-slate-400 pt-1 flex-wrap">
+                        {tutor.availableDays && tutor.availableDays.length > 0 && (
+                          <div className="flex items-center gap-1 text-slate-500">
+                            <Calendar className="w-3 h-3 text-slate-400" />
+                            <span>
+                              <strong>{isEn ? 'Available:' : 'Dias:'}</strong> {tutor.availableDays.join(', ')}
+                            </span>
+                          </div>
+                        )}
+                        {tutor.appliedAt && (
+                          <span>
+                            {isEn ? 'Applied:' : 'Cadastrado em:'}{' '}
+                            {new Date(tutor.appliedAt).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -211,11 +351,68 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => onRejectTutor(tutor.id)}
-                        className="flex-1 sm:flex-initial px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                        className="flex-1 sm:flex-initial px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                       >
                         <XCircle className="w-4 h-4" />
                         <span>{isEn ? 'Reject' : 'Recusar'}</span>
                       </button>
+                    )}
+
+                    {onDeleteTutor && (
+                      confirmDeleteId === tutor.id ? (
+                        <div className="flex flex-col gap-1.5 p-2 bg-rose-50 border border-rose-300 rounded-xl shadow-xs animate-fadeIn">
+                          <span className="text-[11px] font-bold text-rose-800 text-center leading-tight">
+                            {isEn ? 'Permanently delete?' : 'Confirmar exclusão?'}
+                          </span>
+                          <div className="flex items-center gap-1.5 justify-center">
+                            <button
+                              type="button"
+                              disabled={deletingId === tutor.id}
+                              onClick={async () => {
+                                setDeletingId(tutor.id);
+                                try {
+                                  await onDeleteTutor(tutor.id, tutor.email);
+                                  setActionNotification(
+                                    isEn
+                                      ? `Native friend "${tutor.name}" was permanently deleted.`
+                                      : `Amigo Nativo "${tutor.name}" excluído com sucesso.`
+                                  );
+                                  setTimeout(() => setActionNotification(null), 4000);
+                                } finally {
+                                  setDeletingId(null);
+                                  setConfirmDeleteId(null);
+                                }
+                              }}
+                              className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-black transition flex items-center gap-1 shadow-sm cursor-pointer disabled:opacity-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>
+                                {deletingId === tutor.id
+                                  ? (isEn ? 'Deleting...' : 'Excluindo...')
+                                  : (isEn ? 'Yes, delete' : 'Sim, excluir')}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deletingId === tutor.id}
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-2 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold transition cursor-pointer"
+                            >
+                              {isEn ? 'Cancel' : 'Cancelar'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(tutor.id)}
+                          className="flex-1 sm:flex-initial px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                          title={isEn ? 'Delete tutor from system' : 'Excluir Amigo Nativo do sistema'}
+                        >
+                          <Trash2 className="w-4 h-4 text-rose-600" />
+                          <span>{isEn ? 'Delete' : 'Excluir'}</span>
+                        </button>
+                      )
                     )}
                   </div>
                 </div>

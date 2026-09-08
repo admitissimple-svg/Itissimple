@@ -11,15 +11,16 @@ import {
   TeacherAssignedSpotify,
   TeacherMeetSettings,
   UserProfile,
+  UserRole,
   WeeklyHomeworkData,
   Language,
   AdminLandingContent,
   NativeFriendTutor,
   StudentDictionaryEntry,
+  LiveLessonVocabNote,
 } from './types';
 import { defaultRoutinesByDay } from './data/defaultRoutines';
 import { INITIAL_NATIVE_FRIENDS } from './data/tutors';
-import charlesAvatarImg from './assets/images/charles_anime_avatar_1788181232049.jpg';
 import { getTranslations, getActivityDisplayName } from './utils/i18n';
 import {
   formatDateInTimeZone,
@@ -38,11 +39,16 @@ import { CleanActivitySidebar } from './components/CleanActivitySidebar';
 import { VideoLearningWorkspace } from './components/VideoLearningWorkspace';
 import { DailySentenceSection } from './components/DailySentenceSection';
 import { WeeklyHomeworkSection } from './components/WeeklyHomeworkSection';
-import { LiveLessonsPanel } from './components/LiveLessonsPanel';
 import { TeacherScheduleControlTable } from './components/TeacherScheduleControlTable';
+import { LiveMeetLessonsPanel } from './components/LiveMeetLessonsPanel';
+import { TeacherLiveLessonNotesPanel } from './components/TeacherLiveLessonNotesPanel';
+import { TeacherMediaAssignmentPanel } from './components/TeacherMediaAssignmentPanel';
 import { SFluencyTracker } from './components/SFluencyTracker';
 import { FloatingChatButton } from './components/FloatingChatButton';
 import { NotificationBanner } from './components/NotificationBanner';
+import { StudentHeaderSection } from './components/StudentHeaderSection';
+import { StudentRoutineGuideSection } from './components/StudentRoutineGuideSection';
+import { StudentWeeklyActivitySection } from './components/StudentWeeklyActivitySection';
 
 // Modals
 import { AuthModal } from './components/AuthModal';
@@ -60,6 +66,31 @@ import { AdminApprovalsModal } from './components/AdminApprovalsModal';
 import { EditTutorProfileModal } from './components/EditTutorProfileModal';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { PersonalDictionaryModal } from './components/PersonalDictionaryModal';
+import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
+import { RoutineRemindersManager } from './components/RoutineRemindersManager';
+import { ShieldCheck, Edit3 } from 'lucide-react';
+
+const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfile => ({
+  id: account?.id || (account?.email ? `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}` : 'user-default'),
+  name: account?.name || '',
+  email: account?.email || '',
+  picture: account?.picture || '',
+  avatar: account?.picture || '',
+  level: EnglishLevel.BEGINNER,
+  streakDays: 0,
+  streakCount: 0,
+  points: 0,
+  dailyGoalMinutes: 30,
+  completedTodayMinutes: 0,
+  targetAudienceCategory: 'general',
+  timezone: DEFAULT_STUDENT_TIMEZONE,
+  contractedLessons: 0,
+  completedLessonsCount: 0,
+  learningGoal: '',
+  routineVideoTime: '',
+  routineAudioTime: '',
+  dailyPhraseTime: '',
+});
 
 export default function App() {
   // 0. View mode: 'landing' | 'dashboard' | 'find-tutors'
@@ -70,39 +101,43 @@ export default function App() {
   const t = useMemo(() => getTranslations(currentLanguage), [currentLanguage]);
 
   // 2. Authentication & Accounts
-  const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(null);
+  const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(() => {
+    try {
+      const saved = localStorage.getItem('its_simple_current_account');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
-  const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>([
-    {
-      email: 'reginahelena1980@gmail.com',
-      name: 'Regina Helena',
-      role: 'student',
-      picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    },
-    {
-      email: 'charles.lambert1939@gmail.com',
-      name: 'Charles Lambert (Amigo Nativo)',
-      role: 'teacher',
-      picture: charlesAvatarImg,
-    },
-    {
-      email: 'sarah.jenkins.tutor@gmail.com',
-      name: 'Sarah Jenkins (Amiga Nativa)',
-      role: 'teacher',
-      picture: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-    },
-    {
-      email: 'vinicius.student@gmail.com',
-      name: 'Vinicius Alcantara',
-      role: 'student',
-      picture: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-    },
-    {
-      email: 'adm.itissimple@gmail.com',
-      name: 'Admin It\'s Simple',
-      role: 'admin',
-    },
-  ]);
+  const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>(() => {
+    try {
+      const saved = localStorage.getItem('its_simple_available_accounts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      if (currentAccount) {
+        localStorage.setItem('its_simple_current_account', JSON.stringify(currentAccount));
+      } else {
+        localStorage.removeItem('its_simple_current_account');
+      }
+    } catch {}
+  }, [currentAccount]);
+
+  useEffect(() => {
+    try {
+      if (availableAccounts && availableAccounts.length > 0) {
+        localStorage.setItem('its_simple_available_accounts', JSON.stringify(availableAccounts));
+      }
+    } catch {}
+  }, [availableAccounts]);
 
   const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
 
@@ -110,21 +145,10 @@ export default function App() {
   const [tutors, setTutors] = useState<NativeFriendTutor[]>(INITIAL_NATIVE_FRIENDS);
   const [landingContent, setLandingContent] = useState<AdminLandingContent | null>(null);
 
-  // 3. Student Profile & Level
-  const [userProfile, setUserProfile] = useState<UserProfile>({
-    id: 'regina-1',
-    name: 'Regina Helena',
-    email: 'reginahelena1980@gmail.com',
-    level: EnglishLevel.BEGINNER,
-    streakDays: 14,
-    points: 840,
-    dailyGoalMinutes: 30,
-    completedTodayMinutes: 20,
-    targetAudienceCategory: 'executives',
-    timezone: DEFAULT_STUDENT_TIMEZONE,
-    contractedLessons: 10,
-    completedLessonsCount: 3,
-  });
+  // 3. Student Profile & Level - strictly isolated per account
+  const [userProfile, setUserProfile] = useState<UserProfile>(() =>
+    createDefaultStudentProfile(currentAccount)
+  );
 
   // 4. Routines State by Day
   const [routinesByDay, setRoutinesByDay] = useState<Record<DayOfWeek, RoutineItem[]>>(defaultRoutinesByDay);
@@ -145,36 +169,10 @@ export default function App() {
     },
   });
 
-  const [contractedLessons, setContractedLessons] = useState<Record<string, number>>({
-    'reginahelena1980@gmail.com': 10,
-    'vinicius.student@gmail.com': 5,
-  });
+  const [contractedLessons, setContractedLessons] = useState<Record<string, number>>({});
 
   // 6. Students Management State
-  const [students, setStudents] = useState<StudentProfile[]>([
-    {
-      id: 'st-1',
-      name: 'Regina Helena',
-      email: 'reginahelena1980@gmail.com',
-      level: EnglishLevel.BEGINNER,
-      contractedLessons: 10,
-      completedLessonsCount: 3,
-      goal: 'English for work & everyday communication',
-      activeSince: '2025-01-10',
-      createdAt: '2025-01-10T10:00:00Z',
-    },
-    {
-      id: 'st-2',
-      name: 'Vinicius Alcantara',
-      email: 'vinicius.student@gmail.com',
-      level: EnglishLevel.INTERMEDIATE,
-      contractedLessons: 5,
-      completedLessonsCount: 1,
-      goal: 'Business presentations and international meetings',
-      activeSince: '2025-02-01',
-      createdAt: '2025-02-01T10:00:00Z',
-    },
-  ]);
+  const [students, setStudents] = useState<StudentProfile[]>([]);
 
   // 7. Weekly Homework State
   const [weeklyHomework, setWeeklyHomework] = useState<WeeklyHomeworkData | null>(null);
@@ -185,6 +183,7 @@ export default function App() {
   // 9. Modals Control State
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login');
+  const [authModalRole, setAuthModalRole] = useState<UserRole>('student');
   const [isBecomeTutorModalOpen, setIsBecomeTutorModalOpen] = useState<boolean>(false);
   const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState<boolean>(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState<boolean>(false);
@@ -199,9 +198,11 @@ export default function App() {
   const [isEditTutorProfileOpen, setIsEditTutorProfileOpen] = useState<boolean>(false);
   const [isStudentProfileOpen, setIsStudentProfileOpen] = useState<boolean>(false);
   const [isPersonalDictionaryOpen, setIsPersonalDictionaryOpen] = useState<boolean>(false);
+  const [isManageSubscriptionOpen, setIsManageSubscriptionOpen] = useState<boolean>(false);
+  const [subscriptionTargetTutor, setSubscriptionTargetTutor] = useState<NativeFriendTutor | null>(null);
 
   const [activeLessonForAction, setActiveLessonForAction] = useState<LiveLesson | null>(null);
-  const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('charles.lambert1939@gmail.com');
+  const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('itissimple.school@gmail.com');
 
   // Teacher Filter
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
@@ -288,15 +289,294 @@ export default function App() {
     setWeeklyHomework(generated);
   }, [routinesByDay, userProfile.name, userProfile.level]);
 
+  // Synchronize isolated student profile, lessons, routines, and settings whenever currentAccount changes
+  useEffect(() => {
+    if (!currentAccount?.email) {
+      setLessons([]);
+      setStudents([]);
+      setUserProfile(createDefaultStudentProfile(null));
+      return;
+    }
+
+    const email = currentAccount.email;
+    const role = currentAccount.role;
+    const uid = currentAccount.uid || '';
+    const queryParams = `email=${encodeURIComponent(email)}&role=${encodeURIComponent(role)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`;
+
+    // 1. Fetch user-isolated lessons
+    fetch(`/api/lessons?${queryParams}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (Array.isArray(data)) setLessons(data);
+      })
+      .catch((err) => console.warn('Could not fetch isolated lessons:', err));
+
+    // 2. Fetch user-isolated students list (for teachers and admin)
+    if (role === 'teacher' || role === 'admin') {
+      fetch(`/api/students?${queryParams}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          if (Array.isArray(data)) setStudents(data);
+        })
+        .catch((err) => console.warn('Could not fetch isolated students:', err));
+    } else {
+      setStudents([]);
+    }
+
+    // 3. If student, fetch student-specific routines and user profile
+    if (role === 'student') {
+      fetch(`/api/student-routines?studentEmail=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((routines) => {
+          if (routines && typeof routines === 'object' && Object.keys(routines).length > 0) {
+            setRoutinesByDay(routines);
+          }
+        })
+        .catch((err) => console.warn('Could not fetch student routines:', err));
+
+      async function loadStudentProfile() {
+        try {
+          const res = await fetch(`/api/user-profile?email=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.profile) {
+              const cleanPic =
+                (data.profile.picture && data.profile.picture.trim() !== '' ? data.profile.picture : '') ||
+                (data.profile.avatar && data.profile.avatar.trim() !== '' ? data.profile.avatar : '') ||
+                (currentAccount!.picture && currentAccount!.picture.trim() !== '' ? currentAccount!.picture : '') ||
+                '';
+
+              setUserProfile({
+                ...createDefaultStudentProfile(currentAccount),
+                ...data.profile,
+                id: data.profile.id || currentAccount!.id || `usr-${currentAccount!.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+                name: data.profile.name || currentAccount!.name || '',
+                email: currentAccount!.email,
+                picture: cleanPic,
+                avatar: cleanPic,
+              });
+
+              // Sync routine times from registration if configured
+              const { routineVideoTime, routineAudioTime } = data.profile;
+              if (routineVideoTime || routineAudioTime) {
+                setRoutinesByDay((prev) => {
+                  const updated = { ...(prev || {}) };
+                  (Object.keys(updated) as DayOfWeek[]).forEach((day) => {
+                    updated[day] = (updated[day] || []).map((act) => {
+                      if (act.teacherVideos && act.teacherVideos.length > 0 && routineVideoTime) {
+                        return { ...act, time: routineVideoTime };
+                      }
+                      if (act.teacherSpotify && (!act.teacherVideos || act.teacherVideos.length === 0) && routineAudioTime) {
+                        return { ...act, time: routineAudioTime };
+                      }
+                      return act;
+                    });
+                  });
+                  return updated;
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Could not fetch user profile:', err);
+        }
+      }
+      loadStudentProfile();
+    } else if (role === 'teacher') {
+      // 4. If teacher, fetch isolated teacher settings and tutor profile
+      fetch(`/api/teacher-settings?teacherEmail=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((settings) => {
+          if (settings && typeof settings === 'object' && Object.keys(settings).length > 0) {
+            setTeacherMeetSettings((prev) => ({ ...prev, ...settings }));
+          }
+        })
+        .catch((err) => console.warn('Could not fetch teacher settings:', err));
+
+      async function loadTeacherProfile() {
+        try {
+          const res = await fetch(`/api/user-profile?email=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.tutor) {
+              setTutors((prev) => {
+                const filtered = prev.filter(
+                  (t) =>
+                    t.email.toLowerCase() !== data.tutor.email.toLowerCase() &&
+                    t.id !== data.tutor.id
+                );
+                return [...filtered, data.tutor];
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('Could not fetch teacher profile:', err);
+        }
+      }
+      loadTeacherProfile();
+    }
+  }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid]);
+
+  // Handler: Manage/Update Native Friend Subscription
+  const handleUpdateSubscription = async (teacherEmail: string | null, teacherName: string | null) => {
+    setUserProfile((prev) => ({
+      ...prev,
+      teacherEmail: teacherEmail || undefined,
+      teacherName: teacherName || undefined,
+      enrollmentStatus: teacherEmail ? 'active' : 'cancelled',
+    }));
+
+    if (currentAccount?.email) {
+      const cleanStEmail = currentAccount.email.toLowerCase().trim();
+      setStudents((prev) => {
+        const exists = prev.some((s) => (s.email || s.studentEmail || '').toLowerCase().trim() === cleanStEmail);
+        if (exists) {
+          return prev.map((s) =>
+            (s.email || s.studentEmail || '').toLowerCase().trim() === cleanStEmail
+              ? { ...s, teacherEmail: teacherEmail || '', teacherName: teacherName || '', status: teacherEmail ? 'active' : 'cancelled' }
+              : s
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: `st-${Date.now()}`,
+            name: userProfile.name || currentAccount.name || cleanStEmail.split('@')[0],
+            studentName: userProfile.name || currentAccount.name || cleanStEmail.split('@')[0],
+            email: cleanStEmail,
+            studentEmail: cleanStEmail,
+            teacherEmail: teacherEmail || '',
+            teacherName: teacherName || '',
+            status: teacherEmail ? 'active' : 'cancelled',
+            level: userProfile.level || 'iniciante',
+          },
+        ];
+      });
+
+      try {
+        await fetch('/api/user-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: currentAccount.email,
+            profile: {
+              teacherEmail: teacherEmail || null,
+              teacherName: teacherName || null,
+              enrollmentStatus: teacherEmail ? 'active' : 'cancelled',
+            },
+          }),
+        });
+      } catch (err) {
+        console.warn('Failed to update subscription:', err);
+      }
+    }
+  };
+
+  // Handler: Purchase Lesson Package with a specific Native Friend (Fixed Assignment)
+  const handlePurchasePackage = async (params: {
+    teacherEmail: string;
+    teacherName: string;
+    packageLessons: number;
+    packagePriceBrl?: number;
+    packagePriceUsd?: number;
+    paymentMethod?: string;
+  }) => {
+    if (!currentAccount?.email) return;
+
+    try {
+      const res = await fetch('/api/students/purchase-package', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: currentAccount.email,
+          ...params,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const newCount = Number(data.contractedLessons || params.packageLessons);
+
+        // Update userProfile with fixed teacher and updated lesson balance
+        setUserProfile((prev) => ({
+          ...prev,
+          teacherEmail: params.teacherEmail,
+          teacherName: params.teacherName,
+          enrollmentStatus: 'active',
+          contractedLessons: newCount,
+        }));
+
+        // Update contractedLessons map
+        setContractedLessons((prev) => ({
+          ...prev,
+          [currentAccount.email.toLowerCase()]: newCount,
+        }));
+
+        // Update students state list
+        setStudents((prev) => {
+          const cleanEmail = currentAccount.email.toLowerCase().trim();
+          const exists = prev.some((st) => (st.email || st.studentEmail || '').toLowerCase().trim() === cleanEmail);
+          if (exists) {
+            return prev.map((st) =>
+              (st.email || st.studentEmail || '').toLowerCase().trim() === cleanEmail
+                ? {
+                    ...st,
+                    teacherEmail: params.teacherEmail,
+                    teacherName: params.teacherName,
+                    contractedLessons: newCount,
+                    status: 'active',
+                  }
+                : st
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: `st-${Date.now()}`,
+              name: userProfile.name || currentAccount.name || cleanEmail.split('@')[0],
+              studentName: userProfile.name || currentAccount.name || cleanEmail.split('@')[0],
+              email: cleanEmail,
+              studentEmail: cleanEmail,
+              teacherEmail: params.teacherEmail,
+              teacherName: params.teacherName,
+              contractedLessons: newCount,
+              status: 'active',
+              level: userProfile.level || 'iniciante',
+            },
+          ];
+        });
+
+        // Notify student of successful fixed binding and purchase
+        setNotifications((prev) => [
+          {
+            id: `purchase-${Date.now()}`,
+            title: currentLanguage === 'en' ? 'Lesson Package Purchased!' : 'Pacote de Aulas Adquirido!',
+            message:
+              currentLanguage === 'en'
+                ? `Congratulations! Package of ${params.packageLessons} lessons purchased. ${params.teacherName} is now your assigned Native Friend!`
+                : `Parabéns! Pacote de ${params.packageLessons} aulas adquirido. ${params.teacherName} agora é seu Amigo Nativo fixo!`,
+            type: 'success',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+
+        return data;
+      }
+    } catch (err) {
+      console.error('Failed to purchase package:', err);
+      throw err;
+    }
+  };
+
   // Handler: Change active account (teacher vs student)
   const handleSwitchAccount = (account: GoogleAccount) => {
     setCurrentAccount(account);
     if (account.role === 'student') {
-      setUserProfile((prev) => ({
-        ...prev,
-        name: account.name,
-        email: account.email,
-      }));
+      setUserProfile(createDefaultStudentProfile(account));
+    } else {
+      setUserProfile(createDefaultStudentProfile(null));
     }
   };
 
@@ -304,20 +584,63 @@ export default function App() {
   const handleAddAccount = (newAccount: GoogleAccount) => {
     setAvailableAccounts((prev) => [...prev, newAccount]);
     setCurrentAccount(newAccount);
+    if (newAccount.role === 'student') {
+      setUserProfile(createDefaultStudentProfile(newAccount));
+    } else {
+      setUserProfile(createDefaultStudentProfile(null));
+    }
   };
 
   // Handler: Login Success from Auth Modal
-  const handleLoginSuccess = (account: GoogleAccount) => {
+  const handleLoginSuccess = (
+    account: GoogleAccount,
+    initialProfile?: Partial<UserProfile>,
+    tutorData?: any
+  ) => {
     setCurrentAccount(account);
     if (!availableAccounts.some((a) => a.email.toLowerCase() === account.email.toLowerCase())) {
       setAvailableAccounts((prev) => [...prev, account]);
     }
     if (account.role === 'student') {
-      setUserProfile((prev) => ({
-        ...prev,
-        name: account.name,
+      const cleanPic =
+        (initialProfile?.picture && initialProfile.picture.trim() !== '' ? initialProfile.picture : '') ||
+        (initialProfile?.avatar && initialProfile.avatar.trim() !== '' ? initialProfile.avatar : '') ||
+        (account.picture && account.picture.trim() !== '' ? account.picture : '') ||
+        '';
+
+      const freshProfile: UserProfile = {
+        ...createDefaultStudentProfile(account),
+        ...(initialProfile || {}),
+        id: account.id || initialProfile?.id || `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        name: initialProfile?.name || account.name || '',
         email: account.email,
-      }));
+        picture: cleanPic,
+        avatar: cleanPic,
+        level: initialProfile?.level || EnglishLevel.BEGINNER,
+        learningGoal: initialProfile?.learningGoal || '',
+      };
+      setUserProfile(freshProfile);
+    } else {
+      setUserProfile(createDefaultStudentProfile(null));
+    }
+    if (account.role === 'teacher') {
+      if (tutorData) {
+        setTutors((prev) => {
+          const next = prev.filter((t) => t.email.toLowerCase() !== tutorData.email.toLowerCase());
+          return [...next, tutorData];
+        });
+      }
+      fetch(`/api/user-profile?email=${encodeURIComponent(account.email)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.tutor) {
+            setTutors((prev) => {
+              const next = prev.filter((t) => t.email.toLowerCase() !== data.tutor.email.toLowerCase());
+              return [...next, data.tutor];
+            });
+          }
+        })
+        .catch(() => {});
     }
     setViewMode('dashboard');
     setNotifications((prev) => [
@@ -338,6 +661,9 @@ export default function App() {
   // Handler: Logout
   const handleLogout = () => {
     setCurrentAccount(null);
+    setUserProfile(createDefaultStudentProfile(null));
+    setLessons([]);
+    setStudents([]);
     setViewMode('landing');
     setNotifications((prev) => [
       {
@@ -526,6 +852,43 @@ export default function App() {
 
     setLessons((prev) => [newLesson, ...prev]);
 
+    // Update students state so student appears immediately in teacher's filter and list
+    setStudents((prev) => {
+      const cleanEmail = lessonData.studentEmail.toLowerCase().trim();
+      const exists = prev.some((s) => (s.email || s.studentEmail || '').toLowerCase().trim() === cleanEmail);
+      if (exists) {
+        return prev.map((s) =>
+          (s.email || s.studentEmail || '').toLowerCase().trim() === cleanEmail
+            ? { ...s, teacherEmail: lessonData.teacherEmail, teacherName: lessonData.teacherName, status: 'active' }
+            : s
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: `st-${Date.now()}`,
+          name: lessonData.studentName,
+          studentName: lessonData.studentName,
+          email: cleanEmail,
+          studentEmail: cleanEmail,
+          teacherEmail: lessonData.teacherEmail,
+          teacherName: lessonData.teacherName,
+          status: 'active',
+          level: 'iniciante',
+        },
+      ];
+    });
+
+    // If current user is student, bind teacher to student's profile immediately
+    if (currentAccount?.role === 'student') {
+      setUserProfile((prev) => ({
+        ...prev,
+        teacherEmail: lessonData.teacherEmail,
+        teacherName: lessonData.teacherName,
+        enrollmentStatus: 'active',
+      }));
+    }
+
     try {
       await fetch('/api/lessons', {
         method: 'POST',
@@ -550,14 +913,53 @@ export default function App() {
     }
   };
 
-  // Handler: Cancel lesson
-  const handleCancelLesson = async (lessonId: string) => {
-    setLessons((prev) => prev.filter((l) => l.id !== lessonId));
+  // Handler: Cancel lesson (preserves student balance)
+  const handleCancelLesson = async (lessonId: string, reason?: string) => {
+    setLessons((prev) => {
+      const target = prev.find((l) => l.id === lessonId);
+      return prev.map((l) =>
+        l.id === lessonId ||
+        (target &&
+          l.studentEmail &&
+          l.studentEmail.toLowerCase() === (target.studentEmail || '').toLowerCase() &&
+          l.startDateTime === target.startDateTime &&
+          l.status === 'scheduled')
+          ? {
+              ...l,
+              status: 'cancelled',
+              cancelledAt: new Date().toISOString(),
+              cancelledBy: isTeacher ? 'teacher' : 'student',
+              cancellationReason: reason || 'Cancelled by user',
+            }
+          : l
+      );
+    });
     try {
-      await fetch(`/api/lessons/${lessonId}`, { method: 'DELETE' });
+      await fetch(`/api/lessons/${lessonId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cancelledBy: isTeacher ? 'teacher' : 'student',
+          reason: reason || 'Cancelled by user',
+        }),
+      });
     } catch {
       // local fallback
     }
+
+    setNotifications((prev) => [
+      {
+        id: `cancel-${Date.now()}`,
+        message:
+          currentLanguage === 'en'
+            ? 'The session has been cancelled. The student balance was not deducted.'
+            : 'A aula foi cancelada com sucesso. O saldo de aulas não foi deduzido.',
+        type: 'info',
+        timestamp: new Date().toISOString(),
+        read: false,
+      },
+      ...prev,
+    ]);
   };
 
   // Handler: Mark Not Completed
@@ -590,24 +992,29 @@ export default function App() {
     }
   };
 
-  // Handler: Reschedule lesson
+  // Handler: Propose Reschedule (Requires confirmation from the other party)
   const handleConfirmReschedule = async (
     lessonId: string,
     newStartIso: string,
     newEndIso: string,
     reason: string
   ) => {
+    const proposedBy = isTeacher ? 'teacher' : 'student';
+    const proposalStatus = isTeacher
+      ? 'pending_student_reschedule'
+      : 'pending_teacher_reschedule';
+
     setLessons((prev) =>
       prev.map((l) =>
         l.id === lessonId
           ? {
               ...l,
-              startDateTime: newStartIso,
-              endDateTime: newEndIso,
+              proposedNewStartDateTime: newStartIso,
+              proposedNewEndDateTime: newEndIso,
               rescheduleNotes: reason,
-              proposalStatus: isTeacher
-                ? 'pending_student_reschedule'
-                : 'pending_teacher_reschedule',
+              proposedBy,
+              proposalStatus,
+              proposedAt: new Date().toISOString(),
             }
           : l
       )
@@ -617,11 +1024,174 @@ export default function App() {
       await fetch(`/api/lessons/${lessonId}/reschedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newStartIso, newEndIso, reason }),
+        body: JSON.stringify({ newStartIso, newEndIso, reason, proposedBy }),
       });
     } catch {
       // local fallback
     }
+  };
+
+  // Handler: Accept Reschedule (Strictly updates existing lesson in place, no duplicates)
+  const handleAcceptReschedule = async (lessonId: string) => {
+    setLessons((prev) =>
+      prev.map((l) => {
+        if (l.id === lessonId && l.proposedNewStartDateTime) {
+          return {
+            ...l,
+            startDateTime: l.proposedNewStartDateTime,
+            endDateTime: l.proposedNewEndDateTime || l.endDateTime,
+            rescheduledFrom: {
+              startDateTime: l.startDateTime,
+              endDateTime: l.endDateTime,
+            },
+            rescheduledAt: new Date().toISOString(),
+            rescheduledBy: l.proposedBy,
+            rescheduledReason: l.rescheduleNotes,
+            proposedNewStartDateTime: undefined,
+            proposedNewEndDateTime: undefined,
+            proposalStatus: undefined,
+          };
+        }
+        return l;
+      })
+    );
+
+    try {
+      await fetch(`/api/lessons/${lessonId}/accept-reschedule`, {
+        method: 'POST',
+      });
+    } catch {
+      // local fallback
+    }
+  };
+
+  // Handler: Decline Reschedule (Rejects proposed time, keeps original lesson intact)
+  const handleDeclineReschedule = async (lessonId: string) => {
+    setLessons((prev) =>
+      prev.map((l) =>
+        l.id === lessonId
+          ? {
+              ...l,
+              proposedNewStartDateTime: undefined,
+              proposedNewEndDateTime: undefined,
+              proposalStatus: undefined,
+            }
+          : l
+      )
+    );
+
+    try {
+      await fetch(`/api/lessons/${lessonId}/decline-reschedule`, {
+        method: 'POST',
+      });
+    } catch {
+      // local fallback
+    }
+  };
+
+  // Handler: Save Lesson Notes & Recommendations
+  const handleSaveLessonNotes = async (
+    lessonId: string,
+    notes: {
+      topic?: string;
+      liveNotes?: string;
+      recommendations?: string;
+      pronunciationNotes?: string;
+      grammarAndPhrasing?: string;
+      vocabularyNotes?: LiveLessonVocabNote[];
+    }
+  ) => {
+    setLessons((prev) =>
+      prev.map((l) =>
+        l.id === lessonId
+          ? {
+              ...l,
+              title: notes.topic || l.title,
+              liveNotes: notes.liveNotes,
+              recommendations: notes.recommendations,
+              pronunciationNotes: notes.pronunciationNotes,
+              grammarAndPhrasing: notes.grammarAndPhrasing,
+              vocabularyNotes: notes.vocabularyNotes,
+              notesLastSavedAt: new Date().toISOString(),
+            }
+          : l
+      )
+    );
+
+    try {
+      await fetch(`/api/lessons/${lessonId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(notes),
+      });
+    } catch {
+      // local fallback
+    }
+  };
+
+  // Handler: Add words from Live Session to Student's Weekly Activity Routine
+  const handleAddWordsToWeeklyActivity = async (newWords: string[], studentEmail?: string) => {
+    if (!newWords || newWords.length === 0) return;
+    setRoutinesByDay((prev) => {
+      const updated = { ...(prev || {}) };
+      (Object.keys(updated) as DayOfWeek[]).forEach((day) => {
+        if (Array.isArray(updated[day])) {
+          updated[day] = updated[day].map((item) => {
+            const isTutorOrConversation =
+              item.id.toLowerCase().includes('tutor') ||
+              item.activityName.toLowerCase().includes('conversa') ||
+              item.activityName.toLowerCase().includes('chat') ||
+              item.activityName.toLowerCase().includes('native') ||
+              item.time === '15:00';
+
+            if (isTutorOrConversation) {
+              const existing = item.learnedWords || [];
+              const combined = Array.from(new Set([...existing, ...newWords]));
+              return { ...item, learnedWords: combined };
+            }
+            return item;
+          });
+        }
+      });
+      return updated;
+    });
+
+    try {
+      await fetch('/api/routines/words', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words: newWords, studentEmail }),
+      });
+    } catch {
+      // local fallback
+    }
+
+    if (studentEmail) {
+      handleSendStudentNotification(
+        studentEmail,
+        'New Vocabulary Added by Your Native Friend',
+        `Your Native Friend added ${newWords.length} new words to your weekly study routine: ${newWords.slice(0, 5).join(', ')}${newWords.length > 5 ? '...' : ''}`
+      );
+    }
+  };
+
+  // Handler: Send Notification to Student
+  const handleSendStudentNotification = (
+    studentEmail: string,
+    title: string,
+    message: string
+  ) => {
+    setNotifications((prev) => [
+      {
+        id: `notif-live-${Date.now()}`,
+        title,
+        message,
+        type: 'info',
+        timestamp: new Date().toISOString(),
+        read: false,
+      },
+      ...prev,
+    ]);
   };
 
   // Handler: Save Teacher Meet Settings
@@ -651,11 +1221,42 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedContent),
       });
-      localStorage.setItem('its_simple_landing_content', JSON.stringify(updatedContent));
     } catch {
       // local fallback
     }
   };
+
+  const [isRefreshingTutors, setIsRefreshingTutors] = useState(false);
+
+  const fetchLatestTutors = async () => {
+    setIsRefreshingTutors(true);
+    try {
+      const email = currentAccount?.email || '';
+      const role = currentAccount?.role || '';
+      const uid = currentAccount?.uid || '';
+      const isAdminUser = role === 'admin' || email.toLowerCase() === 'adm.itissimple@gmail.com' || isAdminApprovalsOpen;
+      const query = `admin=${isAdminUser ? 'true' : 'false'}&includePending=${isAdminUser ? 'true' : 'false'}&email=${encodeURIComponent(email)}&role=${encodeURIComponent(role)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}&_t=${Date.now()}`;
+      const res = await fetch(`/api/tutors?${query}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setTutors(data);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsRefreshingTutors(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLatestTutors();
+    if (isAdminApprovalsOpen || currentAccount?.role === 'admin') {
+      const interval = setInterval(fetchLatestTutors, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [isAdminApprovalsOpen, currentAccount?.role, currentAccount?.email]);
 
   // Handler: Admin Approve Tutor
   const handleApproveTutor = async (tutorId: string) => {
@@ -667,7 +1268,13 @@ export default function App() {
       )
     );
     try {
-      await fetch(`/api/tutors/${tutorId}/approve`, { method: 'POST' });
+      const res = await fetch(`/api/tutors/${tutorId}/approve`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tutors)) {
+          setTutors(data.tutors);
+        }
+      }
     } catch {
       // local fallback
     }
@@ -683,7 +1290,43 @@ export default function App() {
       )
     );
     try {
-      await fetch(`/api/tutors/${tutorId}/reject`, { method: 'POST' });
+      const res = await fetch(`/api/tutors/${tutorId}/reject`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tutors)) {
+          setTutors(data.tutors);
+        }
+      }
+    } catch {
+      // local fallback
+    }
+  };
+
+  // Handler: Admin Delete Tutor
+  const handleDeleteTutor = async (tutorId: string, tutorEmail?: string) => {
+    const cleanEmail = tutorEmail?.toLowerCase();
+    setTutors((prev) =>
+      prev.filter((t) => {
+        if (t.id === tutorId) return false;
+        if (t.email.toLowerCase() === tutorId.toLowerCase()) return false;
+        if (cleanEmail && t.email.toLowerCase() === cleanEmail) return false;
+        return true;
+      })
+    );
+    if (cleanEmail && cleanEmail !== 'adm.itissimple@gmail.com') {
+      setAvailableAccounts((prev) => prev.filter((a) => a.email.toLowerCase() !== cleanEmail));
+    }
+    try {
+      const queryParam = cleanEmail ? `?email=${encodeURIComponent(cleanEmail)}` : '';
+      const response = await fetch(`/api/tutors/${encodeURIComponent(tutorId)}${queryParam}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data.tutors)) {
+          setTutors(data.tutors);
+        }
+      }
     } catch {
       // local fallback
     }
@@ -692,15 +1335,17 @@ export default function App() {
   // Handler: Save Native Friend Profile (from Teacher Dashboard or Modal)
   const handleSaveTutorProfile = async (updatedTutor: NativeFriendTutor) => {
     setTutors((prev) => {
-      const next = prev.map((t) =>
-        t.id === updatedTutor.id || t.email.toLowerCase() === updatedTutor.email.toLowerCase()
-          ? updatedTutor
-          : t
+      const exists = prev.some(
+        (t) => t.id === updatedTutor.id || t.email.toLowerCase() === updatedTutor.email.toLowerCase()
       );
-      try {
-        localStorage.setItem('its_simple_tutors', JSON.stringify(next));
-      } catch {}
-      return next;
+      if (exists) {
+        return prev.map((t) =>
+          t.id === updatedTutor.id || t.email.toLowerCase() === updatedTutor.email.toLowerCase()
+            ? updatedTutor
+            : t
+        );
+      }
+      return [...prev, updatedTutor];
     });
 
     // Update currentAccount if active user is this tutor
@@ -741,85 +1386,185 @@ export default function App() {
 
   // Handler: Save Student Profile & Photo
   const handleSaveStudentProfile = (updatedProfile: UserProfile, updatedPicture?: string) => {
-    setUserProfile(updatedProfile);
+    const cleanPic =
+      updatedPicture !== undefined
+        ? updatedPicture
+        : updatedProfile.avatar || updatedProfile.picture || '';
+
+    const cleanProfile: UserProfile = {
+      ...updatedProfile,
+      picture: cleanPic,
+      avatar: cleanPic,
+    };
+    setUserProfile(cleanProfile);
     if (currentAccount) {
       setCurrentAccount((prev) =>
         prev
           ? {
               ...prev,
-              name: updatedProfile.name,
-              picture: updatedPicture || prev.picture,
+              name: cleanProfile.name,
+              picture: cleanPic,
             }
           : null
       );
     }
     setAvailableAccounts((prev) =>
       prev.map((acc) =>
-        acc.email.toLowerCase() === (updatedProfile.email || '').toLowerCase()
+        acc.email.toLowerCase() === (cleanProfile.email || '').toLowerCase()
           ? {
               ...acc,
-              name: updatedProfile.name,
-              picture: updatedPicture || acc.picture,
+              name: cleanProfile.name,
+              picture: cleanPic,
             }
           : acc
       )
     );
     setStudents((prev) =>
       prev.map((st) =>
-        st.email.toLowerCase() === (updatedProfile.email || '').toLowerCase()
+        st.email.toLowerCase() === (cleanProfile.email || '').toLowerCase()
           ? {
               ...st,
-              name: updatedProfile.name,
-              studentName: updatedProfile.name,
-              level: updatedProfile.level,
-              studentLevel: updatedProfile.level,
-              goal: updatedProfile.learningGoal || st.goal,
+              name: cleanProfile.name,
+              studentName: cleanProfile.name,
+              level: cleanProfile.level,
+              studentLevel: cleanProfile.level,
+              goal: cleanProfile.learningGoal || st.goal,
+              routineVideoTime: cleanProfile.routineVideoTime || st.routineVideoTime,
+              routineAudioTime: cleanProfile.routineAudioTime || st.routineAudioTime,
+              dailyPhraseTime: cleanProfile.dailyPhraseTime || st.dailyPhraseTime,
+              picture: cleanPic,
+              avatar: cleanPic,
             }
           : st
       )
     );
+    if (cleanProfile.routineVideoTime || cleanProfile.routineAudioTime) {
+      setRoutinesByDay((prev) => {
+        const updated = { ...(prev || {}) };
+        (Object.keys(updated) as DayOfWeek[]).forEach((day) => {
+          updated[day] = (updated[day] || []).map((act) => {
+            if (act.teacherVideos && act.teacherVideos.length > 0 && cleanProfile.routineVideoTime) {
+              return { ...act, time: cleanProfile.routineVideoTime };
+            }
+            if (act.teacherSpotify && (!act.teacherVideos || act.teacherVideos.length === 0) && cleanProfile.routineAudioTime) {
+              return { ...act, time: cleanProfile.routineAudioTime };
+            }
+            return act;
+          });
+        });
+        return updated;
+      });
+    }
+
     try {
-      localStorage.setItem('its_simple_user_profile', JSON.stringify(updatedProfile));
-      if (updatedPicture) {
-        localStorage.setItem('its_simple_user_picture', updatedPicture);
-      }
       fetch('/api/students/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile: updatedProfile, picture: updatedPicture }),
+        body: JSON.stringify({
+          profile: cleanProfile,
+          picture: cleanPic,
+          uid: currentAccount?.uid,
+        }),
       }).catch(() => {});
     } catch {}
   };
 
   // Compute current tutor profile for Edit Profile Modal
   const currentTutorProfile: NativeFriendTutor = useMemo(() => {
-    if (currentAccount) {
+    if (currentAccount && (currentAccount.role === 'teacher' || currentAccount.role === 'admin')) {
       const found = tutors.find(
         (t) => t.email.toLowerCase() === currentAccount.email.toLowerCase()
       );
       if (found) return found;
+
+      return {
+        id: `tutor-${currentAccount.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        name: currentAccount.name,
+        email: currentAccount.email,
+        avatar: currentAccount.picture || '',
+        country: 'United States',
+        countryCode: 'US',
+        flag: '🇺🇸',
+        accent: 'North American',
+        rating: 5.0,
+        reviewsCount: 0,
+        activeStudents: 0,
+        lessonsTaught: 0,
+        pricePerSessionUsd: 20,
+        pricePerSessionBrl: 110,
+        headline: 'Conversational Native Friend',
+        bio: 'Hello! I am ready to guide you in living English every day through real conversation and practical routines.',
+        specialties: ['Conversational Fluency', 'Daily Routines'],
+        availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+        availableHours: ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'],
+        approvalStatus: 'pending',
+      };
     }
-    return tutors[0] || INITIAL_NATIVE_FRIENDS[0];
+    if (tutors.length > 0) return tutors[0];
+    return {
+      id: 'default-tutor',
+      name: 'Native Friend',
+      email: 'contact@itissimple.com',
+      avatar: '',
+      country: 'United States',
+      countryCode: 'US',
+      flag: '🇺🇸',
+      accent: 'North American',
+      rating: 5.0,
+      reviewsCount: 0,
+      activeStudents: 0,
+      lessonsTaught: 0,
+      pricePerSessionUsd: 20,
+      pricePerSessionBrl: 110,
+      headline: 'Conversational Native Friend',
+      bio: 'Ready to guide you in living English every day through real conversation.',
+      specialties: ['Conversational Fluency', 'Daily Routines'],
+      availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+      availableHours: ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'],
+      approvalStatus: 'approved',
+    };
   }, [tutors, currentAccount]);
 
-  // Compute all words from routines for Personal Dictionary
+  // Count pending tutor approvals for Administrator
+  const pendingApprovalsCount = useMemo(() => {
+    return tutors.filter((t) => (t.approvalStatus || 'approved') === 'pending').length;
+  }, [tutors]);
+
+  // Compute all words from routines and live sessions for Personal Dictionary
   const wordsFromRoutines = useMemo(() => {
     const list: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }> = [];
-    (Object.keys(routinesByDay) as DayOfWeek[]).forEach((day) => {
-      (routinesByDay[day] || []).forEach((act) => {
-        (act.learnedWords || []).forEach((w) => {
-          if (w && w.trim()) {
+    if (routinesByDay && typeof routinesByDay === 'object') {
+      (Object.keys(routinesByDay) as DayOfWeek[]).forEach((day) => {
+        (routinesByDay[day] || []).forEach((act) => {
+          (act?.learnedWords || []).forEach((w) => {
+            if (w && w.trim()) {
+              list.push({
+                word: w.trim(),
+                sourceActivityName: act.activityName,
+                sourceDay: day,
+              });
+            }
+          });
+        });
+      });
+    }
+
+    // Also include vocabulary words noted by teacher during live lessons
+    (lessons || []).forEach((l) => {
+      if (l && Array.isArray(l.vocabularyNotes) && l.vocabularyNotes.length > 0) {
+        l.vocabularyNotes.forEach((vn) => {
+          if (vn && vn.word && vn.word.trim()) {
             list.push({
-              word: w.trim(),
-              sourceActivityName: act.activityName,
-              sourceDay: day,
+              word: vn.word.trim(),
+              sourceActivityName: `Live Session with ${l.teacherName || 'Native Friend'}`,
             });
           }
         });
-      });
+      }
     });
+
     return list;
-  }, [routinesByDay]);
+  }, [routinesByDay, lessons]);
 
   // Handler: Save Daily Sentence
   const handleSaveDailySentence = (sentence: string, wordsUsed: string[]) => {
@@ -836,9 +1581,140 @@ export default function App() {
     ]);
   };
 
-  // Teachers list for scheduling dropdowns
-  const teachersList = availableAccounts.filter((a) => a.role === 'teacher' || a.role === 'admin');
-  const studentsList = availableAccounts.filter((a) => a.role === 'student');
+  // Comprehensive Teachers list for scheduling dropdowns, matching, and controls
+  const teachersList = useMemo(() => {
+    const teacherMap = new Map<string, GoogleAccount>();
+
+    // 1. From availableAccounts
+    availableAccounts.forEach((a) => {
+      if (a.role === 'teacher' || a.role === 'admin') {
+        const email = (a.email || '').toLowerCase().trim();
+        if (email) teacherMap.set(email, { ...a, email });
+      }
+    });
+
+    // 2. From all approved tutors list (coexistence of all Native Friends)
+    tutors.forEach((t) => {
+      if (t.approvalStatus === 'approved') {
+        const email = (t.email || '').toLowerCase().trim();
+        if (email) {
+          const existing = teacherMap.get(email) || ({} as GoogleAccount);
+          teacherMap.set(email, {
+            ...existing,
+            ...t,
+            id: t.id || existing.id || `teacher-${email}`,
+            name: t.name || existing.name || email.split('@')[0],
+            email,
+            role: 'teacher',
+            avatar: t.avatar || existing.avatar || '',
+            picture: t.avatar || existing.picture || '',
+          });
+        }
+      }
+    });
+
+    // 3. From current student's assigned teacher if present
+    if (userProfile.teacherEmail) {
+      const email = userProfile.teacherEmail.toLowerCase().trim();
+      if (!teacherMap.has(email)) {
+        teacherMap.set(email, {
+          id: `teacher-${email}`,
+          name: userProfile.teacherName || email.split('@')[0],
+          email,
+          role: 'teacher',
+        });
+      }
+    }
+
+    return Array.from(teacherMap.values());
+  }, [availableAccounts, tutors, userProfile.teacherEmail, userProfile.teacherName]);
+
+  // Comprehensive Students list for teacher filtering, schedule modals, and student management
+  const studentsList = useMemo(() => {
+    const studentMap = new Map<string, GoogleAccount>();
+
+    // 1. From backend students array
+    (students || []).forEach((s) => {
+      const email = (s.email || s.studentEmail || '').toLowerCase().trim();
+      if (email) {
+        studentMap.set(email, {
+          ...s,
+          id: s.id || `st-${email}`,
+          name: s.name || s.studentName || email.split('@')[0],
+          studentName: s.name || s.studentName || email.split('@')[0],
+          email,
+          studentEmail: email,
+          role: 'student',
+          level: s.level || s.studentLevel || 'iniciante',
+          studentLevel: s.level || s.studentLevel || 'iniciante',
+          teacherEmail: s.teacherEmail || '',
+          teacherName: s.teacherName || '',
+        } as any);
+      }
+    });
+
+    // 2. From availableAccounts
+    availableAccounts.forEach((a) => {
+      if (a.role === 'student') {
+        const email = (a.email || '').toLowerCase().trim();
+        if (email) {
+          const existing = studentMap.get(email) || ({} as GoogleAccount);
+          studentMap.set(email, {
+            ...existing,
+            ...a,
+            id: a.id || existing.id || `st-${email}`,
+            name: a.name || (existing as any).studentName || email.split('@')[0],
+            studentName: a.name || (existing as any).studentName || email.split('@')[0],
+            email,
+            studentEmail: email,
+            role: 'student',
+            level: (a as any).level || (existing as any).level || 'iniciante',
+            studentLevel: (a as any).level || (existing as any).studentLevel || 'iniciante',
+          } as any);
+        }
+      }
+    });
+
+    // 3. From current lessons (any student with a booked or active lesson)
+    (lessons || []).forEach((l) => {
+      const email = (l.studentEmail || '').toLowerCase().trim();
+      if (email) {
+        const existing = studentMap.get(email) || ({} as GoogleAccount);
+        studentMap.set(email, {
+          ...existing,
+          id: existing.id || `st-${email}`,
+          name: existing.name || l.studentName || email.split('@')[0],
+          studentName: (existing as any).studentName || l.studentName || email.split('@')[0],
+          email,
+          studentEmail: email,
+          role: 'student',
+          teacherEmail: (existing as any).teacherEmail || l.teacherEmail || '',
+          teacherName: (existing as any).teacherName || l.teacherName || '',
+        } as any);
+      }
+    });
+
+    // 4. Current user if student
+    if (currentAccount?.role === 'student' && currentAccount.email) {
+      const email = currentAccount.email.toLowerCase().trim();
+      const existing = studentMap.get(email) || ({} as GoogleAccount);
+      studentMap.set(email, {
+        ...existing,
+        ...currentAccount,
+        id: currentAccount.id || existing.id || `st-${email}`,
+        name: userProfile.name || currentAccount.name || existing.name || email.split('@')[0],
+        studentName: userProfile.name || currentAccount.name || (existing as any).studentName || email.split('@')[0],
+        email,
+        studentEmail: email,
+        role: 'student',
+        teacherEmail: userProfile.teacherEmail || (existing as any).teacherEmail || '',
+        teacherName: userProfile.teacherName || (existing as any).teacherName || '',
+        level: userProfile.level || (existing as any).level || 'iniciante',
+      } as any);
+    }
+
+    return Array.from(studentMap.values());
+  }, [students, availableAccounts, lessons, currentAccount, userProfile]);
 
   return (
     <div className="min-h-screen bg-[#FAFCFF] text-[#000035] flex flex-col font-sans selection:bg-[#9AB4FF]/40 selection:text-[#000035]">
@@ -852,8 +1728,11 @@ export default function App() {
           landingContent={landingContent || undefined}
           onOpenAdminLandingEditor={() => setIsAdminLandingEditorOpen(true)}
           onOpenAdminApprovals={() => setIsAdminApprovalsOpen(true)}
-          onOpenAuthModal={(mode) => {
+          pendingApprovalsCount={pendingApprovalsCount}
+          onLogout={handleLogout}
+          onOpenAuthModal={(mode, role = 'student') => {
             setAuthModalMode(mode);
+            setAuthModalRole(role);
             setIsAuthModalOpen(true);
           }}
           onOpenBecomeTutorModal={() => setIsBecomeTutorModalOpen(true)}
@@ -867,6 +1746,9 @@ export default function App() {
           }}
           onBookLessonWithTutor={(tutor) => {
             setTeacherEmailForConfig(tutor.email);
+            if (currentAccount?.role === 'student') {
+              handleUpdateSubscription(tutor.email, tutor.name);
+            }
             setIsScheduleModalOpen(true);
           }}
           onSendMessageToTutor={(tutor) => {
@@ -900,6 +1782,9 @@ export default function App() {
             }}
             onOpenStudentProfile={() => setIsStudentProfileOpen(true)}
             onOpenTeacherProfile={() => setIsEditTutorProfileOpen(true)}
+            onOpenAdminApprovals={() => setIsAdminApprovalsOpen(true)}
+            onOpenAdminLandingEditor={() => setIsAdminLandingEditorOpen(true)}
+            pendingTutorsCount={pendingApprovalsCount}
             onGoToLanding={() => setViewMode('landing')}
             onFindTutors={() => setViewMode('find-tutors')}
             onLogout={handleLogout}
@@ -930,6 +1815,9 @@ export default function App() {
               currentLanguage={currentLanguage}
               onBookLesson={(tutor) => {
                 setTeacherEmailForConfig(tutor.email);
+                if (currentAccount?.role === 'student') {
+                  handleUpdateSubscription(tutor.email, tutor.name);
+                }
                 setIsScheduleModalOpen(true);
               }}
               onSendMessage={(tutor) => {
@@ -948,9 +1836,16 @@ export default function App() {
                 ]);
               }}
               onSelectMentor={(tutor) => {
-                setTeacherEmailForConfig(tutor.email);
-                setIsScheduleModalOpen(true);
+                if (!currentAccount) {
+                  setAuthModalMode('signup');
+                  setAuthModalRole('student');
+                  setIsAuthModalOpen(true);
+                  return;
+                }
+                setSubscriptionTargetTutor(tutor);
+                setIsManageSubscriptionOpen(true);
               }}
+              selectedMentorEmail={userProfile?.teacherEmail}
             />
 
             <EnglishMomentsShowcase
@@ -972,8 +1867,17 @@ export default function App() {
               setAuthModalMode('login');
               setIsAuthModalOpen(true);
             }}
-            onOpenStudentProfile={() => setIsStudentProfileOpen(true)}
+            onOpenStudentProfile={() => {
+              if (currentAccount?.role === 'teacher') {
+                setIsEditTutorProfileOpen(true);
+              } else {
+                setIsStudentProfileOpen(true);
+              }
+            }}
             onOpenTeacherProfile={() => setIsEditTutorProfileOpen(true)}
+            onOpenAdminApprovals={() => setIsAdminApprovalsOpen(true)}
+            onOpenAdminLandingEditor={() => setIsAdminLandingEditorOpen(true)}
+            pendingTutorsCount={pendingApprovalsCount}
             onGoToLanding={() => setViewMode('landing')}
             onFindTutors={() => setViewMode('find-tutors')}
             onLogout={handleLogout}
@@ -987,158 +1891,215 @@ export default function App() {
           />
 
           {/* Main Dashboard Workspace Container */}
-          <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
-            {/* 1. FOR TEACHER: Teacher Master Schedule Control is the FIRST Panel */}
-            {isTeacher && (
-              <TeacherScheduleControlTable
-                lessons={lessons}
-                teachers={teachersList}
-                students={studentsList}
-                teacherMeetSettings={teacherMeetSettings}
-                currentAccount={currentAccount}
-                onOpenScheduleModal={() => setIsScheduleModalOpen(true)}
-                onOpenTeacherMeetConfig={(email) => {
-                  setTeacherEmailForConfig(email);
-                  setIsMeetConfigModalOpen(true);
-                }}
-                onOpenEditProfile={() => setIsEditTutorProfileOpen(true)}
-                onCompleteLesson={handleCompleteLesson}
-                onMarkNotCompleted={(lesson) => {
-                  setActiveLessonForAction(lesson);
-                  setIsNotCompletedModalOpen(true);
-                }}
-                onRescheduleLesson={(lesson) => {
-                  setActiveLessonForAction(lesson);
-                  setIsRescheduleModalOpen(true);
-                }}
-                currentLanguage={currentLanguage}
-                t={t}
-                timeZone={DEFAULT_TEACHER_TIMEZONE}
-              />
+          <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+            {/* TEACHER / ADMIN VIEW */}
+            {isTeacher ? (
+              <div className="space-y-6">
+                {/* Admin Management Bar */}
+                {currentAccount?.role === 'admin' && (
+                  <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300/80 rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-black shadow-md shrink-0">
+                        <ShieldCheck className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-base sm:text-lg font-black text-[#000035]">
+                            Administrator Control Panel
+                          </h2>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                            System Administrator
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600">
+                          Review pending Native Friend applications and manage homepage content.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setIsAdminApprovalsOpen(true)}
+                        className="relative px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs transition cursor-pointer shadow-xs flex items-center gap-2"
+                      >
+                        <ShieldCheck className="w-4 h-4" />
+                        <span>Native Friend Approvals</span>
+                        {pendingApprovalsCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-white text-amber-700">
+                            {pendingApprovalsCount} pending
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsAdminLandingEditorOpen(true)}
+                        className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-xs transition cursor-pointer shadow-2xs flex items-center gap-2"
+                      >
+                        <Edit3 className="w-4 h-4 text-slate-600" />
+                        <span>Edit Landing Page</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 1. Teacher Master Schedule Control */}
+                <TeacherScheduleControlTable
+                  lessons={lessons}
+                  teachers={teachersList}
+                  students={studentsList}
+                  teacherMeetSettings={teacherMeetSettings}
+                  currentAccount={currentAccount}
+                  tutorProfile={currentTutorProfile}
+                  selectedStudentFilter={selectedStudentFilter}
+                  onSelectStudentFilter={setSelectedStudentFilter}
+                  onOpenScheduleModal={() => setIsScheduleModalOpen(true)}
+                  onOpenTeacherMeetConfig={(email) => {
+                    setTeacherEmailForConfig(email);
+                    setIsMeetConfigModalOpen(true);
+                  }}
+                  onOpenEditProfile={() => setIsEditTutorProfileOpen(true)}
+                  onCompleteLesson={handleCompleteLesson}
+                  onMarkNotCompleted={(lesson) => {
+                    setActiveLessonForAction(lesson);
+                    setIsNotCompletedModalOpen(true);
+                  }}
+                  onRescheduleLesson={(lesson) => {
+                    setActiveLessonForAction(lesson);
+                    setIsRescheduleModalOpen(true);
+                  }}
+                  onCancelLesson={handleCancelLesson}
+                  onAcceptReschedule={handleAcceptReschedule}
+                  onDeclineReschedule={handleDeclineReschedule}
+                  currentLanguage="en"
+                  t={getTranslations('en')}
+                  timeZone={DEFAULT_TEACHER_TIMEZONE}
+                />
+
+                {/* Conditional Panels: Displayed ONLY when a specific student is selected in the master control filter */}
+                {selectedStudentFilter !== 'all' ? (
+                  <div className="space-y-6 animate-in fade-in duration-200">
+                    {/* 2. Teacher Live Session Notes & Recommendations Panel (Native Friend Panel) */}
+                    <TeacherLiveLessonNotesPanel
+                      lessons={lessons}
+                      students={students}
+                      currentAccount={currentAccount}
+                      selectedStudentFilter={selectedStudentFilter}
+                      onSaveLessonNotes={handleSaveLessonNotes}
+                      onAddWordsToWeeklyActivity={handleAddWordsToWeeklyActivity}
+                      onSendStudentNotification={handleSendStudentNotification}
+                      timeZone={DEFAULT_TEACHER_TIMEZONE}
+                    />
+
+                    {/* 3. Teacher Media Assignment Panel (YouTube Videos & Spotify Audios) */}
+                    <TeacherMediaAssignmentPanel
+                      routinesByDay={routinesByDay}
+                      students={studentsList}
+                      selectedStudentEmail={selectedStudentFilter}
+                      onTeacherSaveVideos={handleTeacherSaveVideos}
+                      currentLanguage="en"
+                      t={getTranslations('en')}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              /* STUDENT VIEW: Exactly Following the 3 User Model Sections */
+              <div className="space-y-6" id="student-model-dashboard">
+                {/* Section 1: Contracted Lessons & Balance + Fixed Teacher Card + Live 1-on-1 Sessions Panel (Image 1) */}
+                <StudentHeaderSection
+                  lessons={lessons}
+                  currentAccount={currentAccount}
+                  userProfile={userProfile}
+                  teachers={teachersList}
+                  teacherMeetSettings={teacherMeetSettings}
+                  contractedLessons={contractedLessons}
+                  onUpdateContractedLessons={handleUpdateContractedLessons}
+                  onOpenScheduleModal={() => setIsScheduleModalOpen(true)}
+                  onOpenManageSubscription={() => setIsManageSubscriptionOpen(true)}
+                  onCancelLesson={handleCancelLesson}
+                  onAcceptReschedule={handleAcceptReschedule}
+                  onDeclineReschedule={handleDeclineReschedule}
+                  onCompleteLesson={handleCompleteLesson}
+                  onMarkNotCompleted={(lesson) => {
+                    setActiveLessonForAction(lesson);
+                    setIsNotCompletedModalOpen(true);
+                  }}
+                  onRescheduleLesson={(lesson) => {
+                    setActiveLessonForAction(lesson);
+                    setIsRescheduleModalOpen(true);
+                  }}
+                  currentLanguage={currentLanguage}
+                  t={t}
+                  timeZone={DEFAULT_STUDENT_TIMEZONE}
+                />
+
+                {/* Activity Reminders Manager (5-minute alerts based on registered times) */}
+                <RoutineRemindersManager
+                  userProfile={userProfile}
+                  routinesByDay={routinesByDay}
+                  currentLanguage={currentLanguage}
+                  onTriggerNotification={(notif) => setNotifications((prev) => [notif, ...prev])}
+                  onNavigateToActivity={(day, activityId) => {
+                    setSelectedDay(day);
+                    setSelectedActivityId(activityId);
+                  }}
+                  onOpenDailySentenceModal={() => setIsDailySentenceModalOpen(true)}
+                />
+
+                {/* Section 2: Daily Routine Guide STEP BY STEP (Image 2) */}
+                <StudentRoutineGuideSection
+                  routinesByDay={routinesByDay}
+                  selectedDay={selectedDay}
+                  onSelectDay={setSelectedDay}
+                  selectedActivityId={selectedActivityId}
+                  onSelectActivity={setSelectedActivityId}
+                  onToggleActivityComplete={handleToggleActivityComplete}
+                  onAddCustomActivity={handleAddCustomActivity}
+                  onEditActivity={(act) => {
+                    setSelectedActivityId(act.id);
+                  }}
+                  onDeleteActivity={(actId) => {
+                    setRoutinesByDay((prev) => {
+                      const updated = { ...prev };
+                      updated[selectedDay] = (updated[selectedDay] || []).filter((i) => i.id !== actId);
+                      return updated;
+                    });
+                  }}
+                  onSaveLearnedWords={handleSaveLearnedWords}
+                  userProfile={userProfile}
+                  onSaveDailySentence={handleSaveDailySentence}
+                  onOpenEmailModal={() => setIsEmailModalOpen(true)}
+                  onTest30MinReminder={() => {
+                    setNotifications((prev) => [
+                      {
+                        id: `reminder-${Date.now()}`,
+                        title: currentLanguage === 'en' ? '⏰ 30-Minute End of Day Reminder' : '⏰ Lembrete: 30 min para o fim do dia',
+                        message: currentLanguage === 'en'
+                          ? 'Time to review today’s vocabulary and write your Sentence of the Day in English!'
+                          : 'Hora de revisar as palavras da sua rotina de hoje e escrever sua Frase do Dia em inglês!',
+                        type: 'info',
+                        timestamp: new Date().toISOString(),
+                        read: false,
+                      },
+                      ...prev,
+                    ]);
+                  }}
+                  currentLanguage={currentLanguage}
+                  t={t}
+                />
+
+                {/* Section 3: Weekly Activity (Image 3) */}
+                <StudentWeeklyActivitySection
+                  homework={weeklyHomework}
+                  routinesByDay={routinesByDay}
+                  userProfile={userProfile}
+                  onOpenHomeworkModal={() => setIsHomeworkModalOpen(true)}
+                  onOpenDictionaryModal={() => setIsPersonalDictionaryOpen(true)}
+                  currentLanguage={currentLanguage}
+                />
+              </div>
             )}
-
-            {/* 2. Top Live Lessons Schedule & Balance Overview */}
-            <LiveLessonsPanel
-              lessons={lessons}
-              currentAccount={currentAccount}
-              teachers={teachersList}
-              teacherMeetSettings={teacherMeetSettings}
-              contractedLessons={contractedLessons}
-              onUpdateContractedLessons={handleUpdateContractedLessons}
-              onOpenScheduleModal={() => setIsScheduleModalOpen(true)}
-              onOpenTeacherMeetConfig={(email) => {
-                setTeacherEmailForConfig(email);
-                setIsMeetConfigModalOpen(true);
-              }}
-              onCancelLesson={handleCancelLesson}
-              onCompleteLesson={handleCompleteLesson}
-              onMarkNotCompleted={(lesson) => {
-                setActiveLessonForAction(lesson);
-                setIsNotCompletedModalOpen(true);
-              }}
-              onRescheduleLesson={(lesson) => {
-                setActiveLessonForAction(lesson);
-                setIsRescheduleModalOpen(true);
-              }}
-              currentLanguage={currentLanguage}
-              t={t}
-              selectedStudentFilter={selectedStudentFilter}
-              onSelectStudentFilter={setSelectedStudentFilter}
-              timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}
-            />
-
-            {/* 3. Student Weekly S Fluency Tracker (100% Live Progress Connected) */}
-            {!isTeacher && (
-              <SFluencyTracker
-                mode="student"
-                currentLanguage={currentLanguage}
-                routinesByDay={routinesByDay}
-                selectedDay={selectedDay}
-                userProfile={userProfile}
-                lessons={lessons}
-                weeklyHomework={weeklyHomework}
-                onSelectDay={setSelectedDay}
-                onSelectActivity={setSelectedActivityId}
-                onToggleActivityComplete={handleToggleActivityComplete}
-                onOpenDailySentence={() => setIsDailySentenceModalOpen(true)}
-                onOpenScheduleLesson={() => setIsScheduleModalOpen(true)}
-                onOpenHomework={() => setIsHomeworkModalOpen(true)}
-              />
-            )}
-
-        {/* Routine Workspace: Clean Sidebar + Video & 5 Words Learning Area */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Column: Routine Navigator (Days + Activities) */}
-          <div className="lg:col-span-4 lg:sticky lg:top-24">
-            <CleanActivitySidebar
-              routinesByDay={routinesByDay}
-              selectedDay={selectedDay}
-              onSelectDay={setSelectedDay}
-              selectedActivityId={selectedActivityId}
-              onSelectActivity={setSelectedActivityId}
-              onToggleComplete={handleToggleActivityComplete}
-              onAddCustomActivity={handleAddCustomActivity}
-              onManageStudents={() => setIsStudentMgmtModalOpen(true)}
-              onOpenPersonalDictionary={() => setIsPersonalDictionaryOpen(true)}
-              isTeacher={isTeacher}
-              currentLanguage={currentLanguage}
-              t={t}
-            />
-          </div>
-
-          {/* Right Column: Video Player, Guidance & 5 Words Recorder */}
-          <div className="lg:col-span-8 space-y-6">
-            <VideoLearningWorkspace
-              activity={currentActivity}
-              level={userProfile.level}
-              isTeacher={isTeacher}
-              t={t}
-              currentLanguage={currentLanguage}
-              onSaveLearnedWords={handleSaveLearnedWords}
-              onToggleComplete={handleToggleActivityComplete}
-              onTeacherEditVideos={(act) => {
-                // Inline editing is enabled directly in the workspace
-              }}
-              onTeacherSaveVideos={handleTeacherSaveVideos}
-              onOpenEndOfDayModal={() => setIsDailySentenceModalOpen(true)}
-              onOpenEmailNotificationModal={() => setIsEmailModalOpen(true)}
-            />
-
-            {/* Daily Sentence Section */}
-            <DailySentenceSection
-              todayRoutines={currentDayRoutines}
-              userProfile={userProfile}
-              currentLanguage={currentLanguage}
-              t={t}
-              onSaveDailySentence={handleSaveDailySentence}
-              onTest30MinReminder={() => {
-                setNotifications((prev) => [
-                  {
-                    id: `reminder-${Date.now()}`,
-                    title: currentLanguage === 'en' ? '⏰ 30-Minute End of Day Reminder' : '⏰ Lembrete: 30 min para o fim do dia',
-                    message: currentLanguage === 'en'
-                      ? 'Time to review today’s vocabulary and write your Sentence of the Day in English!'
-                      : 'Hora de revisar as palavras da sua rotina de hoje e escrever sua Frase do Dia em inglês!',
-                    type: 'info',
-                    timestamp: new Date().toISOString(),
-                    read: false,
-                  },
-                  ...prev,
-                ]);
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Weekly Homework Section */}
-        <WeeklyHomeworkSection
-          homework={weeklyHomework}
-          routinesByDay={routinesByDay}
-          onOpenHomeworkModal={() => setIsHomeworkModalOpen(true)}
-          onOpenDictionaryModal={() => setIsPersonalDictionaryOpen(true)}
-          currentLanguage={currentLanguage}
-        />
-      </main>
+          </main>
 
       {/* 4. Floating AI Chatbot Assistant */}
       <FloatingChatButton
@@ -1156,6 +2117,7 @@ export default function App() {
     isOpen={isAuthModalOpen}
     onClose={() => setIsAuthModalOpen(false)}
     initialMode={authModalMode}
+    initialRole={authModalRole}
     currentLanguage={currentLanguage}
     onLoginSuccess={handleLoginSuccess}
   />
@@ -1165,22 +2127,30 @@ export default function App() {
     onClose={() => setIsBecomeTutorModalOpen(false)}
     currentLanguage={currentLanguage}
     onRegisteredSuccess={(tutor) => {
-      setAvailableAccounts((prev) => [
-        ...prev,
-        {
-          email: tutor.email,
-          name: tutor.name,
-          role: 'teacher',
-        },
+      const tutorAccount: GoogleAccount = {
+        email: tutor.email,
+        name: tutor.name,
+        role: 'teacher',
+        picture: tutor.avatar,
+      };
+      setTutors((prev) => [
+        ...prev.filter((t) => t.email.toLowerCase() !== tutor.email.toLowerCase()),
+        tutor,
       ]);
+      setAvailableAccounts((prev) => [
+        ...prev.filter((a) => a.email.toLowerCase() !== tutor.email.toLowerCase()),
+        tutorAccount,
+      ]);
+      setCurrentAccount(tutorAccount);
+      setViewMode('dashboard');
       setNotifications((prev) => [
         {
           id: `tutor-reg-${Date.now()}`,
-          title: currentLanguage === 'en' ? 'Welcome to the Native Friends Team!' : 'Bem-vindo(a) à equipe de Native Friends!',
+          title: currentLanguage === 'en' ? 'Registration Complete!' : 'Cadastro Realizado!',
           message: currentLanguage === 'en'
-            ? 'Your teacher account has been activated.'
-            : 'Sua conta de professor foi ativada com sucesso.',
-          type: 'success',
+            ? 'Your profile has been created and is pending Administrator approval before public listing.'
+            : 'Seu perfil de Amigo Nativo foi criado com sucesso e está pendente de aprovação pelo Administrador para ser exibido publicamente.',
+          type: 'info',
           timestamp: new Date().toISOString(),
           read: false,
         },
@@ -1218,15 +2188,20 @@ export default function App() {
 
       <LiveLessonScheduleModal
         isOpen={isScheduleModalOpen}
-        onClose={() => setIsScheduleModalOpen(false)}
+        onClose={() => {
+          setIsScheduleModalOpen(false);
+          setTeacherEmailForConfig('');
+        }}
         currentAccount={currentAccount}
         teachers={teachersList}
         students={studentsList}
+        initialTeacherEmail={teacherEmailForConfig || userProfile.teacherEmail}
         teacherMeetSettings={teacherMeetSettings}
         onSchedule={handleScheduleLesson}
-        currentLanguage={currentLanguage}
-        t={t}
+        currentLanguage={isTeacher ? 'en' : currentLanguage}
+        t={isTeacher ? getTranslations('en') : t}
         timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}
+        userProfile={userProfile}
       />
 
       <StudentManagementModal
@@ -1248,8 +2223,8 @@ export default function App() {
           setIsStudentMgmtModalOpen(false);
         }}
         selectedStudentId={selectedStudentFilter}
-        currentLanguage={currentLanguage}
-        t={t}
+        currentLanguage={isTeacher ? 'en' : currentLanguage}
+        t={isTeacher ? getTranslations('en') : t}
       />
 
       <TeacherMeetConfigModal
@@ -1258,7 +2233,7 @@ export default function App() {
         teacherEmail={teacherEmailForConfig}
         currentSettings={teacherMeetSettings[teacherEmailForConfig]}
         onSave={handleSaveTeacherMeetSettings}
-        currentLanguage={currentLanguage}
+        currentLanguage="en"
       />
 
       <RescheduleModal
@@ -1270,7 +2245,7 @@ export default function App() {
         lesson={activeLessonForAction}
         currentAccount={currentAccount}
         onConfirmReschedule={handleConfirmReschedule}
-        currentLanguage={currentLanguage}
+        currentLanguage={isTeacher ? 'en' : currentLanguage}
         timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}
       />
 
@@ -1282,16 +2257,41 @@ export default function App() {
         }}
         lesson={activeLessonForAction}
         onConfirm={handleConfirmNotCompleted}
-        currentLanguage={currentLanguage}
+        currentLanguage={isTeacher ? 'en' : currentLanguage}
       />
 
       <EmailNotificationModal
         isOpen={isEmailModalOpen}
         onClose={() => setIsEmailModalOpen(false)}
         currentAccount={currentAccount}
+        userProfile={userProfile}
         teachers={teachersList}
         activityName={currentActivity?.activityName}
+        activities={currentDayRoutines.map((r) => ({
+          name: r.activityName,
+          nameEn: r.activityName,
+          time: r.time,
+          words: r.learnedWords,
+          notes: r.teacherNotes,
+        }))}
+        dailyPhrase={userProfile?.dailySentences?.[new Date().toISOString().split('T')[0]]}
+        selectedDayName={selectedDay}
         currentLanguage={currentLanguage}
+      />
+
+      <ManageSubscriptionModal
+        isOpen={isManageSubscriptionOpen}
+        onClose={() => {
+          setIsManageSubscriptionOpen(false);
+          setSubscriptionTargetTutor(null);
+        }}
+        userProfile={userProfile}
+        tutorsList={tutors}
+        teachers={teachersList}
+        currentLanguage={currentLanguage}
+        onUpdateSubscription={handleUpdateSubscription}
+        onPurchasePackage={handlePurchasePackage}
+        initialSelectedTutor={subscriptionTargetTutor}
       />
 
       <DailySentenceModal
@@ -1309,7 +2309,7 @@ export default function App() {
         onClose={() => setIsAdminLandingEditorOpen(false)}
         currentContent={landingContent}
         onSave={handleSaveLandingContent}
-        currentLanguage={currentLanguage}
+        currentLanguage={isTeacher ? 'en' : currentLanguage}
       />
 
       {/* Admin Native Friend Approvals Modal */}
@@ -1319,17 +2319,22 @@ export default function App() {
         tutors={tutors}
         onApproveTutor={handleApproveTutor}
         onRejectTutor={handleRejectTutor}
-        currentLanguage={currentLanguage}
+        onDeleteTutor={handleDeleteTutor}
+        onRefresh={fetchLatestTutors}
+        isRefreshing={isRefreshingTutors}
+        currentLanguage={isTeacher ? 'en' : currentLanguage}
       />
 
       {/* Native Friend Edit Profile Modal */}
-      <EditTutorProfileModal
-        isOpen={isEditTutorProfileOpen}
-        onClose={() => setIsEditTutorProfileOpen(false)}
-        tutor={currentTutorProfile}
-        onSave={handleSaveTutorProfile}
-        currentLanguage={currentLanguage}
-      />
+      {isEditTutorProfileOpen && currentTutorProfile && (
+        <EditTutorProfileModal
+          isOpen={isEditTutorProfileOpen}
+          onClose={() => setIsEditTutorProfileOpen(false)}
+          tutor={currentTutorProfile}
+          onSave={handleSaveTutorProfile}
+          currentLanguage="en"
+        />
+      )}
 
       {/* Student Profile & Photo Modal */}
       <StudentProfileModal

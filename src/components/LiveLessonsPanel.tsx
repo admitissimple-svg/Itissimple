@@ -139,11 +139,11 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
       : (activeLessons[0]?.studentEmail ||
           completedLessons[0]?.studentEmail ||
           notCompletedLessons[0]?.studentEmail ||
-          'reginahelena1980@gmail.com')
+          '')
           .toLowerCase()
           .trim();
 
-  const defaultCount = primaryStudentEmail.includes('vinicius') ? 5 : 10;
+  const defaultCount = 10;
   const studentContractedTotal = contractedLessons[primaryStudentEmail] ?? defaultCount;
 
   const studentCompletedCount = completedLessons.filter(
@@ -204,7 +204,7 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
           {isTeacher && (
             <button
               type="button"
-              onClick={() => onOpenTeacherMeetConfig(currentAccount?.email || 'charles.lambert1939@gmail.com')}
+              onClick={() => onOpenTeacherMeetConfig(currentAccount?.email || '')}
               className="px-3.5 py-2 bg-white hover:bg-[#9AB4FF]/15 text-[#062863] border border-[#607EC9]/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
               title="Configurar horários de 30 em 30 min, bloqueio por dia da semana e fuso horário"
             >
@@ -522,8 +522,8 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
                         <User className="w-3.5 h-3.5 text-[#607EC9] shrink-0" />
                         <span>
                           {isTeacher
-                            ? `${isEn ? 'Student:' : 'Aluno:'} ${lesson.studentName} (${lesson.studentEmail})`
-                            : `${isEn ? 'Teacher:' : 'Professor:'} ${lesson.teacherName} (${lesson.teacherEmail})`}
+                            ? `${isEn ? 'Student:' : 'Seu nome:'} ${lesson.studentName} (${lesson.studentEmail})`
+                            : `${isEn ? 'Native Friend:' : 'Amigo Nativo:'} ${lesson.teacherName} (${lesson.teacherEmail})`}
                         </span>
                       </div>
                     </div>

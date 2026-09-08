@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
@@ -22,14 +22,14 @@ interface TeacherMeetConfigModalProps {
   currentLanguage: Language;
 }
 
-const ALL_DAYS: { id: DayOfWeek; labelEn: string; labelPt: string }[] = [
-  { id: 'monday', labelEn: 'Mon', labelPt: 'Seg' },
-  { id: 'tuesday', labelEn: 'Tue', labelPt: 'Ter' },
-  { id: 'wednesday', labelEn: 'Wed', labelPt: 'Qua' },
-  { id: 'thursday', labelEn: 'Thu', labelPt: 'Qui' },
-  { id: 'friday', labelEn: 'Fri', labelPt: 'Sex' },
-  { id: 'saturday', labelEn: 'Sat', labelPt: 'Sáb' },
-  { id: 'sunday', labelEn: 'Sun', labelPt: 'Dom' },
+const ALL_DAYS: { id: DayOfWeek; labelEn: string }[] = [
+  { id: 'monday', labelEn: 'Mon' },
+  { id: 'tuesday', labelEn: 'Tue' },
+  { id: 'wednesday', labelEn: 'Wed' },
+  { id: 'thursday', labelEn: 'Thu' },
+  { id: 'friday', labelEn: 'Fri' },
+  { id: 'saturday', labelEn: 'Sat' },
+  { id: 'sunday', labelEn: 'Sun' },
 ];
 
 export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
@@ -38,31 +38,37 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
   teacherEmail,
   currentSettings,
   onSave,
-  currentLanguage,
 }) => {
-  if (!isOpen) return null;
-
-  const isEn = currentLanguage === 'en';
-
   const [meetLink, setMeetLink] = useState<string>(
-    currentSettings?.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'
+    currentSettings?.meetLink || ''
   );
   const [workingHoursStart, setWorkingHoursStart] = useState<string>(
-    currentSettings?.workingHoursStart || '08:00'
+    currentSettings?.workingHoursStart || ''
   );
   const [workingHoursEnd, setWorkingHoursEnd] = useState<string>(
-    currentSettings?.workingHoursEnd || '18:00'
+    currentSettings?.workingHoursEnd || ''
   );
   const [slotDurationMinutes, setSlotDurationMinutes] = useState<number>(
     currentSettings?.slotDurationMinutes || 30
   );
   const [availableDays, setAvailableDays] = useState<DayOfWeek[]>(
-    currentSettings?.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+    currentSettings?.availableDays || []
   );
   const [timezone, setTimezone] = useState<string>(
     currentSettings?.timezone || DEFAULT_TEACHER_TIMEZONE
   );
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen && currentSettings) {
+      setMeetLink(currentSettings.meetLink || '');
+      setWorkingHoursStart(currentSettings.workingHoursStart || '');
+      setWorkingHoursEnd(currentSettings.workingHoursEnd || '');
+      setSlotDurationMinutes(currentSettings.slotDurationMinutes || 30);
+      setAvailableDays(currentSettings.availableDays || []);
+      setTimezone(currentSettings.timezone || DEFAULT_TEACHER_TIMEZONE);
+    }
+  }, [isOpen, currentSettings]);
 
   const toggleDay = (day: DayOfWeek) => {
     setAvailableDays((prev) =>
@@ -88,6 +94,8 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
     }, 1200);
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
       <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-[#607EC9]/30 overflow-hidden my-auto">
@@ -99,7 +107,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
             </div>
             <div>
               <h3 className="font-black text-base sm:text-lg text-white">
-                {isEn ? 'Native Friend Schedule & Meet Setup' : 'Configurações de Horários & Google Meet'}
+                Native Friend Schedule & Meet Setup
               </h3>
               <p className="text-xs text-[#9AB4FF]">{teacherEmail}</p>
             </div>
@@ -119,7 +127,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
           {savedSuccess && (
             <div className="p-3 bg-[#9AB4FF]/20 border border-[#607EC9] rounded-2xl text-xs font-bold text-[#062863] flex items-center gap-2">
               <Check className="w-4 h-4 text-[#1C4C96]" />
-              <span>{isEn ? 'Settings saved successfully!' : 'Configurações salvas com sucesso!'}</span>
+              <span>Settings saved successfully!</span>
             </div>
           )}
 
@@ -127,7 +135,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
           <div>
             <label className="block text-xs font-bold text-[#000035] mb-1 flex items-center gap-1.5">
               <Video className="w-3.5 h-3.5 text-[#1C4C96]" />
-              <span>{isEn ? 'Default Google Meet Room Link *' : 'Link Padrão da Sala Google Meet *'}</span>
+              <span>Default Google Meet Room Link *</span>
             </label>
             <input
               type="url"
@@ -143,7 +151,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
           <div>
             <label className="block text-xs font-bold text-[#000035] mb-1 flex items-center gap-1.5">
               <Globe className="w-3.5 h-3.5 text-[#1C4C96]" />
-              <span>{isEn ? 'Timezone *' : 'Fuso Horário do Amigo Nativo *'}</span>
+              <span>Timezone *</span>
             </label>
             <select
               value={timezone}
@@ -162,7 +170,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Start Time' : 'Início do Atendimento'}
+                Start Time
               </label>
               <input
                 type="time"
@@ -174,7 +182,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'End Time' : 'Término do Atendimento'}
+                End Time
               </label>
               <input
                 type="time"
@@ -188,7 +196,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
           {/* Available Days */}
           <div>
             <label className="block text-xs font-bold text-[#000035] mb-1">
-              {isEn ? 'Available Teaching Days' : 'Dias da Semana Disponíveis'}
+              Available Teaching Days
             </label>
             <div className="grid grid-cols-7 gap-1">
               {ALL_DAYS.map((day) => {
@@ -205,7 +213,6 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                     }`}
                   >
                     <div>{day.labelEn}</div>
-                    <div className="text-[9px] opacity-75">{day.labelPt}</div>
                   </button>
                 );
               })}
@@ -219,14 +226,14 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
               onClick={onClose}
               className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
             >
-              {isEn ? 'Cancel' : 'Cancelar'}
+              Cancel
             </button>
             <button
               type="submit"
               className="px-5 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
               <Save className="w-4 h-4" />
-              <span>{isEn ? 'Save Configurations' : 'Salvar Configurações'}</span>
+              <span>Save Configurations</span>
             </button>
           </div>
         </form>

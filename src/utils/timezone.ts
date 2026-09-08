@@ -29,19 +29,31 @@ export function formatTimeInTimeZone(
 ): string {
   try {
     const d = new Date(isoDateString);
-    return d.toLocaleTimeString('pt-BR', {
+    return d.toLocaleTimeString('en-US', {
       timeZone,
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false,
+      hour12: true,
     });
   } catch {
-    return new Date(isoDateString).toLocaleTimeString('pt-BR', {
+    return new Date(isoDateString).toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false,
+      hour12: true,
     });
   }
+}
+
+export function formatTimeSlot12h(timeStr: string): string {
+  if (!timeStr) return '';
+  const parts = timeStr.split(':');
+  if (parts.length < 2) return timeStr;
+  const hour = parseInt(parts[0], 10);
+  const min = parts[1];
+  if (isNaN(hour)) return timeStr;
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${String(hour12).padStart(2, '0')}:${min} ${ampm}`;
 }
 
 export function getDayKeyInTimeZone(

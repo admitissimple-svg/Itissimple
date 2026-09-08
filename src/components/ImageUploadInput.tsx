@@ -182,7 +182,7 @@ export const ImageUploadInput: React.FC<ImageUploadInputProps> = ({
           {/* Avatar Preview */}
           <div className="relative group shrink-0">
             <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden bg-slate-200 border-2 border-[#1C4C96]/30 shadow-sm flex items-center justify-center relative">
-              {value ? (
+              {value && value.trim() !== '' ? (
                 <img
                   src={value}
                   alt="Avatar Preview"

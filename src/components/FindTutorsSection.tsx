@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Star,
@@ -39,71 +39,89 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
   const t = getTranslations(currentLanguage);
   const tutors = useMemo(() => {
     const list = passedTutors && passedTutors.length > 0 ? passedTutors : INITIAL_NATIVE_FRIENDS;
-    return list.filter((t) => t.approvalStatus !== 'rejected');
+    // O Amigo Nativo só deve aparecer listado como disponível para os usuários após a aprovação expressa do Admin.
+    return list.filter((t) => t.approvalStatus === 'approved');
   }, [passedTutors]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCountry, setSelectedCountry] = useState<string>('all');
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('all');
   const [activeVideoModal, setActiveVideoModal] = useState<NativeFriendTutor | null>(null);
 
+  // Support ESC key to close video modal
+  useEffect(() => {
+    if (!activeVideoModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveVideoModal(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeVideoModal]);
+
   const countries = useMemo(() => {
-    const list = Array.from(new Set(tutors.map((t) => t.country)));
+    const list = Array.from(new Set((tutors || []).map((t) => t?.country).filter(Boolean)));
     return ['all', ...list];
   }, [tutors]);
 
   const allSpecialties = useMemo(() => {
     const set = new Set<string>();
-    tutors.forEach((t) => t.specialties.forEach((s) => set.add(s)));
+    (tutors || []).forEach((t) => {
+      if (t && Array.isArray(t.specialties)) {
+        t.specialties.forEach((s) => set.add(s));
+      }
+    });
     return ['all', ...Array.from(set)];
   }, [tutors]);
 
   const filteredTutors = useMemo(() => {
-    return tutors.filter((tutor) => {
+    return (tutors || []).filter((tutor) => {
       const matchesSearch =
-        tutor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tutor.headline.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tutor.bio.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tutor.accent.toLowerCase().includes(searchQuery.toLowerCase());
+        (tutor.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (tutor.headline || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (tutor.bio || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (tutor.accent || '').toLowerCase().includes(searchQuery.toLowerCase());
 
       const matchesCountry = selectedCountry === 'all' || tutor.country === selectedCountry;
       const matchesSpecialty =
-        selectedSpecialty === 'all' || tutor.specialties.includes(selectedSpecialty);
+        selectedSpecialty === 'all' ||
+        (Array.isArray(tutor.specialties) && tutor.specialties.includes(selectedSpecialty));
 
       return matchesSearch && matchesCountry && matchesSpecialty;
     });
   }, [tutors, searchQuery, selectedCountry, selectedSpecialty]);
 
   return (
-    <section className="py-16 sm:py-24 bg-[#000035] text-white border-t border-[#1C4C96]/50" id="find-native-friend">
+    <section className="py-12 sm:py-16 bg-[#000035] text-white border-t border-[#1C4C96]/50" id="find-native-friend">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header Title */}
-        <div className="text-center max-w-3xl mx-auto space-y-4">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1C4C96]/60 border border-[#9AB4FF]/50 text-[#9AB4FF] text-xs sm:text-sm font-bold">
-            <Globe className="w-4 h-4 text-[#9AB4FF]" />
+        <div className="text-center max-w-3xl mx-auto space-y-3">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1C4C96]/60 border border-[#9AB4FF]/50 text-[#9AB4FF] text-[11px] font-bold">
+            <Globe className="w-3.5 h-3.5 text-[#9AB4FF]" />
             <span>{t.tutorsHeaderBadge}</span>
           </div>
 
-          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight">
+          <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight">
             {t.tutorsHeaderTitle}
           </h2>
 
-          <p className="text-base sm:text-lg text-blue-100 font-normal leading-relaxed">
+          <p className="text-xs sm:text-sm text-blue-100 font-normal leading-relaxed">
             {t.tutorsHeaderSubtitle}
           </p>
         </div>
 
         {/* Filters Bar */}
-        <div className="mt-10 bg-[#062863]/60 border border-[#607EC9]/40 rounded-3xl p-4 sm:p-6 shadow-xl space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+        <div className="mt-8 bg-[#062863]/60 border border-[#607EC9]/40 rounded-2xl p-3.5 sm:p-4.5 shadow-xl space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
             {/* Search Input */}
             <div className="sm:col-span-6 relative">
-              <Search className="w-4 h-4 text-[#9AB4FF] absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <Search className="w-3.5 h-3.5 text-[#9AB4FF] absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={t.searchTutorsPlaceholder}
-                className="w-full pl-10 pr-4 py-2.5 bg-[#000035] border border-[#607EC9]/50 rounded-xl text-sm text-white placeholder:text-[#9AB4FF]/60 focus:outline-hidden focus:ring-2 focus:ring-[#9AB4FF]"
+                className="w-full pl-9 pr-3 py-2 bg-[#000035] border border-[#607EC9]/50 rounded-xl text-xs text-white placeholder:text-[#9AB4FF]/60 focus:outline-hidden focus:ring-2 focus:ring-[#9AB4FF]"
               />
             </div>
 
@@ -112,7 +130,7 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
               <select
                 value={selectedCountry}
                 onChange={(e) => setSelectedCountry(e.target.value)}
-                className="w-full px-3 py-2.5 bg-[#000035] border border-[#607EC9]/50 rounded-xl text-sm text-white font-medium focus:outline-hidden focus:ring-2 focus:ring-[#9AB4FF]"
+                className="w-full px-2.5 py-2 bg-[#000035] border border-[#607EC9]/50 rounded-xl text-xs text-white font-medium focus:outline-hidden focus:ring-2 focus:ring-[#9AB4FF]"
               >
                 <option value="all" className="bg-[#000035] text-white">
                   {t.allCountriesOption}
@@ -132,7 +150,7 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
               <select
                 value={selectedSpecialty}
                 onChange={(e) => setSelectedSpecialty(e.target.value)}
-                className="w-full px-3 py-2.5 bg-[#000035] border border-[#607EC9]/50 rounded-xl text-sm text-white font-medium focus:outline-hidden focus:ring-2 focus:ring-[#9AB4FF]"
+                className="w-full px-2.5 py-2 bg-[#000035] border border-[#607EC9]/50 rounded-xl text-xs text-white font-medium focus:outline-hidden focus:ring-2 focus:ring-[#9AB4FF]"
               >
                 <option value="all" className="bg-[#000035] text-white">
                   {t.allSpecialtiesOption}
@@ -148,7 +166,7 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-between text-xs text-[#9AB4FF] px-1 pt-1 border-t border-[#1C4C96]/50">
+          <div className="flex items-center justify-between text-[11px] text-[#9AB4FF] px-1 pt-1 border-t border-[#1C4C96]/50">
             <span className="font-semibold">
               {filteredTutors.length} {t.badge100Native}
             </span>
@@ -169,11 +187,11 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
         </div>
 
         {/* Tutors List */}
-        <div className="mt-8 space-y-6">
+        <div className="mt-6 space-y-4">
           {filteredTutors.length === 0 ? (
-            <div className="text-center py-16 bg-[#062863]/40 rounded-3xl border border-dashed border-[#607EC9]/40">
-              <Search className="w-10 h-10 text-[#9AB4FF]/50 mx-auto mb-3" />
-              <h3 className="text-lg font-bold text-white">
+            <div className="text-center py-12 bg-[#062863]/40 rounded-2xl border border-dashed border-[#607EC9]/40">
+              <Search className="w-8 h-8 text-[#9AB4FF]/50 mx-auto mb-2.5" />
+              <h3 className="text-sm font-bold text-white">
                 {t.noTutorsFound}
               </h3>
             </div>
@@ -184,22 +202,28 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
               return (
                 <div
                   key={tutor.id}
-                  className={`bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-3xl p-6 sm:p-8 border transition-all duration-200 shadow-xl flex flex-col lg:flex-row gap-6 items-start justify-between ${
+                  className={`bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-2xl p-4.5 sm:p-5 border transition-all duration-200 shadow-xl flex flex-col lg:flex-row gap-5 items-start justify-between ${
                     isSelectedMentor
                       ? 'border-[#9AB4FF] ring-2 ring-[#9AB4FF]/60 bg-[#062863]'
                       : 'border-[#607EC9]/45 hover:border-[#9AB4FF]'
                   }`}
                 >
                   {/* Left: Avatar & Intro Video Preview */}
-                  <div className="flex flex-col items-center sm:items-start gap-4 shrink-0 w-full sm:w-auto">
+                  <div className="flex flex-col items-center sm:items-start gap-3 shrink-0 w-full sm:w-auto">
                     <div className="relative">
-                      <img
-                        src={tutor.avatar}
-                        alt={tutor.name}
-                        className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border-2 border-[#9AB4FF]/60 shadow-md"
-                        referrerPolicy="no-referrer"
-                      />
-                      <span className="absolute -bottom-2 -right-2 text-2xl drop-shadow-md" title={tutor.country}>
+                      {tutor.avatar && tutor.avatar.trim() !== '' ? (
+                        <img
+                          src={tutor.avatar}
+                          alt={tutor.name}
+                          className="w-18 h-18 sm:w-20 sm:h-20 rounded-xl object-cover border-2 border-[#9AB4FF]/60 shadow-md"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="w-18 h-18 sm:w-20 sm:h-20 rounded-xl bg-[#062863] text-white flex items-center justify-center font-black text-2xl border-2 border-[#9AB4FF]/60 shadow-md">
+                          {tutor.name?.slice(0, 2).toUpperCase() || 'NF'}
+                        </div>
+                      )}
+                      <span className="absolute -bottom-1.5 -right-1.5 text-xl drop-shadow-md" title={tutor.country}>
                         {tutor.flag}
                       </span>
                     </div>
@@ -207,66 +231,66 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
                     <button
                       type="button"
                       onClick={() => setActiveVideoModal(tutor)}
-                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-3 py-1.5 rounded-xl bg-[#1C4C96]/60 hover:bg-[#1C4C96] text-[#9AB4FF] hover:text-white text-xs font-bold transition cursor-pointer border border-[#607EC9]/40"
+                      className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C4C96]/60 hover:bg-[#1C4C96] text-[#9AB4FF] hover:text-white text-[11px] font-bold transition cursor-pointer border border-[#607EC9]/40"
                     >
-                      <Play className="w-3.5 h-3.5 fill-[#9AB4FF]" />
+                      <Play className="w-3 h-3 fill-[#9AB4FF]" />
                       <span>{t.watchIntroVideoBtn}</span>
                     </button>
                   </div>
 
                   {/* Center: Tutor Details & Bio */}
-                  <div className="flex-1 space-y-3">
+                  <div className="flex-1 space-y-2.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-xl sm:text-2xl font-black text-white">
+                      <h3 className="text-base sm:text-lg font-black text-white">
                         {tutor.name}
                       </h3>
                       {tutor.isSuperTutor && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-950/80 text-[#F4CA54] border border-[#F4CA54]/50">
-                          <Sparkles className="w-3 h-3 text-[#F4CA54]" />
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-950/80 text-[#F4CA54] border border-[#F4CA54]/50">
+                          <Sparkles className="w-2.5 h-2.5 text-[#F4CA54]" />
                           <span>Super Native Friend</span>
                         </span>
                       )}
                       {isSelectedMentor && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#1C4C96] text-white border border-[#9AB4FF]">
-                          <CheckCircle className="w-3 h-3 text-[#9AB4FF]" />
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#1C4C96] text-white border border-[#9AB4FF]">
+                          <CheckCircle className="w-2.5 h-2.5 text-[#9AB4FF]" />
                           <span>Mentor</span>
                         </span>
                       )}
                     </div>
 
                     {/* Stats & Accent */}
-                    <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-[#9AB4FF]">
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold text-[#9AB4FF]">
                       <div className="flex items-center gap-1 text-[#F4CA54] font-bold">
-                        <Star className="w-4 h-4 fill-[#F4CA54] text-[#F4CA54]" />
-                        <span>{tutor.rating.toFixed(1)}</span>
-                        <span className="text-[#9AB4FF]/70">({tutor.reviewsCount} {t.reviewsLabel})</span>
+                        <Star className="w-3.5 h-3.5 fill-[#F4CA54] text-[#F4CA54]" />
+                        <span>{(typeof tutor.rating === 'number' ? tutor.rating : 5.0).toFixed(1)}</span>
+                        <span className="text-[#9AB4FF]/70">({tutor.reviewsCount ?? 0} {t.reviewsLabel})</span>
                       </div>
                       <div className="flex items-center gap-1 text-slate-200">
-                        <Globe className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                        <span>{tutor.accent}</span>
+                        <Globe className="w-3 h-3 text-[#9AB4FF]" />
+                        <span>{tutor.accent || 'Native'}</span>
                       </div>
                       <div className="flex items-center gap-1 text-emerald-400">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>{tutor.lessonsTaught}+ {t.badge30MinMeet}</span>
+                        <ShieldCheck className="w-3 h-3" />
+                        <span>{tutor.lessonsTaught ?? 0}+ {t.badge30MinMeet}</span>
                       </div>
                     </div>
 
                     {/* Headline */}
-                    <p className="text-sm font-bold text-[#9AB4FF]">
-                      “{tutor.headline}”
+                    <p className="text-xs font-bold text-[#9AB4FF]">
+                      “{tutor.headline || 'English Conversational Native Friend'}”
                     </p>
 
                     {/* Bio excerpt */}
-                    <p className="text-sm text-blue-100/90 leading-relaxed">
+                    <p className="text-xs text-blue-100/90 leading-relaxed">
                       {tutor.bio}
                     </p>
 
                     {/* Specialties Chips */}
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {tutor.specialties.map((spec, idx) => (
+                    <div className="flex flex-wrap gap-1 pt-0.5">
+                      {(tutor.specialties || []).map((spec, idx) => (
                         <span
                           key={idx}
-                          className="text-xs font-medium px-2.5 py-1 rounded-lg bg-[#000035]/80 text-[#9AB4FF] border border-[#607EC9]/40"
+                          className="text-[10px] sm:text-[11px] font-medium px-2 py-0.5 rounded-md bg-[#000035]/80 text-[#9AB4FF] border border-[#607EC9]/40"
                         >
                           {spec}
                         </span>
@@ -275,51 +299,60 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
                   </div>
 
                   {/* Right: Booking Actions & Price */}
-                  <div className="w-full lg:w-56 shrink-0 bg-[#000035]/90 rounded-2xl p-4 border border-[#607EC9]/50 flex flex-col justify-between gap-4">
+                  <div className="w-full lg:w-48 shrink-0 bg-[#000035]/90 rounded-xl p-3 border border-[#607EC9]/50 flex flex-col justify-between gap-3">
                     <div>
-                      <span className="text-xs text-[#9AB4FF]/80 font-bold block">
+                      <span className="text-[11px] text-[#9AB4FF]/80 font-bold block">
                         {t.badge30MinMeet}
                       </span>
-                      <div className="flex items-baseline gap-1 mt-1">
-                        <span className="text-2xl sm:text-3xl font-black text-white">
-                          R$ {tutor.pricePerSessionBrl}
+                      <div className="flex items-baseline gap-1 mt-0.5">
+                        <span className="text-lg sm:text-xl font-black text-white">
+                          R$ {tutor.pricePerSessionBrl ?? 95}
                         </span>
-                        <span className="text-xs text-[#9AB4FF] font-semibold">
-                          / ${tutor.pricePerSessionUsd} USD
+                        <span className="text-[11px] text-[#9AB4FF] font-semibold">
+                          / ${tutor.pricePerSessionUsd ?? 18} USD
                         </span>
                       </div>
-                      <span className="text-[11px] text-emerald-400 font-bold flex items-center gap-1 mt-1">
-                        <CheckCircle className="w-3 h-3" />
+                      <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
+                        <CheckCircle className="w-2.5 h-2.5" />
                         <span>Google Meet</span>
                       </span>
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <button
                         type="button"
                         onClick={() => onBookLesson && onBookLesson(tutor)}
-                        className="w-full py-2.5 px-4 rounded-xl bg-[#607EC9] text-white hover:bg-[#1C4C96] font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer border border-[#9AB4FF]/60"
+                        className="w-full py-2 px-3 rounded-lg bg-[#607EC9] text-white hover:bg-[#1C4C96] font-bold text-xs shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer border border-[#9AB4FF]/60"
                       >
-                        <Calendar className="w-4 h-4" />
+                        <Calendar className="w-3.5 h-3.5" />
                         <span>{t.bookLesson30MinBtn}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => onSendMessage && onSendMessage(tutor)}
-                        className="w-full py-2 px-3 rounded-xl bg-[#000035] text-white border border-[#607EC9] hover:bg-[#062863] font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="w-full py-1.5 px-2.5 rounded-lg bg-[#000035] text-white border border-[#607EC9] hover:bg-[#062863] font-bold text-[11px] transition flex items-center justify-center gap-1 cursor-pointer"
                       >
-                        <MessageSquare className="w-3.5 h-3.5 text-[#9AB4FF]" />
+                        <MessageSquare className="w-3 h-3 text-[#9AB4FF]" />
                         <span>{t.sendMessageBtn}</span>
                       </button>
 
-                      {onSelectMentor && !isSelectedMentor && (
+                      {onSelectMentor && (
                         <button
                           type="button"
                           onClick={() => onSelectMentor(tutor)}
-                          className="w-full py-1.5 text-center text-xs text-[#9AB4FF] hover:text-white underline font-bold cursor-pointer"
+                          className={`w-full py-2 px-2.5 rounded-lg font-bold text-[11px] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-98 ${
+                            isSelectedMentor
+                              ? 'bg-[#1C4C96] hover:bg-[#062863] text-white border border-[#9AB4FF]/50'
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50'
+                          }`}
                         >
-                          {t.findNativeFriend}
+                          <Sparkles className="w-3.5 h-3.5 text-emerald-200" />
+                          <span>
+                            {isSelectedMentor
+                              ? (currentLanguage === 'en' ? 'Buy More Lessons' : 'Comprar Mais Aulas')
+                              : (currentLanguage === 'en' ? 'Buy Package & Link' : 'Comprar Pacote & Vincular')}
+                          </span>
                         </button>
                       )}
                     </div>
@@ -333,7 +366,12 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
 
       {/* Intro Video Modal */}
       {activeVideoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setActiveVideoModal(null);
+          }}
+        >
           <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-white/20 animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between p-4 bg-[#000035] text-white">
               <div className="flex items-center gap-2">
@@ -347,6 +385,8 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
                 type="button"
                 onClick={() => setActiveVideoModal(null)}
                 className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center cursor-pointer transition"
+                aria-label="Close"
+                title="Fechar (Esc)"
               >
                 <X className="w-4 h-4 text-white" />
               </button>

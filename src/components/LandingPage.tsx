@@ -10,6 +10,7 @@ import {
   ChevronDown,
   Check,
   LogIn,
+  LogOut,
   HelpCircle,
   User,
   GraduationCap,
@@ -17,21 +18,20 @@ import {
   BookOpen,
   Calendar,
   MessageSquare,
+  ShieldCheck,
 } from 'lucide-react';
-import { GoogleAccount, Language } from '../types';
+import { GoogleAccount, Language, UserRole, AdminLandingContent } from '../types';
 import { BrandLogo } from './BrandLogo';
-import { EnglishMomentsShowcase } from './EnglishMomentsShowcase';
 import { FindTutorsSection } from './FindTutorsSection';
 import { SFluencyTracker } from './SFluencyTracker';
 import { NativeFriendTutor } from '../data/tutors';
 import { SUPPORTED_LANGUAGES, getTranslations } from '../utils/i18n';
-import { AdminLandingContent } from '../types';
 
 interface LandingPageProps {
   currentLanguage: Language;
   onToggleLanguage: (lang: Language) => void;
   currentAccount: GoogleAccount | null;
-  onOpenAuthModal: (mode: 'login' | 'signup') => void;
+  onOpenAuthModal: (mode: 'login' | 'signup', role?: UserRole) => void;
   onOpenBecomeTutorModal: () => void;
   onGoToDashboard: () => void;
   onBookLessonWithTutor: (tutor: NativeFriendTutor) => void;
@@ -41,6 +41,7 @@ interface LandingPageProps {
   onOpenAdminLandingEditor?: () => void;
   onOpenAdminApprovals?: () => void;
   pendingApprovalsCount?: number;
+  onLogout?: () => void;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
@@ -57,6 +58,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenAdminLandingEditor,
   onOpenAdminApprovals,
   pendingApprovalsCount = 0,
+  onLogout,
 }) => {
   const isEn = currentLanguage === 'en';
   const isPt = currentLanguage === 'pt';
@@ -145,6 +147,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 )}
               </button>
             )}
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer font-bold shadow-xs flex items-center gap-1.5"
+                title={isEn ? 'Log out' : 'Sair da conta de Administrador'}
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>{isEn ? 'Log Out' : 'Sair'}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -152,10 +166,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* 1. Top Header */}
       <header className="sticky top-0 z-40 bg-[#000035]/95 backdrop-blur-md border-b border-[#1C4C96]/60 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16 sm:h-20">
+          <div className="flex items-center justify-between h-14 sm:h-16">
             {/* Logo */}
             <div className="flex items-center gap-3">
-              <BrandLogo size="md" showText={true} textColor="text-white" />
+              <BrandLogo size="sm" showText={true} textColor="text-white" />
             </div>
 
             {/* Center Nav Links (Desktop) */}
@@ -166,13 +180,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 className="hover:text-white transition cursor-pointer flex items-center gap-1.5"
               >
                 <span>{t.findTutors}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => scrollToSection('english-moments')}
-                className="hover:text-white transition cursor-pointer"
-              >
-                {t.exploreMoments}
               </button>
               <button
                 type="button"
@@ -257,7 +264,29 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <HelpCircle className="w-5 h-5 text-[#9AB4FF] hover:text-white" />
               </button>
 
-              {/* Preply-style Single Unified Log In Button */}
+              {/* Admin Portal Quick Access Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (currentAccount?.role === 'admin') {
+                    if (onOpenAdminApprovals) onOpenAdminApprovals();
+                  } else {
+                    onOpenAuthModal('login', 'admin');
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#062863] hover:bg-[#1C4C96] border border-[#607EC9]/50 text-xs font-bold text-[#F4CA54] transition cursor-pointer shadow-xs"
+                title={isEn ? 'Administrator Access' : 'Acesso do Administrador'}
+              >
+                <ShieldCheck className="w-4 h-4 text-[#F4CA54]" />
+                <span className="hidden lg:inline">{isEn ? 'Admin' : 'Administrador'}</span>
+                {pendingApprovalsCount !== undefined && pendingApprovalsCount > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-[#F4CA54] text-[#000035] text-[9px] font-black flex items-center justify-center">
+                    {pendingApprovalsCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Preply-style Single Unified Log In / Dashboard Button */}
               <button
                 type="button"
                 onClick={() => {
@@ -270,7 +299,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 className="flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-white hover:bg-slate-100 text-[#000035] font-black text-xs sm:text-sm shadow-md transition cursor-pointer border-2 border-white active:scale-98"
                 title={
                   currentAccount
-                    ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin')
+                    ? currentAccount.role === 'admin'
+                      ? isEn ? 'Administrator Dashboard' : 'Painel do Administrador'
+                      : currentAccount.role === 'teacher'
                       ? isEn ? 'Native Friend Dashboard' : 'Painel do Amigo Nativo'
                       : isEn ? 'My Dashboard' : 'Meu Painel'
                     : isEn ? 'Log in to your account' : 'Acessar sua conta'
@@ -280,12 +311,27 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <LogIn className="w-4 h-4 text-[#000035] stroke-[2.5]" />
                 <span>
                   {currentAccount
-                    ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin')
+                    ? currentAccount.role === 'admin'
+                      ? isEn ? 'Admin Dashboard' : 'Painel Admin'
+                      : currentAccount.role === 'teacher'
                       ? isEn ? 'Teacher Dashboard' : 'Painel Amigo Nativo'
                       : isEn ? 'My Dashboard' : 'Meu Painel'
                     : isEn ? 'Log In' : 'Entrar'}
                 </span>
               </button>
+
+              {/* Botão Sair da Conta (Quando o usuário já está logado) */}
+              {currentAccount && onLogout && (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/50 text-rose-300 hover:text-white font-bold text-xs sm:text-sm transition cursor-pointer shadow-xs active:scale-98"
+                  title={isEn ? 'Log out of current account' : 'Sair da conta atual'}
+                >
+                  <LogOut className="w-4 h-4 text-rose-400" />
+                  <span>{isEn ? 'Log Out' : 'Sair'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -386,28 +432,30 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       )}
 
       {/* 2. Hero Section */}
-      <section className="relative overflow-hidden pt-12 pb-16 sm:pt-20 sm:pb-24 bg-gradient-to-b from-[#000035] via-[#062863] to-[#000035]">
+      <section className="relative overflow-hidden pt-5 pb-8 sm:pt-6 sm:pb-10 bg-gradient-to-b from-[#000035] via-[#062863] to-[#000035]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-center">
             {/* Left Content */}
-            <div className="lg:col-span-7 space-y-6 text-left">
+            <div className="lg:col-span-7 space-y-3.5 text-left">
               {/* Badge */}
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#1C4C96]/60 border border-[#9AB4FF]/50 text-[#9AB4FF] text-xs sm:text-sm font-extrabold shadow-sm">
-                <Sparkles className="w-4 h-4 text-[#F4CA54]" />
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1C4C96]/60 border border-[#9AB4FF]/50 text-[#9AB4FF] text-[11px] font-extrabold shadow-sm">
+                <Sparkles className="w-3 h-3 text-[#F4CA54]" />
                 <span>{heroBadge}</span>
               </div>
 
-              {/* Main Headline */}
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black text-white tracking-tight leading-[1.1]">
+              {/* Main Headline (Scaled to 80%) */}
+              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight leading-[1.15]">
                 {heroHeadlineStart}{' '}
-                <span className="text-[#9AB4FF] underline decoration-[#F4CA54]/80">
-                  {heroHeadlineHighlight}
+                <span className="underline decoration-[#F4CA54] decoration-3 underline-offset-4 text-white">
+                  Living
+                </span>{' '}
+                <span className="underline decoration-[#9AB4FF] decoration-3 underline-offset-4 text-white">
+                  your Life.
                 </span>
-                .
               </h1>
 
               {/* Sub-slogans & Philosophy Manifesto */}
-              <div className="space-y-2 text-base sm:text-lg text-blue-100 font-medium leading-relaxed max-w-2xl">
+              <div className="space-y-1 text-xs sm:text-[13px] text-blue-100 font-medium leading-relaxed max-w-2xl mb-[3cm]">
                 <p className="font-extrabold text-[#9AB4FF]">
                   {heroQuote}
                 </p>
@@ -417,13 +465,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
 
               {/* Call to Actions */}
-              <div className="pt-2 flex flex-wrap items-center gap-3 sm:gap-4">
+              <div className="pt-1 flex flex-wrap items-center gap-2.5">
                 <button
                   type="button"
                   onClick={() => scrollToSection('find-native-friend')}
-                  className="px-7 py-3.5 rounded-2xl bg-[#607EC9] hover:bg-[#1C4C96] text-white font-black text-sm sm:text-base shadow-lg transition flex items-center gap-2.5 cursor-pointer border border-[#9AB4FF]/60 transform hover:scale-102"
+                  className="px-5 py-2 rounded-xl bg-[#607EC9] hover:bg-[#1C4C96] text-white font-black text-xs shadow-lg transition flex items-center gap-1.5 cursor-pointer border border-[#9AB4FF]/60 transform hover:scale-102"
                 >
-                  <Users className="w-5 h-5 text-white" />
+                  <Users className="w-3.5 h-3.5 text-white" />
                   <span>{heroFindFriendBtn}</span>
                 </button>
 
@@ -436,25 +484,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       onOpenAuthModal('signup');
                     }
                   }}
-                  className="px-6 py-3.5 rounded-2xl bg-[#000035]/80 hover:bg-[#062863] text-white border border-[#607EC9] font-extrabold text-sm sm:text-base shadow-sm transition flex items-center gap-2 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-[#000035]/80 hover:bg-[#062863] text-white border border-[#607EC9] font-extrabold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>{heroStartLivingBtn}</span>
-                  <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
+                  <ArrowRight className="w-3.5 h-3.5 text-[#9AB4FF]" />
                 </button>
               </div>
 
               {/* Trust & Key Features Badges */}
-              <div className="pt-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs font-bold text-[#9AB4FF]">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div className="pt-1.5 grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px] sm:text-[11px] font-bold text-[#9AB4FF]">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
                   <span>{t.badge100Native}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
                   <span>{t.badge30MinMeet}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
                   <span>{t.badgeAiCorrection}</span>
                 </div>
               </div>
@@ -473,93 +521,95 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       </section>
 
       {/* 3. The Philosophy Section */}
-      <section className="py-16 sm:py-24 bg-[#000035] border-t border-[#1C4C96]/50" id="philosophy">
+      <section className="py-12 sm:py-16 bg-[#000035] border-t border-[#1C4C96]/50" id="philosophy">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto space-y-4">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1C4C96]/60 border border-[#9AB4FF]/50 text-[#9AB4FF] text-xs sm:text-sm font-bold">
-              <Heart className="w-4 h-4 text-rose-400 fill-rose-400" />
+          <div className="text-center max-w-3xl mx-auto space-y-3">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1C4C96]/60 border border-[#9AB4FF]/50 text-[#9AB4FF] text-[11px] font-bold">
+              <Heart className="w-3.5 h-3.5 text-rose-400 fill-rose-400" />
               <span>{philosophyBadge}</span>
             </div>
 
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tracking-tight">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight">
               {philosophyHeading1}{' '}
               <span className="text-[#9AB4FF] block sm:inline">
                 {philosophyHeading2}
               </span>
             </h2>
 
-            <p className="text-base sm:text-lg text-blue-100 font-normal leading-relaxed">
+            <p className="text-xs sm:text-sm text-blue-100 font-normal leading-relaxed">
               {philosophySubheading}
             </p>
           </div>
 
-          {/* 3 Pillars Cards */}
-          <div className="mt-14 grid grid-cols-1 md:grid-cols-3 gap-8">
+          {/* 3 Pillars Cards (Scaled to 80%) */}
+          <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-5">
             {/* Pillar 1 */}
-            <div className="bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-3xl p-7 border border-[#607EC9]/50 shadow-xl space-y-4 hover:border-[#9AB4FF] transition flex flex-col justify-between">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#1C4C96] text-[#9AB4FF] border border-[#9AB4FF]/40 flex items-center justify-center font-black text-lg shadow-xs">
+            <div className="bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-2xl p-5 border border-[#607EC9]/50 shadow-xl space-y-3 hover:border-[#9AB4FF] transition flex flex-col justify-between">
+              <div className="space-y-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#1C4C96] text-[#9AB4FF] border border-[#9AB4FF]/40 flex items-center justify-center font-black text-sm shadow-xs">
                   1
                 </div>
-                <h3 className="text-xl font-extrabold text-white">
+                <h3 className="text-base font-extrabold text-white">
                   {philosophyPillar1Title}
                 </h3>
-                <p className="text-sm text-blue-100/90 leading-relaxed">
+                <p className="text-xs text-blue-100/90 leading-relaxed">
                   {philosophyPillar1Desc}
                 </p>
               </div>
-              <div className="p-3 bg-[#000035]/80 rounded-xl border border-[#607EC9]/40 text-xs font-bold text-[#9AB4FF]">
+              <div className="p-2.5 bg-[#000035]/80 rounded-lg border border-[#607EC9]/40 text-[11px] font-bold text-[#9AB4FF]">
                 {philosophyPillar1Tag}
               </div>
             </div>
 
             {/* Pillar 2 */}
-            <div className="bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-3xl p-7 border border-[#607EC9]/50 shadow-xl space-y-4 hover:border-[#9AB4FF] transition flex flex-col justify-between">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#1C4C96] text-[#9AB4FF] border border-[#9AB4FF]/40 flex items-center justify-center font-black text-lg shadow-xs">
+            <div className="bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-2xl p-5 border border-[#607EC9]/50 shadow-xl space-y-3 hover:border-[#9AB4FF] transition flex flex-col justify-between">
+              <div className="space-y-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#1C4C96] text-[#9AB4FF] border border-[#9AB4FF]/40 flex items-center justify-center font-black text-sm shadow-xs">
                   2
                 </div>
-                <h3 className="text-xl font-extrabold text-white">
+                <h3 className="text-base font-extrabold text-white">
                   {philosophyPillar2Title}
                 </h3>
-                <p className="text-sm text-blue-100/90 leading-relaxed">
+                <p className="text-xs text-blue-100/90 leading-relaxed">
                   {philosophyPillar2Desc}
                 </p>
               </div>
-              <div className="p-3 bg-[#000035]/80 rounded-xl border border-[#607EC9]/40 text-xs font-bold text-emerald-400">
+              <div className="p-2.5 bg-[#000035]/80 rounded-lg border border-[#607EC9]/40 text-[11px] font-bold text-emerald-400">
                 {philosophyPillar2Tag}
               </div>
             </div>
 
             {/* Pillar 3 */}
-            <div className="bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-3xl p-7 border border-[#607EC9]/50 shadow-xl space-y-4 hover:border-[#9AB4FF] transition flex flex-col justify-between">
-              <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#1C4C96] text-[#9AB4FF] border border-[#9AB4FF]/40 flex items-center justify-center font-black text-lg shadow-xs">
+            <div className="bg-gradient-to-br from-[#062863]/90 via-[#000035] to-[#1C4C96]/60 rounded-2xl p-5 border border-[#607EC9]/50 shadow-xl space-y-3 hover:border-[#9AB4FF] transition flex flex-col justify-between">
+              <div className="space-y-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#1C4C96] text-[#9AB4FF] border border-[#9AB4FF]/40 flex items-center justify-center font-black text-sm shadow-xs">
                   3
                 </div>
-                <h3 className="text-xl font-extrabold text-white">
+                <h3 className="text-base font-extrabold text-white">
                   {philosophyPillar3Title}
                 </h3>
-                <p className="text-sm text-blue-100/90 leading-relaxed">
+                <p className="text-xs text-blue-100/90 leading-relaxed">
                   {philosophyPillar3Desc}
                 </p>
               </div>
-              <div className="p-3 bg-[#000035]/80 rounded-xl border border-[#607EC9]/40 text-xs font-bold text-[#F4CA54]">
+              <div className="p-2.5 bg-[#000035]/80 rounded-lg border border-[#607EC9]/40 text-[11px] font-bold text-[#F4CA54]">
                 {philosophyPillar3Tag}
               </div>
+            </div>
+          </div>
+
+          {/* Bottom Transition Banner to Next Section */}
+          <div className="mt-10 text-center">
+            <div className="inline-block bg-[#000035] px-6 py-2.5 rounded-xl border border-[#607EC9]/60 shadow-lg">
+              <h3 className="text-lg sm:text-xl font-black text-white tracking-tight">
+                {isPt ? 'Sua jornada, passo a passo!' : 'Your journey, step by step!'}
+              </h3>
             </div>
           </div>
         </div>
       </section>
 
-      {/* 4. Interactive English Moments Showcase */}
-      <EnglishMomentsShowcase
-        currentLanguage={currentLanguage}
-        onExploreRoutines={onGoToDashboard}
-        onFindTutors={() => scrollToSection('find-native-friend')}
-      />
-
-      {/* 5. Find your Native Friend Section */}
+      {/* 4. Find your Native Friend Section */}
       <FindTutorsSection
         currentLanguage={currentLanguage}
         tutors={tutors}
@@ -571,18 +621,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       />
 
       {/* 6. Become a Native Friend Callout Banner */}
-      <section className="py-16 bg-[#000035] text-white border-t border-[#1C4C96]/50">
+      <section className="py-12 bg-[#000035] text-white border-t border-[#1C4C96]/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="bg-gradient-to-r from-[#062863] via-[#000035] to-[#1C4C96] rounded-3xl p-8 sm:p-12 border border-[#607EC9]/50 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-8">
-            <div className="space-y-4 max-w-2xl text-left">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1C4C96]/80 text-[#9AB4FF] text-xs font-bold border border-[#9AB4FF]/40">
-                <Globe className="w-3.5 h-3.5 text-[#9AB4FF]" />
+          <div className="bg-gradient-to-r from-[#062863] via-[#000035] to-[#1C4C96] rounded-2xl p-6 sm:p-9 border border-[#607EC9]/50 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-6">
+            <div className="space-y-3 max-w-2xl text-left">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#1C4C96]/80 text-[#9AB4FF] text-[11px] font-bold border border-[#9AB4FF]/40">
+                <Globe className="w-3 h-3 text-[#9AB4FF]" />
                 <span>{t.forNativeSpeakersBadge}</span>
               </span>
-              <h2 className="text-3xl sm:text-4xl font-black tracking-tight text-white">
+              <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
                 {t.becomeTutorBannerTitle}
               </h2>
-              <p className="text-sm sm:text-base text-blue-100 leading-relaxed font-normal">
+              <p className="text-xs sm:text-[13px] text-blue-100 leading-relaxed font-normal">
                 {t.becomeTutorBannerDesc}
               </p>
             </div>
@@ -590,7 +640,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <button
               type="button"
               onClick={onOpenBecomeTutorModal}
-              className="px-8 py-4 rounded-2xl bg-[#607EC9] hover:bg-[#1C4C96] text-white font-black text-sm sm:text-base shadow-xl transition cursor-pointer shrink-0 border border-[#9AB4FF]/60"
+              className="px-6 py-2.5 rounded-xl bg-[#607EC9] hover:bg-[#1C4C96] text-white font-black text-xs sm:text-sm shadow-xl transition cursor-pointer shrink-0 border border-[#9AB4FF]/60"
             >
               {t.applyAsTutorBtn}
             </button>
@@ -619,13 +669,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => scrollToSection('english-moments')}
-                className="hover:text-white cursor-pointer transition"
-              >
-                {t.exploreMoments}
-              </button>
-              <button
-                type="button"
                 onClick={onOpenBecomeTutorModal}
                 className="hover:text-white cursor-pointer transition"
               >
@@ -637,6 +680,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 className="hover:text-white cursor-pointer transition"
               >
                 {t.studentAccess}
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenAuthModal('login', 'admin')}
+                className="hover:text-white cursor-pointer transition flex items-center gap-1 text-[#F4CA54]"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>{isEn ? 'Admin Access' : 'Acesso Administrador'}</span>
               </button>
             </div>
           </div>

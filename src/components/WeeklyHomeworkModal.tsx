@@ -39,25 +39,23 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   onSubmitToTeacher,
   currentLanguage,
 }) => {
-  if (!isOpen) return null;
-
   const isEn = currentLanguage === 'en';
 
   const [activeTab, setActiveTab] = useState<'overview' | 'matching' | 'fill' | 'writing' | 'reading' | 'results'>(
-    homework.isCompleted ? 'results' : 'overview'
+    homework?.isCompleted ? 'results' : 'overview'
   );
 
   const [matchingAnswers, setMatchingAnswers] = useState<Record<string, string>>(
-    homework.studentAnswers?.matching || {}
+    homework?.studentAnswers?.matching || {}
   );
   const [fillAnswers, setFillAnswers] = useState<Record<string, string>>(
-    homework.studentAnswers?.fillInBlanks || {}
+    homework?.studentAnswers?.fillInBlanks || {}
   );
   const [sentenceAnswers, setSentenceAnswers] = useState<Record<string, string>>(
-    homework.studentAnswers?.sentences || {}
+    homework?.studentAnswers?.sentences || {}
   );
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>(
-    homework.studentAnswers?.quizAnswers || {}
+    homework?.studentAnswers?.quizAnswers || {}
   );
 
   const [sentenceFeedbacks, setSentenceFeedbacks] = useState<Record<string, any>>({});
@@ -172,6 +170,8 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     );
     setTimeout(() => setSubmittedFeedbackToast(null), 4000);
   };
+
+  if (!isOpen || !homework) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0F172A]/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto print:p-0 print:bg-white print:fixed-none">

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Lock,
@@ -12,9 +12,73 @@ import {
   Compass,
   HeartHandshake,
   Loader2,
+  Clock,
+  ShieldCheck,
+  Globe,
+  DollarSign,
+  Video,
+  KeyRound,
 } from 'lucide-react';
-import { GoogleAccount, EnglishLevel, Language, UserRole } from '../types';
+import {
+  GoogleAccount,
+  EnglishLevel,
+  Language,
+  UserRole,
+  UserProfile,
+  NativeFriendTutor,
+} from '../types';
 import { BrandLogo } from './BrandLogo';
+import { GoogleSignInModal } from './GoogleSignInModal';
+import { ImageUploadInput } from './ImageUploadInput';
+import { firebaseSignInWithEmail, firebaseSignUpWithEmail } from '../utils/auth';
+
+const TIME_OPTIONS = [
+  { value: '06:00', label: '06:00 AM' },
+  { value: '06:30', label: '06:30 AM' },
+  { value: '07:00', label: '07:00 AM' },
+  { value: '07:30', label: '07:30 AM' },
+  { value: '08:00', label: '08:00 AM' },
+  { value: '08:30', label: '08:30 AM' },
+  { value: '09:00', label: '09:00 AM' },
+  { value: '09:30', label: '09:30 AM' },
+  { value: '10:00', label: '10:00 AM' },
+  { value: '10:30', label: '10:30 AM' },
+  { value: '11:00', label: '11:00 AM' },
+  { value: '11:30', label: '11:30 AM' },
+  { value: '12:00', label: '12:00 PM' },
+  { value: '12:30', label: '12:30 PM' },
+  { value: '13:00', label: '01:00 PM' },
+  { value: '13:30', label: '01:30 PM' },
+  { value: '14:00', label: '02:00 PM' },
+  { value: '14:30', label: '02:30 PM' },
+  { value: '15:00', label: '03:00 PM' },
+  { value: '15:30', label: '03:30 PM' },
+  { value: '16:00', label: '04:00 PM' },
+  { value: '16:30', label: '04:30 PM' },
+  { value: '17:00', label: '05:00 PM' },
+  { value: '17:30', label: '05:30 PM' },
+  { value: '18:00', label: '06:00 PM' },
+  { value: '18:30', label: '06:30 PM' },
+  { value: '19:00', label: '07:00 PM' },
+  { value: '19:30', label: '07:30 PM' },
+  { value: '20:00', label: '08:00 PM' },
+  { value: '20:30', label: '08:30 PM' },
+  { value: '21:00', label: '09:00 PM' },
+  { value: '21:30', label: '09:30 PM' },
+  { value: '22:00', label: '10:00 PM' },
+  { value: '22:30', label: '10:30 PM' },
+  { value: '23:00', label: '11:00 PM' },
+];
+
+const COUNTRY_OPTIONS = [
+  { name: 'United States', flag: '🇺🇸', code: 'US', defaultAccent: 'North American' },
+  { name: 'Canada', flag: '🇨🇦', code: 'CA', defaultAccent: 'North American' },
+  { name: 'United Kingdom', flag: '🇬🇧', code: 'GB', defaultAccent: 'British' },
+  { name: 'Australia', flag: '🇦🇺', code: 'AU', defaultAccent: 'Australian' },
+  { name: 'Ireland', flag: '🇮🇪', code: 'IE', defaultAccent: 'Irish' },
+  { name: 'New Zealand', flag: '🇳🇿', code: 'NZ', defaultAccent: 'Neutral' },
+  { name: 'South Africa', flag: '🇿🇦', code: 'ZA', defaultAccent: 'South African' },
+];
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -22,8 +86,134 @@ interface AuthModalProps {
   initialMode?: 'login' | 'signup';
   initialRole?: UserRole;
   currentLanguage: Language;
-  onLoginSuccess: (account: GoogleAccount) => void;
+  onLoginSuccess: (
+    account: GoogleAccount,
+    initialProfile?: Partial<UserProfile>,
+    tutorData?: NativeFriendTutor
+  ) => void;
 }
+
+const ROLE_LABELS: Record<
+  Language,
+  {
+    student: string;
+    studentDesc: string;
+    teacher: string;
+    teacherDesc: string;
+    admin: string;
+    adminDesc: string;
+    accessAs: string;
+  }
+> = {
+  pt: {
+    student: 'Seu acesso',
+    studentDesc: 'Vivendo o inglês no dia a dia',
+    teacher: 'Amigo Nativo',
+    teacherDesc: 'Mentoria e conversação real',
+    admin: 'Administrador',
+    adminDesc: 'Painel & aprovações',
+    accessAs: 'Selecione seu perfil:',
+  },
+  en: {
+    student: 'Student Access',
+    studentDesc: 'Living English every day',
+    teacher: 'Native Friend',
+    teacherDesc: 'Mentoring & Conversation',
+    admin: 'Administrator',
+    adminDesc: 'Panel & approvals',
+    accessAs: 'Select your role:',
+  },
+  es: {
+    student: 'Tu acceso',
+    studentDesc: 'Viviendo el inglés día a día',
+    teacher: 'Amigo Nativo',
+    teacherDesc: 'Mentoría y conversación real',
+    admin: 'Administrador',
+    adminDesc: 'Panel y aprobaciones',
+    accessAs: 'Selecciona tu perfil:',
+  },
+  fr: {
+    student: 'Votre accès',
+    studentDesc: "Vivre l'anglais au quotidien",
+    teacher: 'Ami Natif',
+    teacherDesc: 'Mentorat et conversation réelle',
+    admin: 'Administrateur',
+    adminDesc: 'Gestion et approbations',
+    accessAs: 'Sélectionnez votre profil :',
+  },
+  de: {
+    student: 'Ihr Zugang',
+    studentDesc: 'Englisch im Alltag leben',
+    teacher: 'Muttersprachler',
+    teacherDesc: 'Mentoring & Konversation',
+    admin: 'Administrator',
+    adminDesc: 'Verwaltung & Freigaben',
+    accessAs: 'Zugriffstyp auswählen:',
+  },
+  it: {
+    student: 'Il tuo accesso',
+    studentDesc: "Vivere l'inglese ogni giorno",
+    teacher: 'Amico Madrelingua',
+    teacherDesc: 'Mentoring e conversazione reale',
+    admin: 'Amministratore',
+    adminDesc: 'Pannello e approvazioni',
+    accessAs: 'Seleziona profilo:',
+  },
+  ja: {
+    student: 'あなたのアクセス',
+    studentDesc: '日常生活で英語を生きる',
+    teacher: 'ネイティブの友達',
+    teacherDesc: 'メンタリング＆リアル会話',
+    admin: '管理者',
+    adminDesc: '管理パネルと承認',
+    accessAs: 'アクセス種別を選択:',
+  },
+  ko: {
+    student: '나의 접속',
+    studentDesc: '일상 속에서 영어를 실천',
+    teacher: '원어민 친구',
+    teacherDesc: '멘토링 및 실전 대화',
+    admin: '관리자',
+    adminDesc: '관리 패널 및 승인',
+    accessAs: '접속 유형 선택:',
+  },
+  zh: {
+    student: '您的访问',
+    studentDesc: '在日常生活中体验英语',
+    teacher: '母语朋友',
+    teacherDesc: '导师指导与真实对话',
+    admin: '管理员',
+    adminDesc: '管理面板与审批',
+    accessAs: '请选择身份：',
+  },
+  ru: {
+    student: 'Ваш доступ',
+    studentDesc: 'Жизнь на английском каждый день',
+    teacher: 'Носитель языка',
+    teacherDesc: 'Менторство и живой диалог',
+    admin: 'Администратор',
+    adminDesc: 'Панель и одобрения',
+    accessAs: 'Войти как:',
+  },
+  ar: {
+    student: 'وصولك',
+    studentDesc: 'عِش الإنجليزية كل يوم',
+    teacher: 'صديق ناطق أصلي',
+    teacherDesc: 'إرشاد ومحادثة حقيقية',
+    admin: 'المشرف',
+    adminDesc: 'لوحة الإدارة والموافقات',
+    accessAs: 'اختر حسابك:',
+  },
+  tr: {
+    student: 'Erişiminiz',
+    studentDesc: 'Her gün İngilizceyi yaşayın',
+    teacher: 'Anadili İngilizce Olan Arkadaş',
+    teacherDesc: 'Mentörlük ve gerçek sohbet',
+    admin: 'Yönetici',
+    adminDesc: 'Yönetim ve onaylar',
+    accessAs: 'Profil seçin:',
+  },
+};
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
@@ -34,67 +224,166 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onLoginSuccess,
 }) => {
   const isEn = currentLanguage === 'en';
+  const roleText = ROLE_LABELS[currentLanguage] || ROLE_LABELS.pt;
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
-  const [role, setRole] = useState<UserRole>(initialRole); // 'student' = Praticante, 'teacher' = Amigo Nativo
+  const [role, setRole] = useState<UserRole>(initialRole);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+
+  // Student specific state
   const [level, setLevel] = useState<EnglishLevel>(EnglishLevel.BEGINNER);
-  const [learningGoal, setLearningGoal] = useState('English for everyday life & work');
+  const [learningGoal, setLearningGoal] = useState('');
+  const [routineVideoTime, setRoutineVideoTime] = useState('');
+  const [routineAudioTime, setRoutineAudioTime] = useState('');
+  const [dailyPhraseTime, setDailyPhraseTime] = useState('');
+
+  // Tutor (Amigo Nativo) specific state
+  const [selectedCountry, setSelectedCountry] = useState('');
+  const [countryCode, setCountryCode] = useState('');
+  const [countryFlag, setCountryFlag] = useState('');
+  const [accent, setAccent] = useState('');
+  const [headline, setHeadline] = useState('');
+  const [bio, setBio] = useState('');
+  const [priceUsd, setPriceUsd] = useState<number | ''>('');
+  const [meetUrl, setMeetUrl] = useState('');
+  const [avatar, setAvatar] = useState('');
+  const [videoIntroUrl, setVideoIntroUrl] = useState('');
+  const [specialties, setSpecialties] = useState('');
+
+  // Admin status check state
+  const [hasExistingAdmin, setHasExistingAdmin] = useState(false);
+  const [adminEmail, setAdminEmail] = useState('');
+
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showGoogleSignIn, setShowGoogleSignIn] = useState(false);
+
+  // Reset password mode
+  const [isResetMode, setIsResetMode] = useState(false);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [resetSuccess, setResetSuccess] = useState('');
+  const [isSubmittingReset, setIsSubmittingReset] = useState(false);
+
+  // Duplicate checks state for realtime feedback
+  const [emailWarning, setEmailWarning] = useState('');
+  const [nameWarning, setNameWarning] = useState('');
+  const [isCheckingEmail, setIsCheckingEmail] = useState(false);
+  const [isCheckingName, setIsCheckingName] = useState(false);
+
+  const checkDuplicateEmail = async (emailToCheck: string) => {
+    const clean = emailToCheck.trim().toLowerCase();
+    if (!clean || !clean.includes('@') || mode !== 'signup') {
+      setEmailWarning('');
+      return;
+    }
+    setIsCheckingEmail(true);
+    try {
+      const res = await fetch(`/api/auth/check-user?email=${encodeURIComponent(clean)}&role=${role}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.emailExists) {
+          const roleLabel = data.existingRole === 'teacher' ? 'Amigo Nativo' : data.existingRole === 'admin' ? 'Administrador' : 'aluno(a)';
+          setEmailWarning(
+            isEn
+              ? `This email (${clean}) is already registered in the system as ${roleLabel}. Please log in.`
+              : `Este e-mail (${clean}) já está cadastrado no sistema como ${roleLabel}. Por favor, faça login.`
+          );
+        } else {
+          setEmailWarning('');
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsCheckingEmail(false);
+    }
+  };
+
+  const checkDuplicateName = async (nameToCheck: string) => {
+    const clean = nameToCheck.trim();
+    if (!clean || clean.length < 3 || mode !== 'signup') {
+      setNameWarning('');
+      return;
+    }
+    setIsCheckingName(true);
+    try {
+      const res = await fetch(`/api/auth/check-user?name=${encodeURIComponent(clean)}&role=${role}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.nameExists) {
+          setNameWarning(
+            isEn
+              ? `A user with the name "${clean}" already exists. Please include your full surname to ensure unique identification.`
+              : `Já existe um cadastro com o nome "${clean}". Por favor, informe seu nome completo e sobrenome para garantir identificação individual.`
+          );
+        } else {
+          setNameWarning('');
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsCheckingName(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      setMode(initialMode);
+      setRole(initialRole);
+      setErrorMsg('');
+      setSuccessMsg('');
+
+      // Check if admin already exists to guide user properly
+      fetch('/api/auth/admin-status')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) {
+            setHasExistingAdmin(!!data.hasAdmin);
+            setAdminEmail(data.adminEmail || '');
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOpen, initialMode, initialRole]);
+
+  // Support ESC key to dismiss registration/login modal easily
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
-  const handleQuickLogin = (demoAccount: GoogleAccount) => {
-    onLoginSuccess(demoAccount);
-    onClose();
+  const handleCountryChange = (countryName: string) => {
+    if (!countryName) {
+      setSelectedCountry('');
+      setCountryCode('');
+      setCountryFlag('');
+      setAccent('');
+      return;
+    }
+    const found = COUNTRY_OPTIONS.find((c) => c.name === countryName);
+    if (found) {
+      setSelectedCountry(found.name);
+      setCountryCode(found.code);
+      setCountryFlag(found.flag);
+      setAccent(found.defaultAccent);
+    }
   };
 
-  const handleGoogleLogin = async () => {
-    setIsLoading(true);
-    setErrorMsg('');
-    try {
-      const mockGoogleUser = {
-        name: role === 'teacher' ? 'Charles Lambert' : 'Regina Helena',
-        email: role === 'teacher' ? 'charles.lambert1939@gmail.com' : 'reginahelena1980@gmail.com',
-        role,
-        picture:
-          role === 'teacher'
-            ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
-            : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      };
-
-      const res = await fetch('/api/auth/google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mockGoogleUser),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        onLoginSuccess(data.account);
-      } else {
-        onLoginSuccess({
-          email: mockGoogleUser.email,
-          name: mockGoogleUser.name,
-          role,
-          picture: mockGoogleUser.picture,
-        });
-      }
-      onClose();
-    } catch (err) {
-      onLoginSuccess({
-        email: role === 'teacher' ? 'charles.lambert1939@gmail.com' : 'reginahelena1980@gmail.com',
-        name: role === 'teacher' ? 'Charles Lambert' : 'Regina Helena',
-        role,
-      });
-      onClose();
-    } finally {
-      setIsLoading(false);
-    }
+  const handleGoogleLogin = () => {
+    setShowGoogleSignIn(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -107,43 +396,158 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
+    const cleanEmail = email.toLowerCase().trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setErrorMsg(
+        isEn
+          ? 'Please provide a valid email address (e.g. user@domain.com).'
+          : 'Por favor, informe um endereço de e-mail válido (ex: seu.nome@dominio.com).'
+      );
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMsg(
+        isEn ? 'Password must be at least 6 characters long.' : 'A senha deve conter no mínimo 6 caracteres.'
+      );
+      return;
+    }
+
     if (mode === 'signup' && !name) {
       setErrorMsg(isEn ? 'Please enter your full name' : 'Por favor, informe o seu nome completo');
+      return;
+    }
+
+    if (mode === 'signup' && role === 'admin' && hasExistingAdmin) {
+      setErrorMsg(
+        isEn
+          ? 'An administrator account already exists. Only 1 administrator is permitted.'
+          : 'Já existe um Administrador cadastrado na plataforma. Só é permitido um único Administrador. Acesse pelo Login.'
+      );
+      return;
+    }
+
+    if (mode === 'signup' && (emailWarning || nameWarning)) {
+      setErrorMsg(emailWarning || nameWarning);
       return;
     }
 
     setIsLoading(true);
 
     try {
-      const cleanEmail = email.toLowerCase().trim();
-
       if (mode === 'signup') {
+        // Attempt Firebase Auth account creation to generate real UID
+        let firebaseUid: string | undefined;
+        try {
+          const fbAuth = await firebaseSignUpWithEmail(cleanEmail, password);
+          firebaseUid = fbAuth.user.uid;
+        } catch (fbErr: any) {
+          // If already exists in Firebase Auth, proceed to backend verification
+          console.log('Firebase signup notice:', fbErr?.message || fbErr);
+        }
+
+        const payload: Record<string, any> = {
+          uid: firebaseUid,
+          name,
+          email: cleanEmail,
+          password,
+          role,
+        };
+
+        if (role === 'student') {
+          payload.englishLevel = level;
+          payload.learningGoal = learningGoal;
+          payload.routineVideoTime = routineVideoTime;
+          payload.routineAudioTime = routineAudioTime;
+          payload.dailyPhraseTime = dailyPhraseTime;
+        } else if (role === 'teacher') {
+          payload.avatar = avatar;
+          payload.country = selectedCountry;
+          payload.countryCode = countryCode;
+          payload.flag = countryFlag;
+          payload.accent = accent;
+          payload.headline = headline;
+          payload.bio = bio;
+          payload.pricePerSessionUsd = Number(priceUsd) || 20;
+          payload.meetUrl = meetUrl;
+          payload.videoIntroUrl = videoIntroUrl;
+          payload.specialties = specialties
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        }
+
         const res = await fetch('/api/auth/signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name,
-            email: cleanEmail,
-            password,
-            role,
-            englishLevel: level,
-            learningGoal,
-          }),
+          body: JSON.stringify(payload),
         });
 
         if (res.ok) {
           const data = await res.json();
-          setSuccessMsg(isEn ? 'Account created successfully!' : 'Conta criada com sucesso!');
-          setTimeout(() => {
-            onLoginSuccess(data.account);
-            onClose();
-          }, 600);
+          if (role === 'teacher') {
+            setSuccessMsg(
+              isEn
+                ? 'Native Friend account registered! Profile saved and pending Admin approval.'
+                : 'Cadastro de Amigo Nativo realizado! Seus dados foram carregados no seu perfil e aguardam aprovação do Administrador.'
+            );
+            setTimeout(() => {
+              onLoginSuccess(data.account, undefined, data.tutor);
+              onClose();
+            }, 800);
+          } else if (role === 'admin') {
+            setSuccessMsg(isEn ? 'Administrator registered successfully!' : 'Administrador cadastrado com sucesso!');
+            setHasExistingAdmin(true);
+            setTimeout(() => {
+              onLoginSuccess(data.account);
+              onClose();
+            }, 800);
+          } else {
+            setSuccessMsg(isEn ? 'Student account created successfully!' : 'Conta de aluno(a) criada com sucesso!');
+            const builtProfile: Partial<UserProfile> = data.profile || {
+              name,
+              email: cleanEmail,
+              level,
+              learningGoal,
+              routineVideoTime,
+              routineAudioTime,
+              dailyPhraseTime,
+            };
+            setTimeout(() => {
+              onLoginSuccess(data.account, builtProfile);
+              onClose();
+            }, 600);
+          }
         } else {
           const errData = await res.json().catch(() => ({}));
-          setErrorMsg(errData.error || (isEn ? 'Failed to create account' : 'Erro ao criar conta'));
+          if (res.status === 409) {
+            setErrorMsg(
+              errData.error ||
+                (isEn
+                  ? 'This email is already registered. Please log in.'
+                  : `Este e-mail (${cleanEmail}) já está cadastrado no sistema como ${
+                      role === 'teacher' ? 'Amigo Nativo' : role === 'admin' ? 'Administrador' : 'aluno(a)'
+                    }. Por favor, faça login ou use outro e-mail.`)
+            );
+          } else if (res.status === 403) {
+            setErrorMsg(
+              errData.error ||
+                'Já existe um Administrador cadastrado no sistema. Só é permitido um único Administrador.'
+            );
+          } else {
+            setErrorMsg(errData.error || (isEn ? 'Failed to create account' : 'Erro ao criar conta'));
+          }
         }
       } else {
         // Mode === 'login'
+        // Attempt client Firebase Auth sign in to establish real session
+        try {
+          await firebaseSignInWithEmail(cleanEmail, password);
+        } catch {
+          // If not in Firebase Auth yet, backend verification will handle it
+        }
+
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -156,44 +560,79 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         if (res.ok) {
           const data = await res.json();
-          onLoginSuccess(data.account);
+          onLoginSuccess(data.account, data.profile, data.tutor);
           onClose();
         } else {
-          let resolvedRole: UserRole = role;
-          let resolvedName = name || cleanEmail.split('@')[0];
-
-          if (cleanEmail.includes('teacher') || cleanEmail.includes('charles') || cleanEmail.includes('sarah')) {
-            resolvedRole = 'teacher';
-          } else if (cleanEmail.includes('admin') || cleanEmail === 'adm.itissimple@gmail.com') {
-            resolvedRole = 'admin';
-            resolvedName = 'Admin It\'s Simple';
-          }
-
-          onLoginSuccess({
-            email: cleanEmail,
-            name: resolvedName,
-            role: resolvedRole,
-          });
-          onClose();
+          const errData = await res.json().catch(() => ({}));
+          setErrorMsg(
+            errData.error ||
+              (isEn
+                ? 'Invalid email or password. Please verify your credentials or register.'
+                : 'E-mail ou senha incorretos. Verifique suas credenciais ou crie seu cadastro.')
+          );
         }
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Erro de autenticação');
+      setErrorMsg(err.message || 'Erro de conexão com o servidor');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) {
+      setResetError(isEn ? 'Please enter your email.' : 'Por favor, informe seu e-mail.');
+      return;
+    }
+    if (!newPasswordInput || newPasswordInput.length < 4) {
+      setResetError(isEn ? 'Password must be at least 4 characters.' : 'A nova senha deve conter pelo menos 4 caracteres.');
+      return;
+    }
+    setIsSubmittingReset(true);
+    setResetError('');
+    setResetSuccess('');
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase().trim(), newPassword: newPasswordInput }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPassword(newPasswordInput);
+        setResetSuccess(isEn ? 'Password updated! Returning to login...' : 'Senha alterada com sucesso! Retornando ao login...');
+        setTimeout(() => {
+          setIsResetMode(false);
+          setResetSuccess('');
+          setErrorMsg('');
+        }, 1200);
+      } else {
+        setResetError(data.error || (isEn ? 'Failed to reset password.' : 'Erro ao redefinir senha.'));
+      }
+    } catch (err: any) {
+      setResetError(err.message || (isEn ? 'Connection error' : 'Erro de conexão'));
+    } finally {
+      setIsSubmittingReset(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white rounded-3xl max-w-[460px] w-full p-6 sm:p-8 shadow-2xl border border-slate-200 relative my-6 text-[#000035] animate-in fade-in zoom-in duration-150">
         
         {/* Close Button */}
         <button
           type="button"
           onClick={onClose}
-          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition cursor-pointer"
+          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition cursor-pointer z-10"
           aria-label="Close"
+          title="Fechar (Esc)"
         >
           <X className="w-4 h-4" />
         </button>
@@ -243,57 +682,90 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </p>
         </div>
 
-        {/* 🌟 Role Selection Switcher (Praticante vs Amigo Nativo) */}
+        {/* 🌟 Role Selection Switcher (Seu acesso vs Amigo Nativo vs Administrador) */}
         <div className="mb-5 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200">
           <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider text-center mb-1.5">
-            {isEn ? 'I want to access as:' : 'Quero acessar como:'}
+            {roleText.accessAs}
           </p>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               type="button"
-              onClick={() => setRole('student')}
-              className={`p-2.5 rounded-xl text-left transition cursor-pointer flex flex-col justify-between ${
+              onClick={() => {
+                setRole('student');
+                setErrorMsg('');
+              }}
+              className={`p-2 rounded-xl text-left transition cursor-pointer flex flex-col justify-between ${
                 role === 'student'
                   ? 'bg-white text-[#000035] shadow-sm border border-slate-200 ring-1 ring-blue-500/20'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
               }`}
             >
-              <div className="flex items-center gap-1.5 mb-0.5">
+              <div className="flex items-center gap-1 mb-0.5">
                 <Compass
-                  className={`w-4 h-4 ${
+                  className={`w-3.5 h-3.5 shrink-0 ${
                     role === 'student' ? 'text-[#1C4C96]' : 'text-slate-400'
                   }`}
                 />
-                <span className="font-extrabold text-xs sm:text-sm">
-                  {isEn ? 'Practitioner' : 'Praticante'}
+                <span className="font-extrabold text-xs truncate">
+                  {roleText.student}
                 </span>
               </div>
-              <span className="text-[10px] text-slate-500 font-medium leading-tight">
-                {isEn ? 'Living English every day' : 'Vivendo o inglês no dia a dia'}
+              <span className="text-[9px] text-slate-500 font-medium leading-tight truncate">
+                {roleText.studentDesc}
               </span>
             </button>
 
             <button
               type="button"
-              onClick={() => setRole('teacher')}
-              className={`p-2.5 rounded-xl text-left transition cursor-pointer flex flex-col justify-between ${
+              onClick={() => {
+                setRole('teacher');
+                setErrorMsg('');
+              }}
+              className={`p-2 rounded-xl text-left transition cursor-pointer flex flex-col justify-between ${
                 role === 'teacher'
                   ? 'bg-white text-[#000035] shadow-sm border border-slate-200 ring-1 ring-emerald-500/20'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
               }`}
             >
-              <div className="flex items-center gap-1.5 mb-0.5">
+              <div className="flex items-center gap-1 mb-0.5">
                 <HeartHandshake
-                  className={`w-4 h-4 ${
+                  className={`w-3.5 h-3.5 shrink-0 ${
                     role === 'teacher' ? 'text-emerald-600' : 'text-slate-400'
                   }`}
                 />
-                <span className="font-extrabold text-xs sm:text-sm">
-                  {isEn ? 'Native Friend' : 'Amigo Nativo'}
+                <span className="font-extrabold text-xs truncate">
+                  {roleText.teacher}
                 </span>
               </div>
-              <span className="text-[10px] text-slate-500 font-medium leading-tight">
-                {isEn ? 'Mentoring & Conversation' : 'Mentoria e conversação real'}
+              <span className="text-[9px] text-slate-500 font-medium leading-tight truncate">
+                {roleText.teacherDesc}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setRole('admin');
+                setErrorMsg('');
+              }}
+              className={`p-2 rounded-xl text-left transition cursor-pointer flex flex-col justify-between ${
+                role === 'admin'
+                  ? 'bg-white text-[#000035] shadow-sm border border-slate-200 ring-1 ring-amber-500/30'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+              }`}
+            >
+              <div className="flex items-center gap-1 mb-0.5">
+                <ShieldCheck
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    role === 'admin' ? 'text-amber-600' : 'text-slate-400'
+                  }`}
+                />
+                <span className="font-extrabold text-xs truncate">
+                  {roleText.admin}
+                </span>
+              </div>
+              <span className="text-[9px] text-slate-500 font-medium leading-tight truncate">
+                {roleText.adminDesc}
               </span>
             </button>
           </div>
@@ -343,11 +815,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <div className="border-t border-slate-200 w-full" />
         </div>
 
-        {/* Alerts */}
+        {/* Alerts & Existing User Warnings */}
         {errorMsg && (
-          <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
+          <div className="mb-4 p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex flex-col gap-2 shadow-xs animate-in fade-in">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+              <span className="leading-snug">{errorMsg}</span>
+            </div>
+            {(errorMsg.toLowerCase().includes('já está cadastrado') ||
+              errorMsg.toLowerCase().includes('already registered') ||
+              errorMsg.toLowerCase().includes('já existe')) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  setErrorMsg('');
+                }}
+                className="self-start px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition cursor-pointer shadow-xs"
+              >
+                {isEn ? '👉 Click here to Log In' : '👉 Clique aqui para Fazer Login'}
+              </button>
+            )}
           </div>
         )}
 
@@ -358,114 +846,528 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         )}
 
-        {/* 2. Email & Password Form */}
-        <form onSubmit={handleSubmit} className="space-y-3.5">
-          {mode === 'signup' && (
+        {/* Admin Registration Lockout Notice (Single Admin Rule) */}
+        {mode === 'signup' && role === 'admin' && hasExistingAdmin ? (
+          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-extrabold text-xs text-amber-900 mb-1">
+                  {isEn ? 'Administrator Already Configured' : 'Administrador Já Cadastrado'}
+                </h4>
+                <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                  {isEn
+                    ? 'The platform permits only 1 Administrator account. If you are the administrator, please log in with your administrator email and password.'
+                    : 'A plataforma permite apenas 1 único cadastro de Administrador. Se você é o administrador, por favor efetue seu login com e-mail e senha.'}
+                </p>
+                {adminEmail && (
+                  <p className="text-[10px] text-amber-700 mt-1 font-mono">
+                    Admin: {adminEmail}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMode('login');
+                setErrorMsg('');
+              }}
+              className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-xs"
+            >
+              {isEn ? 'Go to Administrator Login' : 'Ir para o Login de Administrador'}
+            </button>
+          </div>
+        ) : isResetMode ? (
+          /* 2. Password Reset Form */
+          <form onSubmit={handleResetPassword} className="space-y-3.5">
+            <div className="text-center mb-2">
+              <div className="inline-flex p-2.5 rounded-full bg-blue-50 text-[#1C4C96] mb-1.5">
+                <KeyRound className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-extrabold text-[#000035]">
+                {isEn ? 'Reset Password' : 'Redefinir Senha'}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isEn
+                  ? 'Enter your registered email and choose a new password.'
+                  : 'Informe seu e-mail cadastrado e digite uma nova senha.'}
+              </p>
+            </div>
+
+            {resetError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            {resetSuccess && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                <Sparkles className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>{resetSuccess}</span>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                {isEn ? 'Full Name' : 'Nome Completo'}
+                {isEn ? 'Email Address' : 'E-mail cadastrado'}
               </label>
               <div className="relative">
-                <User className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
-                  type="text"
+                  type="email"
                   required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={isEn ? 'Your full name' : 'Seu nome completo'}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] focus:border-transparent transition"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="exemplo@gmail.com"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
                 />
               </div>
             </div>
-          )}
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              {isEn ? 'Email or Username' : 'E-mail ou Usuário'}
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder={isEn ? 'name@example.com' : 'seu.email@exemplo.com'}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] focus:border-transparent transition"
-              />
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-bold text-slate-700">
-                {isEn ? 'Password' : 'Senha'}
-              </label>
-              {mode === 'login' && (
-                <button
-                  type="button"
-                  onClick={() => alert(isEn ? 'Password recovery instructions sent to your email.' : 'Instruções de recuperação enviadas para o seu e-mail.')}
-                  className="text-[11px] font-bold text-[#1C4C96] hover:underline cursor-pointer"
-                >
-                  {isEn ? 'Forgot password?' : 'Esqueceu a senha?'}
-                </button>
-              )}
-            </div>
-            <div className="relative">
-              <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] focus:border-transparent transition"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition cursor-pointer"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Sign Up Level Selector (when role is student) */}
-          {mode === 'signup' && role === 'student' && (
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                {isEn ? 'Your Comfort Level in English' : 'Como você se sente com o Inglês?'}
+                {isEn ? 'New Password' : 'Nova Senha'}
               </label>
-              <select
-                value={level}
-                onChange={(e) => setLevel(e.target.value as EnglishLevel)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
-              >
-                <option value={EnglishLevel.BEGINNER}>{isEn ? 'Beginner (Iniciando na prática)' : 'Iniciante (Começando agora)'}</option>
-                <option value={EnglishLevel.INTERMEDIATE}>{isEn ? 'Intermediate (Entendo mas travo)' : 'Intermediário (Entendo mas quero destravar)'}</option>
-                <option value={EnglishLevel.ADVANCED}>{isEn ? 'Advanced (Buscando naturalidade)' : 'Avançado (Buscando naturalidade diária)'}</option>
-              </select>
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full mt-2 py-3 px-4 bg-[#000035] hover:bg-[#062863] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-[0.99]"
-          >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin text-white" />
-            ) : (
-              <LogIn className="w-4 h-4" />
+            <div className="pt-2 flex flex-col gap-2">
+              <button
+                type="submit"
+                disabled={isSubmittingReset}
+                className="w-full py-3 px-4 bg-[#000035] hover:bg-[#062863] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isSubmittingReset ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <KeyRound className="w-4 h-4" />
+                )}
+                <span>{isEn ? 'Save New Password' : 'Salvar Nova Senha'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResetMode(false);
+                  setResetError('');
+                  setResetSuccess('');
+                }}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                {isEn ? '← Back to Login' : '← Voltar ao Login'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          /* 2. Email & Password Form */
+          <form onSubmit={handleSubmit} className="space-y-3.5">
+            {mode === 'signup' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {isEn ? 'Full Name' : 'Nome Completo'}
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    required
+                    value={name}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      if (nameWarning) setNameWarning('');
+                    }}
+                    onBlur={() => checkDuplicateName(name)}
+                    placeholder={
+                      role === 'admin'
+                        ? isEn ? 'Administrator Name' : 'Nome do Administrador'
+                        : role === 'teacher'
+                        ? isEn ? 'Native Friend Name' : 'Nome do Amigo Nativo'
+                        : isEn ? 'Your full name' : 'Seu nome completo'
+                    }
+                    className={`w-full pl-10 pr-4 py-2.5 bg-slate-50 border rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:border-transparent transition ${
+                      nameWarning
+                        ? 'border-amber-400 ring-2 ring-amber-400/20'
+                        : 'border-slate-300 focus:ring-[#1C4C96]'
+                    }`}
+                  />
+                </div>
+                {nameWarning && (
+                  <p className="mt-1 text-[11px] font-semibold text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-200 animate-in fade-in">
+                    ⚠️ {nameWarning}
+                  </p>
+                )}
+              </div>
             )}
-            <span>
-              {mode === 'login'
-                ? isEn ? 'Log in' : 'Entrar'
-                : isEn ? 'Create account' : 'Criar minha conta'}
-            </span>
-          </button>
-        </form>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {isEn ? 'Email' : 'E-mail'}
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (emailWarning) setEmailWarning('');
+                  }}
+                  onBlur={() => checkDuplicateEmail(email)}
+                  placeholder={
+                    role === 'admin'
+                      ? 'adm.itissimple@gmail.com'
+                      : isEn ? 'name@example.com' : 'seu.email@exemplo.com'
+                  }
+                  className={`w-full pl-10 pr-4 py-2.5 bg-slate-50 border rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:border-transparent transition ${
+                    emailWarning
+                      ? 'border-rose-400 ring-2 ring-rose-400/20'
+                      : 'border-slate-300 focus:ring-[#1C4C96]'
+                  }`}
+                />
+              </div>
+              {emailWarning && (
+                <div className="mt-1 text-[11px] font-semibold text-rose-700 bg-rose-50 p-2 rounded-lg border border-rose-200 flex items-center justify-between gap-2 animate-in fade-in">
+                  <span>⚠️ {emailWarning}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('login');
+                      setEmailWarning('');
+                      setErrorMsg('');
+                    }}
+                    className="px-2 py-0.5 bg-rose-600 text-white rounded text-[10px] font-bold hover:bg-rose-700 cursor-pointer shrink-0"
+                  >
+                    {isEn ? 'Log in' : 'Fazer login'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700">
+                  {isEn ? 'Password' : 'Senha'}
+                </label>
+                {mode === 'login' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsResetMode(true);
+                      setResetError('');
+                      setResetSuccess('');
+                      setNewPasswordInput('');
+                    }}
+                    className="text-[11px] font-bold text-[#1C4C96] hover:underline cursor-pointer"
+                  >
+                    {isEn ? 'Forgot password?' : 'Esqueceu a senha?'}
+                  </button>
+                )}
+              </div>
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] focus:border-transparent transition"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* 🎓 Sign Up: Student Level & Routine Selectors */}
+            {mode === 'signup' && role === 'student' && (
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {isEn ? 'Your Comfort Level in English' : 'Como você se sente com o Inglês?'}
+                  </label>
+                  <select
+                    value={level}
+                    onChange={(e) => setLevel(e.target.value as EnglishLevel)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
+                  >
+                    <option value={EnglishLevel.BEGINNER}>
+                      {isEn ? 'Beginner (Starting now)' : 'Iniciante (Começando agora)'}
+                    </option>
+                    <option value={EnglishLevel.INTERMEDIATE}>
+                      {isEn ? 'Intermediate (Understand but want fluency)' : 'Intermediário (Entendo mas quero destravar)'}
+                    </option>
+                    <option value={EnglishLevel.ADVANCED}>
+                      {isEn ? 'Advanced (Seeking daily naturalness)' : 'Avançado (Buscando naturalidade diária)'}
+                    </option>
+                  </select>
+                </div>
+
+                {/* Scheduled Routine Times */}
+                <div className="p-3.5 bg-blue-50/70 rounded-2xl border border-[#607EC9]/30 space-y-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-black text-[#062863]">
+                    <Clock className="w-3.5 h-3.5 text-[#1C4C96]" />
+                    <span>{isEn ? 'Daily Routine Scheduled Times' : 'Horários Previstos da Sua Rotina'}</span>
+                  </div>
+                  <p className="text-[11px] text-[#607EC9] leading-tight">
+                    {isEn
+                      ? 'Default times for your daily activities (customizable anytime on your routine board):'
+                      : 'Horários padrão das suas atividades (editáveis a qualquer momento no seu quadro diário):'}
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        {isEn ? 'Routine (Video)' : 'Rotina (Vídeo)'}
+                      </label>
+                      <select
+                        value={routineVideoTime}
+                        onChange={(e) => setRoutineVideoTime(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                      >
+                        {TIME_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        {isEn ? 'Routine (Audio)' : 'Rotina (Áudio)'}
+                      </label>
+                      <select
+                        value={routineAudioTime}
+                        onChange={(e) => setRoutineAudioTime(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                      >
+                        {TIME_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                        {isEn ? 'Phrase of the Day' : 'Frase do Dia'}
+                      </label>
+                      <select
+                        value={dailyPhraseTime}
+                        onChange={(e) => setDailyPhraseTime(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                      >
+                        {TIME_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* 🌟 Sign Up: Native Friend (Amigo Nativo) Specific Fields */}
+            {mode === 'signup' && role === 'teacher' && (
+              <div className="space-y-3 p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200">
+                <div className="flex items-center gap-1.5 text-xs font-black text-emerald-900 mb-1">
+                  <HeartHandshake className="w-4 h-4 text-emerald-600" />
+                  <span>{isEn ? 'Native Friend Profile Settings' : 'Dados do Perfil de Amigo Nativo'}</span>
+                </div>
+
+                {/* Profile Photo / Avatar Upload */}
+                <div className="bg-white p-3 rounded-xl border border-emerald-200 shadow-2xs">
+                  <ImageUploadInput
+                    label={isEn ? 'Profile Photo / Avatar (Upload from device or choose)' : 'Foto de Perfil / Avatar (Carregue do dispositivo ou escolha)'}
+                    value={avatar}
+                    onChange={(newVal) => setAvatar(newVal)}
+                    currentLanguage={currentLanguage}
+                    helperText={
+                      isEn
+                        ? 'Select or upload a clear photo that will appear on your public card and approval application.'
+                        : 'Selecione ou carregue uma foto nítida que aparecerá no seu cartão público e no pedido de aprovação.'
+                    }
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      {isEn ? 'Native Country' : 'País de Origem'}
+                    </label>
+                    <select
+                      value={selectedCountry}
+                      onChange={(e) => handleCountryChange(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                    >
+                      <option value="">{isEn ? 'Select country...' : 'Selecione o país...'}</option>
+                      {COUNTRY_OPTIONS.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.flag} {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      {isEn ? 'Accent' : 'Sotaque'}
+                    </label>
+                    <input
+                      type="text"
+                      value={accent}
+                      onChange={(e) => setAccent(e.target.value)}
+                      placeholder="e.g. North American"
+                      className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                    {isEn ? 'Profile Headline' : 'Título do Perfil (Headline)'}
+                  </label>
+                  <input
+                    type="text"
+                    value={headline}
+                    onChange={(e) => setHeadline(e.target.value)}
+                    placeholder="e.g. Conversational Native Friend & Cultural Guide"
+                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                    {isEn ? 'Specialties / Conversation Focus' : 'Especialidades / Foco de Conversação'}
+                  </label>
+                  <input
+                    type="text"
+                    value={specialties}
+                    onChange={(e) => setSpecialties(e.target.value)}
+                    placeholder="e.g. Daily Routine & Lifestyle, Conversational Fluency, Slangs"
+                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                    {isEn ? 'Bio / Presentation' : 'Biografia / Apresentação'}
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                    placeholder="Tell students about yourself and your conversation style..."
+                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-[#000035]"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      {isEn ? 'Session Price (USD)' : 'Preço por Sessão (USD)'}
+                    </label>
+                    <div className="relative">
+                      <DollarSign className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="number"
+                        min="5"
+                        max="150"
+                        value={priceUsd}
+                        onChange={(e) => setPriceUsd(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                      {isEn ? 'Google Meet Link' : 'Link Padrão do Google Meet'}
+                    </label>
+                    <div className="relative">
+                      <Video className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="url"
+                        value={meetUrl}
+                        onChange={(e) => setMeetUrl(e.target.value)}
+                        placeholder="https://meet.google.com/..."
+                        className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                    {isEn ? 'Video Presentation URL (YouTube/Vimeo - Optional)' : 'Vídeo de Apresentação (YouTube/Vimeo - Opcional)'}
+                  </label>
+                  <input
+                    type="url"
+                    value={videoIntroUrl}
+                    onChange={(e) => setVideoIntroUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-[#000035]"
+                  />
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] leading-relaxed">
+                  <strong>💡 {isEn ? 'Approval workflow:' : 'Fluxo de aprovação:'}</strong>{' '}
+                  {isEn
+                    ? 'Your photo and profile details will be registered immediately and submitted to the Administrator for approval before going live on the platform.'
+                    : 'Sua foto e dados do perfil serão salvos imediatamente e enviados para a central de aprovações do Administrador antes de ficarem visíveis publicamente.'}
+                </div>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full mt-2 py-3 px-4 bg-[#000035] hover:bg-[#062863] text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-[0.99]"
+            >
+              {isLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+              ) : (
+                <LogIn className="w-4 h-4" />
+              )}
+              <span>
+                {mode === 'login'
+                  ? isEn ? 'Log in' : 'Entrar'
+                  : role === 'teacher'
+                  ? isEn ? 'Register as Native Friend' : 'Cadastrar como Amigo Nativo'
+                  : role === 'admin'
+                  ? isEn ? 'Register Administrator' : 'Cadastrar Administrador'
+                  : isEn ? 'Create account' : 'Criar minha conta'}
+              </span>
+            </button>
+          </form>
+        )}
 
         {/* Terms Disclaimer */}
         <p className="text-[10px] text-slate-400 text-center mt-4 leading-tight">
@@ -483,79 +1385,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </>
           )}
         </p>
-
-        {/* Quick Demo Access Bar */}
-        <div className="mt-5 pt-4 border-t border-slate-100 space-y-2">
-          <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
-            <span className="uppercase tracking-wider">
-              {isEn ? '⚡ 1-Click Demo Profiles:' : '⚡ Perfis de Demonstração:'}
-            </span>
-            <span className="text-[10px] text-[#1C4C96]">Auto-redirect</span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5">
-            <button
-              type="button"
-              onClick={() =>
-                handleQuickLogin({
-                  email: 'reginahelena1980@gmail.com',
-                  name: 'Regina Helena',
-                  role: 'student',
-                })
-              }
-              className="px-2.5 py-1.5 rounded-lg bg-blue-50/80 hover:bg-blue-100 border border-blue-200/70 text-left text-[11px] font-bold text-[#062863] transition cursor-pointer flex items-center justify-between"
-            >
-              <span>👩 Regina</span>
-              <span className="text-[9px] text-blue-600 uppercase font-black">Praticante</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                handleQuickLogin({
-                  email: 'vinicius.student@gmail.com',
-                  name: 'Vinicius Alcantara',
-                  role: 'student',
-                })
-              }
-              className="px-2.5 py-1.5 rounded-lg bg-blue-50/80 hover:bg-blue-100 border border-blue-200/70 text-left text-[11px] font-bold text-[#062863] transition cursor-pointer flex items-center justify-between"
-            >
-              <span>👨 Vinicius</span>
-              <span className="text-[9px] text-blue-600 uppercase font-black">Praticante</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                handleQuickLogin({
-                  email: 'charles.lambert1939@gmail.com',
-                  name: 'Charles Lambert',
-                  role: 'teacher',
-                })
-              }
-              className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-left text-[11px] font-bold text-emerald-900 transition cursor-pointer flex items-center justify-between"
-            >
-              <span>🇨🇦 Charles</span>
-              <span className="text-[9px] text-emerald-700 uppercase font-black">Amigo Nativo</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                handleQuickLogin({
-                  email: 'adm.itissimple@gmail.com',
-                  name: 'Admin It\'s Simple',
-                  role: 'admin',
-                })
-              }
-              className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-300 text-left text-[11px] font-bold text-slate-800 transition cursor-pointer flex items-center justify-between"
-            >
-              <span>🛡️ Admin Geral</span>
-              <span className="text-[9px] text-slate-600 uppercase font-black">Admin</span>
-            </button>
-          </div>
-        </div>
       </div>
+
+      <GoogleSignInModal
+        isOpen={showGoogleSignIn}
+        onClose={() => setShowGoogleSignIn(false)}
+        onLoginSuccess={(acc, prof) => {
+          setShowGoogleSignIn(false);
+          onLoginSuccess(acc, prof);
+          onClose();
+        }}
+        preferredRole={role}
+        currentLanguage={currentLanguage}
+      />
     </div>
   );
 };

@@ -27,17 +27,18 @@ export const NotCompletedModal: React.FC<NotCompletedModalProps> = ({
   onConfirm,
   currentLanguage,
 }) => {
-  if (!isOpen || !lesson) return null;
-
   const isEn = currentLanguage === 'en';
   const [responsible, setResponsible] = useState<'student' | 'teacher'>('student');
   const [reason, setReason] = useState<string>('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!lesson) return;
     onConfirm(lesson.id, responsible, reason.trim());
     onClose();
   };
+
+  if (!isOpen || !lesson) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">

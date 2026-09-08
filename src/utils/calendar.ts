@@ -287,11 +287,21 @@ export function generateGoogleCalendarWebLink(details: {
 
   const text = encodeURIComponent(details.title);
   const desc = encodeURIComponent(
-    `${details.description || ''}\n\nGoogle Meet: ${details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'}\nStudent: ${details.studentName || ''} (${details.studentEmail || ''})\nTeacher: ${details.teacherName || ''} (${details.teacherEmail || ''})`
+    `${details.description || ''}\n\nGoogle Meet: ${details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'}\nStudent: ${details.studentName || ''} (${details.studentEmail || ''})\nTeacher / Native Friend: ${details.teacherName || ''} (${details.teacherEmail || ''})`
   );
-  const location = encodeURIComponent(details.meetLink || 'Google Meet');
+  const location = encodeURIComponent(details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq');
 
-  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${text}&dates=${startIso}/${endIso}&details=${desc}&location=${location}`;
+  const attendees: string[] = [];
+  if (details.teacherEmail && details.teacherEmail.includes('@')) {
+    attendees.push(details.teacherEmail.trim());
+  }
+  if (details.studentEmail && details.studentEmail.includes('@')) {
+    attendees.push(details.studentEmail.trim());
+  }
+  const uniqueAttendees = Array.from(new Set(attendees));
+  const addParam = uniqueAttendees.length > 0 ? `&add=${encodeURIComponent(uniqueAttendees.join(','))}` : '';
+
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${text}&dates=${startIso}/${endIso}&details=${desc}&location=${location}${addParam}`;
 }
 
 export function downloadIcsFile(details: {
@@ -299,6 +309,10 @@ export function downloadIcsFile(details: {
   description?: string;
   startDateTime: string;
   endDateTime: string;
+  studentEmail?: string;
+  studentName?: string;
+  teacherEmail?: string;
+  teacherName?: string;
   meetLink?: string;
 }) {
   const start = new Date(details.startDateTime)
@@ -307,6 +321,18 @@ export function downloadIcsFile(details: {
   const end = new Date(details.endDateTime)
     .toISOString()
     .replace(/-|:|\.\d+/g, '');
+
+  const attendeesLines: string[] = [];
+  if (details.teacherEmail) {
+    attendeesLines.push(
+      `ATTENDEE;CN=${details.teacherName || 'Teacher'};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${details.teacherEmail}`
+    );
+  }
+  if (details.studentEmail) {
+    attendeesLines.push(
+      `ATTENDEE;CN=${details.studentName || 'Student'};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${details.studentEmail}`
+    );
+  }
 
   const icsContent = `BEGIN:VCALENDAR
 VERSION:2.0
@@ -319,6 +345,7 @@ DTEND:${end}
 SUMMARY:${details.title}
 DESCRIPTION:${(details.description || '').replace(/\n/g, '\\n')}
 LOCATION:${details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'}
+${attendeesLines.join('\n')}
 STATUS:CONFIRMED
 END:VEVENT
 END:VCALENDAR`;

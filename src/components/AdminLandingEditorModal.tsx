@@ -50,7 +50,6 @@ export const AdminLandingEditorModal: React.FC<AdminLandingEditorModalProps> = (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
-      localStorage.setItem('its_simple_landing_content', JSON.stringify(formData));
     } catch (err) {
       console.warn('Error saving landing content:', err);
     }

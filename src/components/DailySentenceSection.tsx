@@ -44,7 +44,7 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
 
   // Gather all unique words learned today across all routine items
   const allLearnedWordsToday: string[] = [];
-  todayRoutines.forEach((item) => {
+  (todayRoutines || []).forEach((item) => {
     if (item?.learnedWords && Array.isArray(item.learnedWords)) {
       item.learnedWords.forEach((w) => {
         if (w && typeof w === 'string') {

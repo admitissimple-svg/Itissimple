@@ -31,8 +31,6 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
   currentLanguage,
   onSaveDailySentence,
 }) => {
-  if (!isOpen) return null;
-
   const isEn = currentLanguage === 'en';
   const [sentenceInput, setSentenceInput] = useState<string>('');
   const [evaluation, setEvaluation] = useState<WritingEvaluationResult | null>(null);
@@ -41,8 +39,8 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
 
   // Gather all unique words
   const allWords: string[] = [];
-  todayRoutines.forEach((item) => {
-    if (item.learnedWords) {
+  (todayRoutines || []).forEach((item) => {
+    if (item && item.learnedWords && Array.isArray(item.learnedWords)) {
       item.learnedWords.forEach((w) => {
         const trimmed = (w || '').trim();
         if (trimmed && !allWords.includes(trimmed)) {
@@ -84,6 +82,8 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
       onClose();
     }, 1200);
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">

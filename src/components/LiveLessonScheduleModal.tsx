@@ -16,7 +16,7 @@ import {
   AlertTriangle,
   Globe,
 } from 'lucide-react';
-import { GoogleAccount, TeacherMeetSettings, DayOfWeek, Language } from '../types';
+import { GoogleAccount, TeacherMeetSettings, DayOfWeek, Language, UserProfile } from '../types';
 import { Translations } from '../utils/i18n';
 import { generateGoogleCalendarWebLink } from '../utils/calendar';
 import {
@@ -24,6 +24,7 @@ import {
   formatTimeInTimeZone,
   getTimezoneDisplayLabel,
   generate30MinTimeSlots,
+  formatTimeSlot12h,
   DEFAULT_STUDENT_TIMEZONE,
   DEFAULT_TEACHER_TIMEZONE,
 } from '../utils/timezone';
@@ -34,6 +35,7 @@ interface LiveLessonScheduleModalProps {
   currentAccount: GoogleAccount | null;
   teachers: GoogleAccount[];
   students: GoogleAccount[];
+  initialTeacherEmail?: string;
   teacherMeetSettings: Record<string, TeacherMeetSettings>;
   onSchedule: (lessonData: {
     title: string;
@@ -49,6 +51,7 @@ interface LiveLessonScheduleModalProps {
   currentLanguage: Language;
   t: Translations;
   timeZone?: string;
+  userProfile?: UserProfile | null;
 }
 
 export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = ({
@@ -57,30 +60,84 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   currentAccount,
   teachers,
   students,
+  initialTeacherEmail,
   teacherMeetSettings,
   onSchedule,
   currentLanguage,
   t,
   timeZone,
+  userProfile,
 }) => {
-  if (!isOpen) return null;
-
-  const isEn = currentLanguage === 'en';
   const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
+  const isEn = currentLanguage === 'en' || isTeacher;
   const activeTz = timeZone || (isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE);
 
-  const defaultTeacherEmail = teachers[0]?.email || 'itissimple.school@gmail.com';
-  const [selectedTeacherEmail, setSelectedTeacherEmail] = useState<string>(
-    isTeacher && currentAccount ? currentAccount.email : defaultTeacherEmail
+  // Check if student has an active linked teacher
+  const studentHasActiveTeacher = !isTeacher && Boolean(
+    userProfile?.teacherEmail &&
+    userProfile.teacherEmail.trim() !== '' &&
+    userProfile.enrollmentStatus !== 'cancelled' &&
+    userProfile.enrollmentStatus !== 'not_enrolled'
   );
 
+  const activeStudentTeacherEmail = studentHasActiveTeacher
+    ? userProfile!.teacherEmail!.toLowerCase().trim()
+    : (!isTeacher && initialTeacherEmail && initialTeacherEmail.trim() !== '')
+      ? initialTeacherEmail.toLowerCase().trim()
+      : null;
+
+  // Available teachers list: for students, restrict strictly to the currently linked active teacher!
+  const availableTeachers = useMemo(() => {
+    if (isTeacher) {
+      return teachers;
+    }
+
+    if (activeStudentTeacherEmail) {
+      const matched = teachers.filter(
+        (tc) => (tc.email || '').toLowerCase().trim() === activeStudentTeacherEmail
+      );
+      if (matched.length > 0) {
+        return matched;
+      }
+      return [
+        {
+          id: `teacher-${activeStudentTeacherEmail}`,
+          name: userProfile?.teacherName || activeStudentTeacherEmail.split('@')[0],
+          email: activeStudentTeacherEmail,
+          role: 'teacher' as const,
+        },
+      ];
+    }
+
+    return teachers;
+  }, [isTeacher, activeStudentTeacherEmail, teachers, userProfile?.teacherName]);
+
+  const defaultTeacherEmail = isTeacher && currentAccount
+    ? currentAccount.email
+    : activeStudentTeacherEmail || initialTeacherEmail || teachers[0]?.email || 'itissimple.school@gmail.com';
+
+  const [selectedTeacherEmail, setSelectedTeacherEmail] = useState<string>(defaultTeacherEmail);
+
+  React.useEffect(() => {
+    if (activeStudentTeacherEmail) {
+      setSelectedTeacherEmail(activeStudentTeacherEmail);
+    } else if (initialTeacherEmail) {
+      setSelectedTeacherEmail(initialTeacherEmail);
+    } else if (isTeacher && currentAccount?.email) {
+      setSelectedTeacherEmail(currentAccount.email);
+    } else if (availableTeachers.length > 0 && !availableTeachers.some((tc) => tc.email?.toLowerCase() === selectedTeacherEmail.toLowerCase())) {
+      setSelectedTeacherEmail(availableTeachers[0].email);
+    }
+  }, [isOpen, activeStudentTeacherEmail, initialTeacherEmail, isTeacher, currentAccount?.email, availableTeachers]);
+
   const defaultStudent =
-    students.find((s) => s.email.toLowerCase() === 'reginahelena1980@gmail.com') ||
-    students[0] || {
-      email: 'reginahelena1980@gmail.com',
-      name: 'Regina Helena',
-      role: 'student',
-    };
+    (!isTeacher && currentAccount)
+      ? currentAccount
+      : students[0] || {
+          email: '',
+          name: '',
+          role: 'student' as const,
+        };
 
   const [selectedStudentEmail, setSelectedStudentEmail] = useState<string>(
     !isTeacher && currentAccount ? currentAccount.email : defaultStudent.email
@@ -89,11 +146,16 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   const todayStr = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [selectedStartTime, setSelectedStartTime] = useState<string>('09:00');
-  const [durationMinutes, setDurationMinutes] = useState<number>(30);
-  const [customTitle, setCustomTitle] = useState<string>('Aula de Conversação e Rotina (Google Meet)');
-  const [notes, setNotes] = useState<string>('Prática ao vivo e revisão dos vocabulários da rotina.');
+  const [durationMinutes, setDurationMinutes] = useState<number>(25);
+
+  const [customTitle, setCustomTitle] = useState<string>('');
+  const [notes, setNotes] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [scheduleSuccess, setScheduleSuccess] = useState<boolean>(false);
+
+  const cleanTeacherName = (name: string) => {
+    return name.replace(/\s*\(Amigo Nativo\)/gi, '').replace(/\s*\(Amiga Nativa\)/gi, '').replace(/\s*\(Native Friend\)/gi, '').trim();
+  };
 
   const activeTeacherSettings: TeacherMeetSettings = teacherMeetSettings[selectedTeacherEmail] || {
     teacherEmail: selectedTeacherEmail,
@@ -105,10 +167,12 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     timezone: 'America/Sao_Paulo',
   };
 
-  const selectedTeacherObj = teachers.find((t) => t.email === selectedTeacherEmail) || {
-    name: 'It is Simple Teacher',
-    email: selectedTeacherEmail,
-  };
+  const selectedTeacherObj = availableTeachers.find((t) => (t.email || '').toLowerCase() === selectedTeacherEmail.toLowerCase())
+    || teachers.find((t) => (t.email || '').toLowerCase() === selectedTeacherEmail.toLowerCase())
+    || {
+      name: userProfile?.teacherName || 'It is Simple Teacher',
+      email: selectedTeacherEmail,
+    };
 
   const selectedStudentObj = students.find((s) => s.email === selectedStudentEmail) || {
     name: !isTeacher && currentAccount ? currentAccount.name : defaultStudent.name,
@@ -185,6 +249,8 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     meetLink: activeTeacherSettings.meetLink || 'https://meet.google.com/gmt-kxnw-zpq',
   });
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
       <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-[#607EC9]/30 overflow-hidden my-auto">
@@ -230,11 +296,11 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Teacher' : 'Professor(a)'}
+                {isEn ? 'Native Friend' : 'Amigo Nativo'}
               </label>
               {isTeacher && currentAccount ? (
                 <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863]">
-                  {currentAccount.name} ({currentAccount.email})
+                  {cleanTeacherName(currentAccount.name)} ({currentAccount.email})
                 </div>
               ) : (
                 <select
@@ -242,9 +308,9 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                   onChange={(e) => setSelectedTeacherEmail(e.target.value)}
                   className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
                 >
-                  {teachers.map((tc) => (
+                  {availableTeachers.map((tc) => (
                     <option key={tc.email} value={tc.email}>
-                      {tc.name} ({tc.email})
+                      {cleanTeacherName(tc.name)} ({tc.email})
                     </option>
                   ))}
                 </select>
@@ -253,7 +319,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Student' : 'Aluno(a)'}
+                {isEn ? 'Your Name' : 'Seu nome'}
               </label>
               {!isTeacher && currentAccount ? (
                 <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863]">
@@ -292,7 +358,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Start Time (30-min intervals)' : 'Horário de Início (Intervalos de 30 min)'}
+                {isEn ? 'Start Time' : 'Horário de Início'}
               </label>
               <select
                 value={selectedStartTime}
@@ -301,7 +367,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               >
                 {timeSlots.map((slot) => (
                   <option key={slot} value={slot}>
-                    {slot}
+                    {formatTimeSlot12h(slot)}
                   </option>
                 ))}
               </select>
@@ -319,9 +385,8 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 onChange={(e) => setDurationMinutes(Number(e.target.value))}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               >
-                <option value={30}>30 {isEn ? 'minutes' : 'minutos'}</option>
+                <option value={25}>25 {isEn ? 'minutes' : 'minutos'}</option>
                 <option value={50}>50 {isEn ? 'minutes' : 'minutos'}</option>
-                <option value={60}>60 {isEn ? 'minutes (1 hour)' : 'minutos (1 hora)'}</option>
               </select>
             </div>
 

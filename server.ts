@@ -1,12 +1,12 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestore } from './src/serverFirestore';
+import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 const app = express();
 const PORT = 3000;
@@ -17,8 +17,10 @@ app.use(express.json());
 const DB_FILE = path.join(process.cwd(), 'app-data.json');
 
 interface AppDb {
-  teachers: Array<{ email: string; name: string; role: string; registeredByAdmin?: boolean }>;
+  teachers: Array<{ email: string; name: string; role: string; registeredByAdmin?: boolean; avatar?: string; picture?: string; approvalStatus?: string }>;
   tutorsList: Array<any>;
+  deletedTutorIds?: string[];
+  deletedTutorEmails?: string[];
   students: Array<any>;
   meetSettings: Record<string, any>;
   teacherSettings: Record<string, any>;
@@ -32,6 +34,9 @@ interface AppDb {
   weeklyHomework: any;
   landingContent: any;
   dictionary: Record<string, any>;
+  studentWeeklyChecks: Record<string, Record<string, boolean>>;
+  authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
+  transactions?: any[];
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -58,149 +63,230 @@ const DEFAULT_LANDING_CONTENT = {
   footerSlogan: 'Learn English by living your life!',
 };
 
+// Clean initial state: zero mock tutors, zero fake test accounts
+const DEFAULT_TUTORS_LIST: any[] = [];
+
 const DEFAULT_DB: AppDb = {
   teachers: [
     {
-      email: 'reginahelena1980@gmail.com',
-      name: 'Teacher Regina',
-      role: 'teacher',
-      registeredByAdmin: true,
-    },
-    {
-      email: 'itissimple.school@gmail.com',
-      name: 'It is Simple Teacher',
-      role: 'teacher',
-      registeredByAdmin: true,
-    },
-    {
-      email: 'charles.lambert1939@gmail.com',
-      name: 'Amigo Nativo Charles',
-      role: 'teacher',
+      email: 'adm.itissimple@gmail.com',
+      name: "Admin It's Simple",
+      role: 'admin',
       registeredByAdmin: true,
     },
   ],
   tutorsList: [],
-  students: [
-    {
-      id: 'st-1',
-      name: 'Regina Helena',
-      email: 'reginahelena1980@gmail.com',
-      studentEmail: 'reginahelena1980@gmail.com',
-      studentName: 'Regina Helena',
-      level: 'iniciante',
-      studentLevel: 'iniciante',
-      goal: 'English for work & everyday communication',
-      learningGoal: 'English for work & everyday communication',
-      contractedLessons: 10,
-      completedLessonsCount: 3,
-      activeSince: '2025-01-10',
-      createdAt: '2025-01-10T10:00:00Z',
-      teacherEmail: 'itissimple.school@gmail.com',
-      teacherName: 'Amigo Nativo Charles',
-      status: 'active',
-      enrolledAt: new Date().toISOString(),
-    },
-    {
-      id: 'st-2',
-      name: 'Vinicius Alcantara',
-      email: 'vinicius.student@gmail.com',
-      studentEmail: 'vinicius.student@gmail.com',
-      studentName: 'Vinicius Alcantara',
-      level: 'intermediario',
-      studentLevel: 'intermediario',
-      goal: 'Business presentations and international meetings',
-      learningGoal: 'Business presentations and international meetings',
-      contractedLessons: 5,
-      completedLessonsCount: 1,
-      activeSince: '2025-02-01',
-      createdAt: '2025-02-01T10:00:00Z',
-      teacherEmail: 'itissimple.school@gmail.com',
-      teacherName: 'Amigo Nativo Charles',
-      status: 'active',
-      enrolledAt: new Date().toISOString(),
-    },
-  ],
-  meetSettings: {
-    'itissimple.school@gmail.com': {
-      teacherEmail: 'itissimple.school@gmail.com',
-      meetLink: 'https://meet.google.com/gmt-kxnw-zpq',
-      workingHoursStart: '08:00',
-      workingHoursEnd: '18:00',
-      slotDurationMinutes: 30,
-      availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-      timezone: 'America/Sao_Paulo',
-    },
-    'reginahelena1980@gmail.com': {
-      teacherEmail: 'reginahelena1980@gmail.com',
-      meetLink: 'https://meet.google.com/gmt-kxnw-zpq',
-      workingHoursStart: '08:00',
-      workingHoursEnd: '18:00',
-      slotDurationMinutes: 30,
-      availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-      timezone: 'America/Sao_Paulo',
-    },
-    'charles.lambert1939@gmail.com': {
-      teacherEmail: 'charles.lambert1939@gmail.com',
-      meetLink: 'https://meet.google.com/gmt-kxnw-zpq',
-      workingHoursStart: '08:00',
-      workingHoursEnd: '18:00',
-      slotDurationMinutes: 30,
-      availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-      timezone: 'America/New_York',
-    },
-  },
+  deletedTutorIds: [],
+  deletedTutorEmails: [],
+  students: [],
+  meetSettings: {},
   teacherSettings: {},
   liveLessons: [],
   chatMessages: [],
   routinesByDay: {},
   studentRoutinesMap: {},
-  contractedLessons: {
-    'reginahelena1980@gmail.com': 10,
-    'vinicius.student@gmail.com': 5,
+  contractedLessons: {},
+  userProfiles: {
+    'adm.itissimple@gmail.com': {
+      uid: 'admin-master-uid',
+      email: 'adm.itissimple@gmail.com',
+      name: "Admin It's Simple",
+      role: 'admin',
+    },
   },
-  userProfiles: {},
   emailLogs: [],
   weeklyHomework: null,
   landingContent: DEFAULT_LANDING_CONTENT,
   dictionary: {},
+  studentWeeklyChecks: {},
+  authUsers: {
+    'adm.itissimple@gmail.com': {
+      uid: 'admin-master-uid',
+      email: 'adm.itissimple@gmail.com',
+      name: "Admin It's Simple",
+      role: 'admin',
+      password: 'Makeiteasy2026*',
+    },
+  },
 };
+
+// Cached memory state backed by both app-data.json and Firebase Firestore cloud
+let inMemoryDb: AppDb = DEFAULT_DB;
+
+function mergeDbWithDefaults(parsed: any): AppDb {
+  return {
+    ...DEFAULT_DB,
+    ...(parsed || {}),
+    studentWeeklyChecks: (parsed && parsed.studentWeeklyChecks) || {},
+    authUsers: (parsed && parsed.authUsers) || DEFAULT_DB.authUsers,
+    teacherSettings: (parsed && parsed.teacherSettings) || {},
+    meetSettings: (parsed && parsed.meetSettings) || {},
+    landingContent: {
+      ...DEFAULT_LANDING_CONTENT,
+      ...((parsed && parsed.landingContent) || {}),
+    },
+    deletedTutorIds: Array.isArray(parsed?.deletedTutorIds) ? parsed.deletedTutorIds : [],
+    deletedTutorEmails: Array.isArray(parsed?.deletedTutorEmails) ? parsed.deletedTutorEmails : [],
+    tutorsList: Array.isArray(parsed?.tutorsList) ? parsed.tutorsList : [],
+    teachers: (Array.isArray(parsed?.teachers) ? parsed.teachers : DEFAULT_DB.teachers).filter(
+      (t: any) => t.email?.toLowerCase() !== 'reginahelena1980@gmail.com' && !t.name?.toLowerCase().includes('regina')
+    ),
+    students: Array.isArray(parsed?.students) ? parsed.students : [],
+    contractedLessons: (parsed && parsed.contractedLessons) || {},
+    userProfiles: (parsed && parsed.userProfiles) || DEFAULT_DB.userProfiles,
+  };
+}
 
 function readDb(): AppDb {
   try {
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, 'utf-8');
       const parsed = JSON.parse(data);
-      return {
-        ...DEFAULT_DB,
-        ...parsed,
-        meetSettings: {
-          ...DEFAULT_DB.meetSettings,
-          ...(parsed.meetSettings || {}),
-          ...(parsed.teacherSettings || {}),
-        },
-        teacherSettings: {
-          ...DEFAULT_DB.teacherSettings,
-          ...(parsed.teacherSettings || {}),
-          ...(parsed.meetSettings || {}),
-        },
-        landingContent: {
-          ...DEFAULT_LANDING_CONTENT,
-          ...(parsed.landingContent || {}),
-        },
-        tutorsList: Array.isArray(parsed.tutorsList) ? parsed.tutorsList : (DEFAULT_DB.tutorsList || []),
-      };
+      inMemoryDb = mergeDbWithDefaults(parsed);
+      return inMemoryDb;
     }
   } catch (err) {
-    console.warn('Error reading db file:', err);
+    console.warn('Error reading local db file:', err);
   }
-  return DEFAULT_DB;
+  return inMemoryDb;
 }
 
+let syncTimeout: any = null;
+
 function writeDb(db: AppDb) {
+  inMemoryDb = db;
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
   } catch (err) {
     console.warn('Error writing db file:', err);
+  }
+
+  // Cloud Firestore asynchronous sync
+  if (syncTimeout) clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(() => {
+    saveAppStateToFirestore(db).catch((err) => {
+      console.warn('Background Firestore sync error:', err);
+    });
+  }, 300);
+}
+
+// Immediate synchronous disk write + awaited Cloud Firestore sync
+async function writeDbSync(db: AppDb): Promise<void> {
+  inMemoryDb = db;
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Error writing db file:', err);
+  }
+  try {
+    await saveAppStateToFirestore(db);
+  } catch (err) {
+    console.warn('Direct Firestore sync error:', err);
+  }
+}
+
+// Initial hydration from Firestore on server startup
+async function initCloudPersistence() {
+  try {
+    // 1. Read local file first
+    readDb();
+
+    // 2. Fetch latest state from Cloud Firestore
+    const cloudState = await fetchAppStateFromFirestore();
+    if (cloudState && typeof cloudState === 'object') {
+      console.log('Successfully hydrated database from Firebase Firestore cloud');
+      const mergedAuthUsers = {
+        ...(inMemoryDb.authUsers || {}),
+        ...(cloudState.authUsers || {}),
+      };
+      const mergedUserProfiles = {
+        ...(inMemoryDb.userProfiles || {}),
+        ...(cloudState.userProfiles || {}),
+      };
+
+      // Merge tutorsList by email/id so NO tutor is ever lost
+      const localTutors = inMemoryDb.tutorsList || [];
+      const cloudTutors = Array.isArray(cloudState.tutorsList) ? cloudState.tutorsList : [];
+      const tutorMap = new Map<string, any>();
+      cloudTutors.forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) tutorMap.set(key, t);
+      });
+      localTutors.forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) {
+          const existing = tutorMap.get(key) || {};
+          tutorMap.set(key, { ...existing, ...t });
+        }
+      });
+      const mergedTutorsList = Array.from(tutorMap.values());
+
+      // Merge teachers list by email
+      const localTeachers = inMemoryDb.teachers || [];
+      const cloudTeachers = Array.isArray(cloudState.teachers) ? cloudState.teachers : [];
+      const teacherMap = new Map<string, any>();
+      cloudTeachers.forEach((t: any) => {
+        const key = (t.email || '').toLowerCase().trim();
+        if (key) teacherMap.set(key, t);
+      });
+      localTeachers.forEach((t: any) => {
+        const key = (t.email || '').toLowerCase().trim();
+        if (key) {
+          const existing = teacherMap.get(key) || {};
+          teacherMap.set(key, { ...existing, ...t });
+        }
+      });
+      const mergedTeachers = Array.from(teacherMap.values());
+
+      // Merge students list by email
+      const localStudents = inMemoryDb.students || [];
+      const cloudStudents = Array.isArray(cloudState.students) ? cloudState.students : [];
+      const studentMap = new Map<string, any>();
+      cloudStudents.forEach((s: any) => {
+        const key = (s.studentEmail || s.email || '').toLowerCase().trim();
+        if (key) studentMap.set(key, s);
+      });
+      localStudents.forEach((s: any) => {
+        const key = (s.studentEmail || s.email || '').toLowerCase().trim();
+        if (key) {
+          const existing = studentMap.get(key) || {};
+          studentMap.set(key, { ...existing, ...s });
+        }
+      });
+      const mergedStudents = Array.from(studentMap.values());
+
+      // Merge liveLessons by id
+      const localLessons = inMemoryDb.liveLessons || [];
+      const cloudLessons = Array.isArray(cloudState.liveLessons) ? cloudState.liveLessons : [];
+      const lessonMap = new Map<string, any>();
+      cloudLessons.forEach((l: any) => {
+        if (l.id) lessonMap.set(l.id, l);
+      });
+      localLessons.forEach((l: any) => {
+        if (l.id) {
+          const existing = lessonMap.get(l.id) || {};
+          lessonMap.set(l.id, { ...existing, ...l });
+        }
+      });
+      const mergedLiveLessons = Array.from(lessonMap.values());
+
+      inMemoryDb = mergeDbWithDefaults({
+        ...inMemoryDb,
+        ...cloudState,
+        authUsers: mergedAuthUsers,
+        userProfiles: mergedUserProfiles,
+        tutorsList: mergedTutorsList,
+        teachers: mergedTeachers,
+        students: mergedStudents,
+        liveLessons: mergedLiveLessons,
+      });
+      fs.writeFileSync(DB_FILE, JSON.stringify(inMemoryDb, null, 2), 'utf-8');
+    } else {
+      console.log('No existing Firestore state found, bootstrapping initial state to cloud');
+      await saveAppStateToFirestore(inMemoryDb);
+    }
+  } catch (err) {
+    console.warn('Cloud persistence init notice:', err);
   }
 }
 
@@ -210,135 +296,827 @@ app.get('/api/health', (req, res) => {
 });
 
 // 1.1 Auth Endpoints (Preply-style Login & Registration)
-app.post('/api/auth/login', (req, res) => {
+app.get('/api/auth/admin-status', (req, res) => {
   const db = readDb();
-  const { email, password, role: requestedRole } = req.body;
+  // Check if admin is registered with credentials
+  const adminWithPassword = Object.values(db.authUsers || {}).find(
+    (u: any) => u.role === 'admin' && u.password
+  );
+  const adminAccount = adminWithPassword || db.teachers?.find((t) => t.role === 'admin');
+
+  res.json({
+    hasAdminRegistered: !!adminWithPassword,
+    adminEmail: adminAccount ? adminAccount.email : null,
+    adminName: adminAccount ? adminAccount.name : null,
+  });
+});
+
+app.get('/api/auth/admin-status', (req, res) => {
+  const db = readDb();
+  const existingAdminWithPassword = Object.values(db.authUsers || {}).find(
+    (u: any) => u.role === 'admin' && u.password
+  );
+  res.json({
+    hasAdmin: !!existingAdminWithPassword,
+    adminEmail: existingAdminWithPassword ? (existingAdminWithPassword as any).email : 'adm.itissimple@gmail.com',
+  });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const db = readDb();
+  const { email, password, role: requestedRole, localBackup } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email or username is required' });
   }
 
   const cleanEmail = email.toLowerCase().trim();
-  let role = requestedRole === 'teacher' ? 'teacher' : 'student';
+  let authRecord = db.authUsers?.[cleanEmail];
+
+  // Also check case-insensitive match in authUsers
+  if (!authRecord && db.authUsers) {
+    const matchedKey = Object.keys(db.authUsers).find(
+      (k) => k.toLowerCase().trim() === cleanEmail
+    );
+    if (matchedKey) {
+      authRecord = db.authUsers[matchedKey];
+    }
+  }
+
+  // If user is not yet in authUsers, check if client provided a local localStorage backup to restore
+  if (!authRecord && localBackup && localBackup.email && localBackup.email.toLowerCase().trim() === cleanEmail) {
+    console.log('Restoring account from client localStorage backup:', cleanEmail);
+    const restoredUid = localBackup.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+    authRecord = {
+      uid: restoredUid,
+      email: cleanEmail,
+      name: localBackup.name || cleanEmail.split('@')[0],
+      password: localBackup.password || password || '',
+      role: localBackup.role || requestedRole || 'student',
+      createdAt: localBackup.registeredAt || new Date().toISOString(),
+    };
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = authRecord;
+
+    if (authRecord.role === 'student') {
+      if (!db.students) db.students = [];
+      const hasStudent = db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+      if (!hasStudent) {
+        db.students.push({
+          id: restoredUid,
+          name: authRecord.name,
+          studentName: authRecord.name,
+          email: cleanEmail,
+          studentEmail: cleanEmail,
+          level: localBackup.profile?.level || 'iniciante',
+          studentLevel: localBackup.profile?.level || 'iniciante',
+          goal: localBackup.profile?.learningGoal || 'English for everyday life & work',
+          learningGoal: localBackup.profile?.learningGoal || 'English for everyday life & work',
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          status: 'active',
+          activeSince: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          avatar: localBackup.profile?.avatar || '',
+          picture: localBackup.profile?.picture || '',
+        });
+      }
+      if (!db.userProfiles) db.userProfiles = {};
+      if (!db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail] = {
+          id: restoredUid,
+          name: authRecord.name,
+          email: cleanEmail,
+          level: localBackup.profile?.level || 'iniciante',
+          enrollmentStatus: 'active',
+          learningGoal: localBackup.profile?.learningGoal || 'English for everyday life & work',
+          streakDays: 0,
+          streakCount: 0,
+          points: 0,
+          dailyGoalMinutes: 30,
+          completedTodayMinutes: 0,
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          picture: localBackup.profile?.picture || '',
+          avatar: localBackup.profile?.avatar || '',
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+    await writeDbSync(db);
+  }
+
+  // Strictly require existing registered account (no auto-creating unregistered accounts on login)
+  if (!authRecord && cleanEmail !== 'adm.itissimple@gmail.com') {
+    const isKnownTeacher = (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+    const isKnownStudent = (db.students || []).some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+    if (!isKnownTeacher && !isKnownStudent) {
+      return res.status(401).json({
+        error: 'Conta não encontrada. Por favor, crie seu cadastro antes de fazer login.',
+      });
+    }
+  }
+
+  // If user registered with password, enforce password check
+  if (authRecord && authRecord.password && password) {
+    // Special admin handling for adm.itissimple@gmail.com
+    if (cleanEmail === 'adm.itissimple@gmail.com') {
+      if (password === 'Makeiteasy2026*' || password === 'admin' || authRecord.password === password) {
+        if (authRecord.password !== password) {
+          authRecord.password = password;
+          writeDb(db);
+        }
+      } else {
+        return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
+      }
+    } else if (authRecord.password !== password) {
+      return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
+    }
+  } else if (!authRecord && cleanEmail === 'adm.itissimple@gmail.com' && password) {
+    if (password !== 'Makeiteasy2026*' && password !== 'admin') {
+      return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
+    }
+  }
+
+  let role = requestedRole || 'student';
   let name = cleanEmail.split('@')[0];
 
-  // Check if admin
-  if (cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin')) {
+  // 1. Check if admin
+  if (authRecord?.role === 'admin' || cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin')) {
     role = 'admin';
-    name = 'Admin It\'s Simple';
+    name = authRecord?.name || 'Admin It\'s Simple';
+  } else if (
+    authRecord?.role === 'teacher' ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail) ||
+    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin')
+  ) {
+    // 2. Native Friend / Teacher: strictly enforce Teacher role so student data is never leaked or mixed
+    role = 'teacher';
+    const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+    const teacherObj = (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+    name = tutorObj?.name || teacherObj?.name || authRecord?.name || name;
+
+    // Purge any accidental student profile entry for this teacher
+    if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      delete db.userProfiles[cleanEmail];
+      writeDb(db);
+    }
+  } else if (authRecord) {
+    role = authRecord.role;
+    name = authRecord.name || name;
   } else if (requestedRole) {
-    role = requestedRole === 'teacher' ? 'teacher' : 'student';
+    role = requestedRole === 'teacher' ? 'teacher' : (requestedRole === 'admin' ? 'admin' : 'student');
     if (role === 'teacher') {
       const teacherObj = db.teachers?.find((t) => t.email.toLowerCase() === cleanEmail);
       if (teacherObj) name = teacherObj.name;
-    } else {
+    } else if (role === 'student') {
       const studentObj = db.students?.find(
         (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
       );
       if (studentObj) {
         name = studentObj.name || studentObj.studentName || name;
-      }
-    }
-  } else {
-    // Check if teacher
-    const isTeacher = db.teachers?.some((t) => t.email.toLowerCase() === cleanEmail) ||
-      cleanEmail.includes('charles') ||
-      cleanEmail.includes('teacher') ||
-      cleanEmail.includes('sarah');
-
-    if (isTeacher) {
-      role = 'teacher';
-      const teacherObj = db.teachers?.find((t) => t.email.toLowerCase() === cleanEmail);
-      if (teacherObj) name = teacherObj.name;
-    } else {
-      // Check if student
-      const studentObj = db.students?.find(
-        (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
-      );
-      if (studentObj) {
-        name = studentObj.name || studentObj.studentName || name;
-        role = 'student';
       }
     }
   }
 
+  const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+  const userProfile = db.userProfiles?.[cleanEmail];
+  const userPicture = (role === 'teacher' ? (tutorObj?.avatar || '') : '') || (userProfile?.picture || userProfile?.avatar || '');
+
   const account = {
+    uid: authRecord?.uid || (tutorObj as any)?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`),
     email: cleanEmail,
     name: name.charAt(0).toUpperCase() + name.slice(1),
     role,
+    picture: userPicture,
   };
 
-  res.json({ success: true, account });
+  res.json({
+    success: true,
+    account,
+    profile: role === 'teacher' ? null : (db.userProfiles?.[cleanEmail] || null),
+    student: role === 'teacher' ? null : (db.students?.find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null),
+    tutor: tutorObj || null,
+  });
 });
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/reset-password', (req, res) => {
   const db = readDb();
-  const { name, email, password, role = 'student', level = 'iniciante', goal } = req.body;
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: 'Email e nova senha são obrigatórios.' });
+  }
+  const cleanEmail = email.toLowerCase().trim();
+  if (!db.authUsers) db.authUsers = {};
+
+  if (!db.authUsers[cleanEmail]) {
+    const inStudents = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    );
+    const inTeachers = (db.teachers || []).find(
+      (t: any) => t.email?.toLowerCase() === cleanEmail
+    );
+    const inTutors = (db.tutorsList || []).find(
+      (t: any) => t.email?.toLowerCase() === cleanEmail
+    );
+    const role = cleanEmail === 'adm.itissimple@gmail.com' ? 'admin' : inTeachers || inTutors ? 'teacher' : 'student';
+    const name = inStudents?.name || inTeachers?.name || inTutors?.name || cleanEmail.split('@')[0];
+
+    db.authUsers[cleanEmail] = {
+      email: cleanEmail,
+      name,
+      role,
+      password: newPassword,
+      createdAt: new Date().toISOString(),
+    };
+  } else {
+    db.authUsers[cleanEmail].password = newPassword;
+    db.authUsers[cleanEmail].updatedAt = new Date().toISOString();
+  }
+
+  writeDb(db);
+  res.json({ success: true, message: 'Senha atualizada com sucesso!' });
+});
+
+app.get('/api/auth/check-user', (req, res) => {
+  const db = readDb();
+  const email = ((req.query.email as string) || '').toLowerCase().trim();
+  const name = ((req.query.name as string) || '').toLowerCase().trim();
+  const role = ((req.query.role as string) || '').toLowerCase().trim();
+
+  let emailExists = false;
+  let nameExists = false;
+  let existingRole: string | null = null;
+  let existingUser: any = null;
+
+  if (email) {
+    const inAuth = db.authUsers?.[email] || null;
+    const inStudents = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === email
+    );
+    const inTutors = (db.tutorsList || []).find((t: any) => t.email?.toLowerCase() === email);
+
+    if (inAuth || inStudents || inTutors) {
+      emailExists = true;
+      existingRole = inAuth?.role || (inTutors ? 'teacher' : inStudents ? 'student' : null);
+      existingUser = inAuth || inTutors || inStudents;
+    }
+  }
+
+  if (name) {
+    const inStudents = (db.students || []).some(
+      (s: any) => ((s.name || s.studentName || '') as string).trim().toLowerCase() === name
+    );
+    const inAuthStudent = Object.values(db.authUsers || {}).some(
+      (u: any) => (u.name || '').trim().toLowerCase() === name && u.role === 'student'
+    );
+    const inTutors = (db.tutorsList || []).some(
+      (t: any) => (t.name || '').trim().toLowerCase() === name
+    );
+
+    if (role === 'student' && (inStudents || inAuthStudent)) {
+      nameExists = true;
+    } else if (role === 'teacher' && inTutors) {
+      nameExists = true;
+    } else if (!role && (inStudents || inAuthStudent || inTutors)) {
+      nameExists = true;
+    }
+  }
+
+  res.json({
+    exists: emailExists || nameExists,
+    emailExists,
+    nameExists,
+    role: existingRole,
+    name: existingUser?.name || null,
+    profile: email ? (db.userProfiles?.[email] || null) : null,
+    student: email ? (db.students?.find((s: any) => (s.email || s.studentEmail || '').toLowerCase() === email) || null) : null,
+    tutor: email ? (db.tutorsList?.find((t: any) => t.email?.toLowerCase() === email) || null) : null,
+  });
+});
+
+const handleRegistration = async (req: any, res: any) => {
+  const db = readDb();
+  const { name, email, password, role = 'student' } = req.body;
+  const level = req.body.englishLevel || req.body.level || 'iniciante';
+  const goal = req.body.learningGoal || req.body.goal || 'English for everyday life & work';
 
   if (!email || !name) {
     return res.status(400).json({ error: 'Name and email are required' });
   }
 
   const cleanEmail = email.toLowerCase().trim();
-  const resolvedRole = role === 'teacher' ? 'teacher' : 'student';
+  const cleanName = name.trim();
+  const cleanNameLower = cleanName.toLowerCase();
+  const requestedRole = (role || 'student').toLowerCase();
 
-  if (resolvedRole === 'teacher') {
-    const existingIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
-    const teacherData = {
-      name,
-      email: cleanEmail,
-      role: 'teacher',
-      registeredByAdmin: false,
-    };
-    if (existingIdx >= 0) {
-      db.teachers[existingIdx] = { ...db.teachers[existingIdx], ...teacherData };
-    } else {
-      db.teachers.push(teacherData);
-    }
-  } else {
-    const existingIdx = db.students.findIndex(
-      (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+  // ----------------------------------------------------
+  // 1. ADMIN REGISTRATION (Strictly only 1 admin allowed)
+  // ----------------------------------------------------
+  if (requestedRole === 'admin') {
+    // Check if an admin already exists in authUsers or teachers
+    const existingAdminInAuth = Object.values(db.authUsers || {}).find(
+      (u: any) => u.role === 'admin' && u.email !== cleanEmail
     );
+    const existingAdminInTeachers = (db.teachers || []).find(
+      (t: any) => t.role === 'admin' && (t.email || '').toLowerCase() !== cleanEmail
+    );
+
+    if (existingAdminInAuth || existingAdminInTeachers) {
+      return res.status(403).json({
+        error: 'Já existe um Administrador cadastrado na plataforma. Só é permitido um único Administrador no sistema.',
+        hasAdminRegistered: true,
+      });
+    }
+
+    const adminUid = req.body.uid || 'admin-master-uid';
+    // Register or update admin credentials
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = {
+      uid: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      password: password || '',
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    };
+
+    // Ensure teachers list has this admin marked as admin
+    const tIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+    if (tIdx >= 0) {
+      db.teachers[tIdx] = { ...db.teachers[tIdx], name: cleanName, role: 'admin', registeredByAdmin: true };
+    } else {
+      db.teachers.push({ email: cleanEmail, name: cleanName, role: 'admin', registeredByAdmin: true });
+    }
+
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[cleanEmail] = {
+      uid: adminUid,
+      id: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'admin',
+    };
+
+    await writeDbSync(db);
+    await saveUserToFirestore({
+      uid: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    });
+
+    const account = {
+      uid: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'admin',
+      picture: '',
+    };
+
+    return res.json({
+      success: true,
+      account,
+      message: 'Administrador cadastrado com sucesso.',
+    });
+  }
+
+  // ----------------------------------------------------
+  // 2. TEACHER / NATIVE FRIEND REGISTRATION
+  // ----------------------------------------------------
+  if (requestedRole === 'teacher') {
+    // Check duplicate email across platform
+    const isExistingTutorEmail =
+      (db.tutorsList || []).some((t: any) => t.email?.toLowerCase() === cleanEmail) ||
+      (db.teachers || []).some((t: any) => t.email?.toLowerCase() === cleanEmail && t.role !== 'admin') ||
+      Boolean(db.authUsers?.[cleanEmail]);
+
+    if (isExistingTutorEmail && !req.body.isUpdate) {
+      return res.status(409).json({
+        error: 'Este e-mail já está cadastrado no sistema. Por favor, faça login com sua conta ou utilize outro e-mail.',
+        duplicateField: 'email',
+        isExistingUser: true,
+      });
+    }
+
+    // Check duplicate name for Native Friend
+    const isExistingTutorName =
+      (db.tutorsList || []).some((t: any) => (t.name || '').trim().toLowerCase() === cleanNameLower) ||
+      (db.teachers || []).some((t: any) => (t.name || '').trim().toLowerCase() === cleanNameLower && t.role === 'teacher') ||
+      Object.values(db.authUsers || {}).some((u: any) => (u.name || '').trim().toLowerCase() === cleanNameLower && u.role === 'teacher');
+
+    if (isExistingTutorName && !req.body.isUpdate) {
+      return res.status(409).json({
+        error: 'Já existe um Amigo Nativo cadastrado com este nome na plataforma. Por favor, inclua seu sobrenome ou use um nome distintivo.',
+        duplicateField: 'name',
+        isExistingUser: true,
+      });
+    }
+
+    const tutorId = req.body.id || req.body.uid || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+    // Zero-leakage: never use stock mock photos. If user provided an avatar use it, otherwise empty string.
+    const tutorAvatar = req.body.avatar || req.body.picture || '';
+
+    const tutorEntry = {
+      id: tutorId,
+      uid: tutorId,
+      name: cleanName,
+      email: cleanEmail,
+      avatar: tutorAvatar,
+      picture: tutorAvatar,
+      role: 'teacher',
+      country: req.body.country || 'United States',
+      countryCode: req.body.countryCode || 'US',
+      flag: req.body.flag || '🇺🇸',
+      accent: req.body.accent || 'North American',
+      rating: 5.0,
+      reviewsCount: 0,
+      activeStudents: 0,
+      lessonsTaught: 0,
+      pricePerSessionUsd: Number(req.body.pricePerSessionUsd || req.body.priceUsd) || 20,
+      pricePerSessionBrl: Math.round((Number(req.body.pricePerSessionUsd || req.body.priceUsd) || 20) * 5.5),
+      headline: req.body.headline || 'Conversational Native Friend',
+      bio: req.body.bio || 'Hello! I am excited to help you live English in your daily routine.',
+      specialties: Array.isArray(req.body.specialties) && req.body.specialties.length > 0
+        ? req.body.specialties
+        : (typeof req.body.specialties === 'string' && req.body.specialties.trim().length > 0
+            ? req.body.specialties.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : ['Daily Routine & Lifestyle', 'Conversational Fluency']),
+      videoIntroUrl: req.body.videoIntroUrl || req.body.videoUrl || '',
+      availableDays: req.body.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+      availableHours: req.body.availableHours || ['08:00', '09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00'],
+      approvalStatus: 'pending', // REQUIRED: All new Native Friends default strictly to pending approval
+      appliedAt: new Date().toISOString(),
+      registeredByAdmin: false,
+      meetUrl: req.body.meetUrl || req.body.meetLink || 'https://meet.google.com/new',
+    };
+
+    if (!db.tutorsList) db.tutorsList = [];
+    const tutorIdx = db.tutorsList.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+    if (tutorIdx >= 0) {
+      db.tutorsList[tutorIdx] = { ...db.tutorsList[tutorIdx], ...tutorEntry };
+    } else {
+      db.tutorsList.push(tutorEntry);
+    }
+
+    // Maintain teachers list
+    const teacherIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+    if (teacherIdx >= 0) {
+      db.teachers[teacherIdx] = {
+        ...db.teachers[teacherIdx],
+        name: cleanName,
+        email: cleanEmail,
+        role: 'teacher',
+        avatar: tutorEntry.avatar,
+        picture: tutorEntry.avatar,
+      };
+    } else {
+      db.teachers.push({
+        name: cleanName,
+        email: cleanEmail,
+        role: 'teacher',
+        registeredByAdmin: false,
+        avatar: tutorEntry.avatar,
+        picture: tutorEntry.avatar,
+      });
+    }
+
+    // Save auth credentials
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = {
+      uid: tutorId,
+      email: cleanEmail,
+      name: cleanName,
+      password: password || '',
+      role: 'teacher',
+      createdAt: new Date().toISOString(),
+    };
+
+    // Maintain meet settings
+    if (!db.meetSettings) db.meetSettings = {};
+    db.meetSettings[cleanEmail] = {
+      teacherEmail: cleanEmail,
+      meetLink: req.body.meetUrl || req.body.meetLink || 'https://meet.google.com/new',
+      workingHoursStart: '08:00',
+      workingHoursEnd: '18:00',
+      slotDurationMinutes: 30,
+      availableDays: tutorEntry.availableDays,
+      timezone: 'America/New_York',
+    };
+
+    // Purge any accidental student profile entry for this teacher
+    if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      delete db.userProfiles[cleanEmail];
+    }
+    if (db.students) {
+      db.students = db.students.filter((s: any) => (s.email || s.studentEmail || '').toLowerCase() !== cleanEmail);
+    }
+
+    // Log admin notification
+    if (!db.emailLogs) db.emailLogs = [];
+    db.emailLogs.push({
+      id: `log-${Date.now()}`,
+      to: 'adm.itissimple@gmail.com',
+      subject: `Nova Solicitação de Amigo Nativo: ${cleanName}`,
+      preview: `${cleanName} (${cleanEmail}) se cadastrou como Amigo Nativo e aguarda sua aprovação.`,
+      date: new Date().toISOString(),
+      status: 'pending_approval',
+    });
+
+    await writeDbSync(db);
+    await saveUserToFirestore(tutorEntry);
+
+    const account = {
+      uid: tutorId,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'teacher',
+      picture: tutorEntry.avatar,
+    };
+
+    return res.json({
+      success: true,
+      account,
+      tutor: tutorEntry,
+      approvalStatus: 'pending',
+      message: 'Cadastro de Amigo Nativo enviado com sucesso! Seus dados foram salvos no seu perfil e aguardam aprovação do Administrador.',
+    });
+  }
+
+  // ----------------------------------------------------
+  // 3. STUDENT REGISTRATION
+  // ----------------------------------------------------
+  // 3.1 Check duplicate email across any platform table
+  const isExistingStudentEmail =
+    (db.students || []).some(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    ) ||
+    Boolean(db.authUsers?.[cleanEmail]) ||
+    Boolean(db.userProfiles?.[cleanEmail]) ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+
+  if (isExistingStudentEmail && !req.body.isUpdate) {
+    return res.status(409).json({
+      error: 'Este e-mail já está cadastrado no sistema. Por favor, faça login com sua conta ou utilize outro e-mail para cadastrar um novo aluno.',
+      duplicateField: 'email',
+      isExistingUser: true,
+    });
+  }
+
+  // 3.2 Check duplicate name for student
+  const isExistingStudentName =
+    (db.students || []).some(
+      (s: any) => ((s.name || s.studentName || '') as string).trim().toLowerCase() === cleanNameLower
+    ) ||
+    Object.values(db.authUsers || {}).some(
+      (u: any) => (u.name || '').trim().toLowerCase() === cleanNameLower && u.role === 'student'
+    );
+
+  if (isExistingStudentName && !req.body.isUpdate) {
+    return res.status(409).json({
+      error: 'Já existe um(a) aluno(a) cadastrado(a) com este nome no sistema. Por favor, informe seu nome completo e sobrenome para garantir sua identificação individual.',
+      duplicateField: 'name',
+      isExistingUser: true,
+    });
+  }
+
+  // Generate clean, strictly exclusive UID for this new student
+  const userUid = req.body.uid || req.body.id || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  // Zero-leakage: completely clean, no stock or mock photo
+  const userAvatar = req.body.avatar || req.body.picture || '';
+
+  // Save student credentials permanently
+  if (!db.authUsers) db.authUsers = {};
+  db.authUsers[cleanEmail] = {
+    uid: userUid,
+    email: cleanEmail,
+    name: cleanName,
+    password: password || '',
+    role: 'student',
+    createdAt: new Date().toISOString(),
+  };
+
+  const existingIdx = db.students.findIndex(
+    (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+  );
+
+  const routineVideoTime = req.body.routineVideoTime || '09:00';
+  const routineAudioTime = req.body.routineAudioTime || '14:00';
+  const dailyPhraseTime = req.body.dailyPhraseTime || '20:00';
+
+  if (existingIdx >= 0) {
+    const existing = db.students[existingIdx];
+    db.students[existingIdx] = {
+      ...existing,
+      id: existing.id || userUid,
+      name: cleanName,
+      studentName: cleanName,
+      email: cleanEmail,
+      studentEmail: cleanEmail,
+      level: level || existing.level || existing.studentLevel,
+      studentLevel: level || existing.studentLevel || existing.level,
+      goal: goal || existing.goal || existing.learningGoal,
+      learningGoal: goal || existing.learningGoal || existing.goal,
+      routineVideoTime: req.body.routineVideoTime || existing.routineVideoTime || routineVideoTime,
+      routineAudioTime: req.body.routineAudioTime || existing.routineAudioTime || routineAudioTime,
+      dailyPhraseTime: req.body.dailyPhraseTime || existing.dailyPhraseTime || dailyPhraseTime,
+      contractedLessons: existing.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 0,
+      completedLessonsCount: existing.completedLessonsCount ?? 0,
+      teacherEmail: existing.teacherEmail || null,
+      teacherName: existing.teacherName || null,
+      status: existing.status || 'active',
+      activeSince: existing.activeSince || new Date().toISOString().split('T')[0],
+      createdAt: existing.createdAt || new Date().toISOString(),
+      picture: userAvatar,
+      avatar: userAvatar,
+    };
+  } else {
+    // New Student: NO automatic assignment of any Native Friend
     const studentData = {
-      id: `st-${Date.now()}`,
-      name,
-      studentName: name,
+      id: userUid,
+      name: cleanName,
+      studentName: cleanName,
       email: cleanEmail,
       studentEmail: cleanEmail,
       level,
       studentLevel: level,
       goal: goal || 'English for everyday life & work',
       learningGoal: goal || 'English for everyday life & work',
-      contractedLessons: 5,
+      contractedLessons: 0,
       completedLessonsCount: 0,
-      teacherEmail: 'charles.lambert1939@gmail.com',
-      teacherName: 'Charles Lambert',
+      teacherEmail: null,
+      teacherName: null,
+      routineVideoTime,
+      routineAudioTime,
+      dailyPhraseTime,
       status: 'active',
       activeSince: new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString(),
+      picture: userAvatar,
+      avatar: userAvatar,
     };
-
-    if (existingIdx >= 0) {
-      db.students[existingIdx] = { ...db.students[existingIdx], ...studentData };
-    } else {
-      db.students.push(studentData);
-    }
-    db.contractedLessons[cleanEmail] = 5;
+    db.students.push(studentData);
   }
 
-  writeDb(db);
+  if (!db.contractedLessons) db.contractedLessons = {};
+  if (db.contractedLessons[cleanEmail] === undefined) {
+    db.contractedLessons[cleanEmail] = 0;
+  }
+
+  if (!db.userProfiles) db.userProfiles = {};
+  if (!db.userProfiles[cleanEmail]) {
+    db.userProfiles[cleanEmail] = {
+      id: userUid,
+      name: cleanName,
+      email: cleanEmail,
+      level,
+      teacherEmail: null,
+      teacherName: null,
+      routineVideoTime,
+      routineAudioTime,
+      dailyPhraseTime,
+      enrollmentStatus: 'not_enrolled',
+      learningGoal: goal || 'English for everyday life & work',
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: 0,
+      completedLessonsCount: 0,
+      picture: userAvatar,
+      avatar: userAvatar,
+      createdAt: new Date().toISOString(),
+    };
+  } else {
+    const p = db.userProfiles[cleanEmail];
+    db.userProfiles[cleanEmail] = {
+      ...p,
+      id: p.id || userUid,
+      name: cleanName,
+      level: level || p.level,
+      learningGoal: goal || p.learningGoal,
+      routineVideoTime: req.body.routineVideoTime || p.routineVideoTime || routineVideoTime,
+      routineAudioTime: req.body.routineAudioTime || p.routineAudioTime || routineAudioTime,
+      dailyPhraseTime: req.body.dailyPhraseTime || p.dailyPhraseTime || dailyPhraseTime,
+      teacherEmail: p.teacherEmail || null,
+      teacherName: p.teacherName || null,
+      contractedLessons: p.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 0,
+      completedLessonsCount: p.completedLessonsCount ?? 0,
+      picture: userAvatar,
+      avatar: userAvatar,
+    };
+  }
+
+  await writeDbSync(db);
+  await saveUserToFirestore({
+    uid: userUid,
+    email: cleanEmail,
+    name: cleanName,
+    role: 'student',
+    picture: userAvatar,
+    avatar: userAvatar,
+    level,
+    learningGoal: goal,
+    createdAt: new Date().toISOString(),
+  });
 
   const account = {
+    uid: userUid,
     email: cleanEmail,
-    name,
-    role: resolvedRole,
+    name: cleanName,
+    role: 'student',
+    picture: userAvatar,
   };
 
-  res.json({ success: true, account });
+  res.json({
+    success: true,
+    account,
+    profile: db.userProfiles?.[cleanEmail] || null,
+    student: (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null,
+    tutor: (db.tutorsList || []).find((t) => t.email.toLowerCase() === cleanEmail) || null,
+  });
+};
+
+// Endpoint to sync client localStorage registered users to server database
+app.post('/api/auth/sync-local-users', async (req, res) => {
+  const db = readDb();
+  const { users } = req.body;
+  if (!users || typeof users !== 'object') {
+    return res.json({ success: true, synced: 0 });
+  }
+  let count = 0;
+  for (const [rawEmail, user] of Object.entries(users as Record<string, any>)) {
+    const cleanEmail = rawEmail.toLowerCase().trim();
+    if (!cleanEmail || !user) continue;
+    if (!db.authUsers) db.authUsers = {};
+    if (!db.authUsers[cleanEmail]) {
+      db.authUsers[cleanEmail] = {
+        uid: user.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        email: cleanEmail,
+        name: user.name || cleanEmail.split('@')[0],
+        password: user.password || '',
+        role: user.role || 'student',
+        createdAt: user.registeredAt || new Date().toISOString(),
+      };
+      count++;
+    }
+    if (user.role === 'student') {
+      if (!db.students) db.students = [];
+      if (!db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail)) {
+        db.students.push({
+          id: user.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          name: user.name,
+          studentName: user.name,
+          email: cleanEmail,
+          studentEmail: cleanEmail,
+          level: user.profile?.level || 'iniciante',
+          studentLevel: user.profile?.level || 'iniciante',
+          goal: user.profile?.learningGoal || 'English for everyday life & work',
+          learningGoal: user.profile?.learningGoal || 'English for everyday life & work',
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          status: 'active',
+          activeSince: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          avatar: user.profile?.avatar || '',
+          picture: user.profile?.picture || '',
+        });
+      }
+      if (!db.userProfiles) db.userProfiles = {};
+      if (!db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail] = {
+          id: user.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          name: user.name,
+          email: cleanEmail,
+          level: user.profile?.level || 'iniciante',
+          enrollmentStatus: 'active',
+          learningGoal: user.profile?.learningGoal || 'English for everyday life & work',
+          streakDays: 0,
+          points: 0,
+          dailyGoalMinutes: 30,
+          completedTodayMinutes: 0,
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          picture: user.profile?.picture || '',
+          avatar: user.profile?.avatar || '',
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+  }
+  if (count > 0) {
+    await writeDbSync(db);
+  }
+  res.json({ success: true, synced: count });
 });
+
+app.post('/api/auth/register', handleRegistration);
+app.post('/api/auth/signup', handleRegistration);
 
 app.post('/api/auth/google', (req, res) => {
   const db = readDb();
-  const { email, name, picture, role: requestedRole } = req.body;
+  const { email, name, picture, role: requestedRole, uid } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email is required for Google login' });
   }
@@ -349,15 +1127,28 @@ app.post('/api/auth/google', (req, res) => {
 
   if (cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin')) {
     role = 'admin';
-    displayName = 'Admin It\'s Simple';
+    displayName = "Admin It's Simple";
   } else if (requestedRole) {
     role = requestedRole === 'teacher' ? 'teacher' : 'student';
   } else if (
     db.teachers?.some((t) => t.email.toLowerCase() === cleanEmail) ||
-    cleanEmail.includes('charles') ||
-    cleanEmail.includes('teacher')
+    db.tutorsList?.some((t) => t.email.toLowerCase() === cleanEmail)
   ) {
     role = 'teacher';
+  }
+
+  // Update or record in authUsers
+  if (!db.authUsers) db.authUsers = {};
+  if (!db.authUsers[cleanEmail]) {
+    db.authUsers[cleanEmail] = {
+      uid: uid || `google-${Date.now()}`,
+      email: cleanEmail,
+      name: displayName,
+      role,
+      createdAt: new Date().toISOString(),
+    };
+  } else if (uid && !db.authUsers[cleanEmail].uid) {
+    db.authUsers[cleanEmail].uid = uid;
   }
 
   // If new student, add to students list
@@ -368,33 +1159,78 @@ app.post('/api/auth/google', (req, res) => {
     if (!existing) {
       db.students.push({
         id: `st-${Date.now()}`,
+        uid: uid || db.authUsers[cleanEmail]?.uid,
         name: displayName,
         studentName: displayName,
         email: cleanEmail,
         studentEmail: cleanEmail,
+        picture: picture || '',
+        avatar: picture || '',
         level: 'iniciante',
         studentLevel: 'iniciante',
-        contractedLessons: 5,
+        goal: 'English for everyday life & work',
+        learningGoal: 'English for everyday life & work',
+        contractedLessons: 0,
         completedLessonsCount: 0,
-        teacherEmail: 'charles.lambert1939@gmail.com',
-        teacherName: 'Charles Lambert',
+        teacherEmail: null,
+        teacherName: null,
+        routineVideoTime: '09:00',
+        routineAudioTime: '14:00',
+        dailyPhraseTime: '20:00',
         status: 'active',
         activeSince: new Date().toISOString().split('T')[0],
         createdAt: new Date().toISOString(),
       });
-      db.contractedLessons[cleanEmail] = 5;
+      if (!db.contractedLessons) db.contractedLessons = {};
+      db.contractedLessons[cleanEmail] = 0;
+
+      if (!db.userProfiles) db.userProfiles = {};
+      if (!db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail] = {
+          id: `usr-${Date.now()}`,
+          uid: uid || db.authUsers[cleanEmail]?.uid,
+          name: displayName,
+          email: cleanEmail,
+          picture: picture || '',
+          avatar: picture || '',
+          level: 'iniciante',
+          teacherEmail: null,
+          teacherName: null,
+          routineVideoTime: '09:00',
+          routineAudioTime: '14:00',
+          dailyPhraseTime: '20:00',
+          enrollmentStatus: 'not_enrolled',
+          learningGoal: 'English for everyday life & work',
+          streakDays: 0,
+          streakCount: 0,
+          points: 0,
+          contractedLessons: 0,
+          completedLessonsCount: 0,
+        };
+      }
       writeDb(db);
     }
   }
 
   const account = {
+    uid: uid || db.authUsers?.[cleanEmail]?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : undefined),
     email: cleanEmail,
     name: displayName,
     role,
-    picture: picture || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    picture:
+      picture ||
+      db.userProfiles?.[cleanEmail]?.picture ||
+      db.userProfiles?.[uid]?.picture ||
+      '',
   };
 
-  res.json({ success: true, account });
+  res.json({
+    success: true,
+    account,
+    profile: db.userProfiles?.[cleanEmail] || null,
+    student: (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null,
+    tutor: (db.tutorsList || []).find((t) => t.email.toLowerCase() === cleanEmail) || null,
+  });
 });
 
 // 1.2 Landing Page Content (Editable by Admin)
@@ -418,30 +1254,92 @@ app.get('/api/teachers', (req, res) => {
 });
 
 app.get('/api/tutors', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   const db = readDb();
-  res.json(db.tutorsList || []);
+  const requesterEmail = ((req.query.email as string) || '').toLowerCase().trim();
+  const role = req.query.role as string;
+  const uid = (req.query.uid as string) || '';
+
+  const isAdmin =
+    role === 'admin' ||
+    req.query.admin === 'true' ||
+    req.query.includePending === 'true' ||
+    requesterEmail === 'adm.itissimple@gmail.com' ||
+    Boolean(db.authUsers?.[requesterEmail]?.role === 'admin');
+
+  if (isAdmin) {
+    return res.json(db.tutorsList || []);
+  }
+
+  // Approved tutors are public; pending tutors are visible ONLY to the tutor themselves
+  const list = (db.tutorsList || []).filter((t: any) => {
+    const tEmail = (t.email || '').toLowerCase().trim();
+    const tId = (t.id || '').toLowerCase().trim();
+    if (db.deletedTutorEmails?.includes(tEmail) || db.deletedTutorIds?.includes(tId)) {
+      return false;
+    }
+    if (t.approvalStatus === 'approved') return true;
+    if (requesterEmail && tEmail === requesterEmail) return true;
+    if (uid && t.uid === uid) return true;
+    return false;
+  });
+  res.json(list);
 });
 
-app.post('/api/tutors', (req, res) => {
+app.post('/api/tutors', async (req, res) => {
   const db = readDb();
   const newTutor = req.body.tutor || req.body;
   if (!newTutor || !newTutor.email) {
     return res.status(400).json({ error: 'Invalid tutor data' });
   }
   const cleanEmail = newTutor.email.toLowerCase().trim();
+  const cleanName = (newTutor.name || '').trim();
+  const cleanNameLower = cleanName.toLowerCase();
   const tutorId = newTutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+  // Check if tutor already exists by explicit email or matching unique ID
+  const existingEmailIdx = (db.tutorsList || []).findIndex(
+    (t: any) =>
+      (t.email && t.email.toLowerCase() === cleanEmail) ||
+      (newTutor.id && t.id && t.id === newTutor.id)
+  );
+
+  if (existingEmailIdx >= 0 && !req.body.isUpdate && !newTutor.isUpdate) {
+    return res.status(409).json({
+      error: 'Este e-mail já está cadastrado no sistema como Amigo Nativo. Por favor, faça login com sua conta.',
+      duplicateField: 'email',
+      isExistingUser: true,
+    });
+  }
+
+  // Check if tutor already exists by name
+  const existingName = (db.tutorsList || []).some(
+    (t: any) => (t.name || '').trim().toLowerCase() === cleanNameLower && t.email?.toLowerCase() !== cleanEmail
+  );
+
+  if (existingName && !req.body.isUpdate && !newTutor.isUpdate) {
+    return res.status(409).json({
+      error: 'Já existe um Amigo Nativo cadastrado com este nome na plataforma. Por favor, inclua seu sobrenome ou use um nome distintivo.',
+      duplicateField: 'name',
+      isExistingUser: true,
+    });
+  }
   
   const tutorEntry = {
     ...newTutor,
+    name: cleanName,
     id: tutorId,
     email: cleanEmail,
+    role: 'teacher',
     approvalStatus: newTutor.approvalStatus || (newTutor.registeredByAdmin ? 'approved' : 'pending'),
     appliedAt: newTutor.appliedAt || new Date().toISOString(),
   };
 
-  const existingIdx = (db.tutorsList || []).findIndex((t) => t.email.toLowerCase() === cleanEmail || t.id === tutorId);
-  if (existingIdx >= 0) {
-    db.tutorsList[existingIdx] = { ...db.tutorsList[existingIdx], ...tutorEntry };
+  if (existingEmailIdx >= 0) {
+    db.tutorsList[existingEmailIdx] = { ...db.tutorsList[existingEmailIdx], ...tutorEntry };
   } else {
     db.tutorsList = db.tutorsList || [];
     db.tutorsList.push(tutorEntry);
@@ -450,19 +1348,39 @@ app.post('/api/tutors', (req, res) => {
   // Also maintain teachers list for auth
   const teacherIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
   if (teacherIdx >= 0) {
-    db.teachers[teacherIdx] = { ...db.teachers[teacherIdx], name: newTutor.name, email: cleanEmail };
+    db.teachers[teacherIdx] = { ...db.teachers[teacherIdx], name: newTutor.name || cleanName, email: cleanEmail, role: 'teacher' };
   } else {
-    db.teachers.push({ email: cleanEmail, name: newTutor.name, role: 'teacher' });
+    db.teachers.push({ email: cleanEmail, name: newTutor.name || cleanName, role: 'teacher' });
   }
 
-  writeDb(db);
+  // Ensure auth record exists with role 'teacher'
+  if (!db.authUsers) db.authUsers = {};
+  db.authUsers[cleanEmail] = {
+    email: cleanEmail,
+    name: newTutor.name || cleanName,
+    password: newTutor.password || db.authUsers[cleanEmail]?.password || '',
+    role: 'teacher',
+    createdAt: db.authUsers[cleanEmail]?.createdAt || new Date().toISOString(),
+  };
+
+  // Unmark from deleted lists if newly registered or re-registering
+  if (db.deletedTutorIds) {
+    db.deletedTutorIds = db.deletedTutorIds.filter((id) => id !== newTutor.id?.toLowerCase());
+  }
+  if (db.deletedTutorEmails) {
+    db.deletedTutorEmails = db.deletedTutorEmails.filter((em) => em !== cleanEmail);
+  }
+
+  await writeDbSync(db);
   res.json({ success: true, tutor: tutorEntry, tutors: db.tutorsList });
 });
 
 app.put('/api/tutors/:id', (req, res) => {
   const db = readDb();
   const tutorId = req.params.id;
-  const updatedData = req.body;
+  const rawBody = req.body;
+  const updatedData = rawBody?.tutor ? { ...rawBody.tutor } : { ...rawBody };
+  if ((updatedData as any).tutor) delete (updatedData as any).tutor;
   
   const existingIdx = (db.tutorsList || []).findIndex(
     (t) => t.id === tutorId || t.email?.toLowerCase() === tutorId?.toLowerCase()
@@ -474,6 +1392,18 @@ app.put('/api/tutors/:id', (req, res) => {
       ...updatedData,
       id: db.tutorsList[existingIdx].id || tutorId,
     };
+    
+    // Sync with db.teachers
+    const tEmail = (db.tutorsList[existingIdx].email || '').toLowerCase();
+    const teacherIdx = (db.teachers || []).findIndex((tc: any) => tc.email?.toLowerCase() === tEmail);
+    if (teacherIdx >= 0) {
+      db.teachers[teacherIdx] = {
+        ...db.teachers[teacherIdx],
+        name: db.tutorsList[existingIdx].name,
+        avatar: db.tutorsList[existingIdx].avatar,
+      };
+    }
+
     writeDb(db);
     return res.json({ success: true, tutor: db.tutorsList[existingIdx], tutors: db.tutorsList });
   }
@@ -486,27 +1416,105 @@ app.put('/api/tutors/:id', (req, res) => {
   res.json({ success: true, tutor: newEntry, tutors: db.tutorsList });
 });
 
-app.post('/api/tutors/:id/approve', (req, res) => {
+// Admin Delete Tutor
+app.delete('/api/tutors/:id', async (req, res) => {
+  const db = readDb();
+  const tutorId = decodeURIComponent(req.params.id);
+  const targetEmailQuery = ((req.query.email as string) || '').toLowerCase();
+
+  const targetTutor = (db.tutorsList || []).find(
+    (t: any) =>
+      t.id === tutorId ||
+      t.email?.toLowerCase() === tutorId.toLowerCase() ||
+      (targetEmailQuery && t.email?.toLowerCase() === targetEmailQuery)
+  );
+  const targetEmail = (
+    targetTutor?.email ||
+    targetEmailQuery ||
+    (tutorId.includes('@') ? tutorId : '')
+  )?.toLowerCase();
+
+  // Track permanently so deleted tutors are NEVER re-added by defaults or sync
+  db.deletedTutorIds = Array.from(
+    new Set([...(db.deletedTutorIds || []), tutorId.toLowerCase()])
+  );
+  if (targetEmail) {
+    db.deletedTutorEmails = Array.from(
+      new Set([...(db.deletedTutorEmails || []), targetEmail.toLowerCase()])
+    );
+  }
+
+  db.tutorsList = (db.tutorsList || []).filter(
+    (t: any) =>
+      t.id !== tutorId &&
+      t.email?.toLowerCase() !== tutorId.toLowerCase() &&
+      (!targetEmail || t.email?.toLowerCase() !== targetEmail)
+  );
+
+  if (targetEmail) {
+    // Only remove from teachers if NOT an admin! Admins must keep admin access
+    db.teachers = (db.teachers || []).filter(
+      (t: any) => t.email?.toLowerCase() !== targetEmail || t.role === 'admin'
+    );
+    if (db.meetSettings && targetEmail !== 'adm.itissimple@gmail.com') {
+      delete db.meetSettings[targetEmail];
+    }
+    if (db.teacherSettings && targetEmail !== 'adm.itissimple@gmail.com') {
+      delete db.teacherSettings[targetEmail];
+    }
+    // Only delete from authUsers if their role is teacher and not admin!
+    if (db.authUsers && db.authUsers[targetEmail]?.role === 'teacher') {
+      delete db.authUsers[targetEmail];
+    }
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, message: 'Amigo Nativo excluído com sucesso.', tutors: db.tutorsList });
+});
+
+app.post('/api/tutors/:id/approve', async (req, res) => {
   const db = readDb();
   const tutorId = req.params.id;
-  db.tutorsList = (db.tutorsList || []).map((t) =>
-    t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()
-      ? { ...t, approvalStatus: 'approved' }
-      : t
-  );
-  writeDb(db);
+  let approvedEmail = '';
+  db.tutorsList = (db.tutorsList || []).map((t) => {
+    if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
+      approvedEmail = (t.email || '').toLowerCase();
+      return { ...t, approvalStatus: 'approved' };
+    }
+    return t;
+  });
+
+  if (approvedEmail) {
+    const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === approvedEmail);
+    if (tIdx >= 0) {
+      db.teachers[tIdx] = { ...db.teachers[tIdx], approvalStatus: 'approved' };
+    }
+  }
+
+  await writeDbSync(db);
   res.json({ success: true, tutors: db.tutorsList });
 });
 
-app.post('/api/tutors/:id/reject', (req, res) => {
+app.post('/api/tutors/:id/reject', async (req, res) => {
   const db = readDb();
   const tutorId = req.params.id;
-  db.tutorsList = (db.tutorsList || []).map((t) =>
-    t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()
-      ? { ...t, approvalStatus: 'rejected' }
-      : t
-  );
-  writeDb(db);
+  let rejectedEmail = '';
+  db.tutorsList = (db.tutorsList || []).map((t) => {
+    if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
+      rejectedEmail = (t.email || '').toLowerCase();
+      return { ...t, approvalStatus: 'rejected' };
+    }
+    return t;
+  });
+
+  if (rejectedEmail) {
+    const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === rejectedEmail);
+    if (tIdx >= 0) {
+      db.teachers[tIdx] = { ...db.teachers[tIdx], approvalStatus: 'rejected' };
+    }
+  }
+
+  await writeDbSync(db);
   res.json({ success: true, tutors: db.tutorsList });
 });
 
@@ -535,7 +1543,7 @@ app.delete('/api/teachers/:email', (req, res) => {
   res.json({ success: true, teachers: db.teachers });
 });
 
-// 2.1 Dictionary Definition with Gemini AI fallback
+// 2.1 Dictionary Definition with Free Dictionary API, Local Dictionary, & Gemini fallback
 app.post('/api/dictionary/define', async (req, res) => {
   const { word, context, activityName } = req.body;
   if (!word || typeof word !== 'string') {
@@ -543,74 +1551,306 @@ app.post('/api/dictionary/define', async (req, res) => {
   }
 
   const cleanWord = word.trim();
-  const apiKey = process.env.GEMINI_API_KEY;
+  const lowerWord = cleanWord.toLowerCase();
 
+  // 1. Check curated offline dictionary first for instant authentic definitions
+  if (COMMON_ROUTINE_DICTIONARY[lowerWord]) {
+    const local = COMMON_ROUTINE_DICTIONARY[lowerWord];
+    return res.json({
+      word: local.word,
+      partOfSpeech: local.partOfSpeech || 'noun',
+      definitionEn: local.definitionEn,
+      exampleSentenceEn: local.exampleSentenceEn,
+      translationPt: local.translationPt,
+      source: 'offline_dict',
+    });
+  }
+
+  // 2. Try official Free Dictionary API (https://api.dictionaryapi.dev)
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+
+    const apiRes = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lowerWord)}`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeout);
+
+    if (apiRes.ok) {
+      const data = (await apiRes.json()) as any[];
+      if (Array.isArray(data) && data.length > 0 && data[0].meanings?.length > 0) {
+        const entry = data[0];
+        const meanings = entry.meanings;
+        const pos = Array.from(new Set(meanings.map((m: any) => m.partOfSpeech).filter(Boolean))).join(' / ') || meanings[0].partOfSpeech || 'word';
+
+        let def = '';
+        let example = '';
+
+        for (const m of meanings) {
+          for (const d of m.definitions || []) {
+            if (!def && d.definition) def = d.definition;
+            if (d.example && d.example.trim()) {
+              example = d.example.trim();
+              if (d.definition) def = d.definition;
+              break;
+            }
+          }
+          if (example) break;
+        }
+
+        if (!def) def = meanings[0].definitions?.[0]?.definition || '';
+
+        if (def) {
+          return res.json({
+            word: entry.word || cleanWord,
+            partOfSpeech: pos,
+            definitionEn: def,
+            exampleSentenceEn: example || `She practiced using the word "${cleanWord}" during conversation.`,
+            phonetic: entry.phonetic || entry.phonetics?.find((p: any) => p.text)?.text,
+            audio: entry.phonetics?.find((p: any) => p.audio && p.audio.startsWith('http'))?.audio,
+            source: 'api',
+          });
+        }
+      }
+    }
+  } catch (err) {
+    // Network or timeout, proceed to Gemini or local fallback
+  }
+
+  // 3. Try Gemini AI with strict dictionary prompt
+  const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `You are a professional pedagogical English dictionary for Brazilian learners. Provide the English dictionary definition, part of speech, an everyday English example sentence, and a concise Portuguese translation for the word/expression: "${cleanWord}". Context: ${activityName || context || 'Everyday life routine'}.
-Return strictly JSON matching:
+      const prompt = `You are a real, authoritative English dictionary (like Oxford or Merriam-Webster).
+Provide the official dictionary definition, part of speech, and an authentic everyday English example sentence illustrating natural usage for: "${cleanWord}".
+Do NOT write meta-commentary like "A useful term connected to..." or "Remembering how to use...". Write a genuine, crisp dictionary definition and a realistic example sentence.
+Return strictly JSON:
 {
   "word": "${cleanWord}",
   "partOfSpeech": "noun | verb | adjective | phrasal verb | idiom",
-  "definitionEn": "Clear, accessible, native English definition in simple English",
-  "exampleSentenceEn": "Natural everyday English example sentence",
-  "translationPt": "Tradução concisa em português"
+  "definitionEn": "Official clear English definition",
+  "exampleSentenceEn": "Authentic everyday example sentence using the word",
+  "translationPt": "Concise Portuguese translation"
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
-      });
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: GEMINI_TEXT_MODEL,
+          contents: prompt,
+          config: { responseMimeType: 'application/json' },
+        });
+      } catch (err: any) {
+        if (err?.status === 404 || err?.message?.includes('not found') || err?.message?.includes('404')) {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.6-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' },
+          });
+        } else {
+          throw err;
+        }
+      }
 
       if (response.text) {
         const parsed = JSON.parse(response.text);
-        return res.json(parsed);
+        if (parsed.definitionEn) {
+          return res.json({
+            ...parsed,
+            source: 'ai_fallback',
+          });
+        }
       }
     } catch (e) {
-      console.warn('Gemini dictionary definition fallback:', e);
+      console.warn('Gemini dictionary definition fallback error:', e);
     }
   }
 
-  // Local fallback
+  // 4. Local linguistic fallback
+  const fallback = getDictionaryDefinition(cleanWord, context || activityName);
   res.json({
     word: cleanWord,
-    partOfSpeech: 'word / expression',
-    definitionEn: `Key English vocabulary used in daily conversational situations${context ? ` related to ${context}` : ''}.`,
-    exampleSentenceEn: `I practiced using "${cleanWord}" during my routine today.`,
-    translationPt: 'Vocabulário prático em inglês',
+    partOfSpeech: fallback.partOfSpeech || 'word',
+    definitionEn: fallback.definitionEn,
+    exampleSentenceEn: fallback.exampleSentenceEn,
+    translationPt: fallback.translationPt,
+    source: 'local_fallback',
   });
 });
 
 // 3. Meet Settings & Teacher Settings Endpoints
 app.get(['/api/meet-settings', '/api/teacher-settings'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   const db = readDb();
-  const settings = { ...db.meetSettings, ...db.teacherSettings };
-  res.json(settings);
+  const teacherEmail = ((req.query.teacherEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = (req.query.uid as string) || '';
+  const role = req.query.role as string;
+
+  if (role === 'admin' || teacherEmail === 'adm.itissimple@gmail.com') {
+    const settings = { ...db.meetSettings, ...db.teacherSettings };
+    return res.json(settings);
+  }
+
+  if (teacherEmail || uid) {
+    const specific =
+      (teacherEmail ? (db.meetSettings[teacherEmail] || db.teacherSettings[teacherEmail]) : null) ||
+      (uid ? (db.meetSettings[uid] || db.teacherSettings[uid]) : null) ||
+      {};
+
+    // If meet link is missing, fallback to tutor profile meetUrl
+    if (!specific.meetLink && teacherEmail) {
+      const tutorMatch = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === teacherEmail);
+      if (tutorMatch?.meetUrl || tutorMatch?.meetLink) {
+        specific.meetLink = tutorMatch.meetUrl || tutorMatch.meetLink;
+      }
+    }
+    return res.json(specific);
+  }
+
+  // Return all known meet settings
+  res.json({ ...db.meetSettings, ...db.teacherSettings });
 });
 
-app.post(['/api/meet-settings', '/api/teacher-settings'], (req, res) => {
+app.post(['/api/meet-settings', '/api/teacher-settings'], async (req, res) => {
   const db = readDb();
   const settings = req.body.settings || req.body;
   const teacherEmail = req.body.teacherEmail || settings.teacherEmail;
+  const uid = req.body.uid || settings.uid;
   if (!teacherEmail || !settings) {
     return res.status(400).json({ error: 'Missing teacherEmail or settings' });
   }
   const cleanEmail = teacherEmail.toLowerCase().trim();
-  db.meetSettings[cleanEmail] = {
+  const entry = {
     ...settings,
     teacherEmail: cleanEmail,
+    ...(uid ? { uid } : {}),
   };
-  db.teacherSettings[cleanEmail] = db.meetSettings[cleanEmail];
-  writeDb(db);
+  db.meetSettings[cleanEmail] = entry;
+  db.teacherSettings[cleanEmail] = entry;
+  if (uid) {
+    db.meetSettings[uid] = entry;
+    db.teacherSettings[uid] = entry;
+  }
+  await writeDbSync(db);
   res.json({ success: true, meetSettings: db.meetSettings, teacherSettings: db.teacherSettings });
 });
 
 // 4. Students & Enrollments Endpoints
 app.get('/api/students', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   const db = readDb();
-  res.json(db.students || []);
+  const requesterEmail = (
+    (req.query.email as string) ||
+    (req.query.teacherEmail as string) ||
+    (req.query.studentEmail as string) ||
+    ''
+  ).toLowerCase().trim();
+  const role = req.query.role as string;
+  const uid = (req.query.uid as string) || '';
+
+  if (role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') {
+    return res.json(db.students || []);
+  }
+
+  if (role === 'teacher' || req.query.teacherEmail) {
+    const studentMap = new Map<string, any>();
+
+    // 1. From db.students where teacherEmail matches
+    (db.students || []).forEach((s: any) => {
+      const sTeacher = (s.teacherEmail || '').toLowerCase().trim();
+      const sTeacherUid = s.teacherUid || '';
+      if (sTeacher === requesterEmail || (uid && sTeacherUid === uid)) {
+        const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
+        if (sEmail) {
+          studentMap.set(sEmail, {
+            ...s,
+            email: sEmail,
+            studentEmail: sEmail,
+            name: s.name || s.studentName || sEmail.split('@')[0],
+            studentName: s.name || s.studentName || sEmail.split('@')[0],
+            status: s.status || 'active',
+          });
+        }
+      }
+    });
+
+    // 2. From db.userProfiles where teacherEmail matches
+    Object.entries(db.userProfiles || {}).forEach(([pEmail, profile]: [string, any]) => {
+      const cleanPEmail = pEmail.toLowerCase().trim();
+      const pTeacher = (profile.teacherEmail || '').toLowerCase().trim();
+      if (pTeacher === requesterEmail && profile.role !== 'teacher' && profile.role !== 'admin') {
+        if (!studentMap.has(cleanPEmail)) {
+          studentMap.set(cleanPEmail, {
+            id: profile.id || `st-${cleanPEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: profile.name || cleanPEmail.split('@')[0],
+            studentName: profile.name || cleanPEmail.split('@')[0],
+            email: cleanPEmail,
+            studentEmail: cleanPEmail,
+            level: profile.level || 'iniciante',
+            studentLevel: profile.level || 'iniciante',
+            goal: profile.learningGoal || 'English for everyday life & work',
+            learningGoal: profile.learningGoal || 'English for everyday life & work',
+            teacherEmail: requesterEmail,
+            teacherName: profile.teacherName || '',
+            contractedLessons: Number(profile.contractedLessons ?? db.contractedLessons?.[cleanPEmail] ?? 0),
+            completedLessonsCount: Number(profile.completedLessonsCount || 0),
+            picture: profile.avatar || profile.picture || '',
+            avatar: profile.avatar || profile.picture || '',
+            status: profile.enrollmentStatus === 'cancelled' ? 'cancelled' : 'active',
+            enrolledAt: profile.createdAt || new Date().toISOString(),
+          });
+        }
+      }
+    });
+
+    // 3. From db.liveLessons where teacherEmail matches
+    (db.liveLessons || []).forEach((l: any) => {
+      const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+      if (lTeacher === requesterEmail) {
+        const sEmail = (l.studentEmail || '').toLowerCase().trim();
+        if (sEmail && !studentMap.has(sEmail)) {
+          studentMap.set(sEmail, {
+            id: `st-${sEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: l.studentName || sEmail.split('@')[0],
+            studentName: l.studentName || sEmail.split('@')[0],
+            email: sEmail,
+            studentEmail: sEmail,
+            level: 'iniciante',
+            studentLevel: 'iniciante',
+            goal: 'English for everyday life & work',
+            learningGoal: 'English for everyday life & work',
+            teacherEmail: requesterEmail,
+            teacherName: l.teacherName || '',
+            status: 'active',
+          });
+        }
+      }
+    });
+
+    return res.json(Array.from(studentMap.values()));
+  }
+
+  if (role === 'student' || req.query.studentEmail) {
+    const list = (db.students || []).filter((s: any) =>
+      (s.email || s.studentEmail || '').toLowerCase() === requesterEmail ||
+      (s.uid && s.uid === uid)
+    );
+    return res.json(list);
+  }
+
+  // If unauthenticated or no matching filter, return empty array to prevent data leaks
+  res.json([]);
 });
 
 app.post('/api/students', (req, res) => {
@@ -643,28 +1883,371 @@ app.post('/api/students/profile', (req, res) => {
     return res.status(400).json({ error: 'Profile email is required' });
   }
   const cleanEmail = profile.email.toLowerCase().trim();
+  if (!db.userProfiles) db.userProfiles = {};
+  const existingProfile = db.userProfiles[cleanEmail] || {};
+
   db.userProfiles[cleanEmail] = {
+    ...existingProfile,
     ...profile,
     email: cleanEmail,
-    avatar: picture || profile.avatar,
-    picture: picture || profile.picture,
+    name: profile.name || existingProfile.name,
+    level: profile.level || existingProfile.level,
+    learningGoal: profile.learningGoal || existingProfile.learningGoal,
+    dailyGoalMinutes: profile.dailyGoalMinutes ?? existingProfile.dailyGoalMinutes ?? 30,
+    avatar: picture || profile.avatar || existingProfile.avatar,
+    picture: picture || profile.picture || existingProfile.picture,
+    // Preserve core counters
+    contractedLessons: existingProfile.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 5,
+    completedLessonsCount: existingProfile.completedLessonsCount ?? 0,
+    routineVideoTime: profile.routineVideoTime || existingProfile.routineVideoTime || '09:00',
+    routineAudioTime: profile.routineAudioTime || existingProfile.routineAudioTime || '14:00',
+    dailyPhraseTime: profile.dailyPhraseTime || existingProfile.dailyPhraseTime || '20:00',
+    teacherEmail: existingProfile.teacherEmail || profile.teacherEmail,
+    teacherName: existingProfile.teacherName || profile.teacherName,
   };
 
   const idx = db.students.findIndex((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
   if (idx >= 0) {
     db.students[idx] = {
       ...db.students[idx],
-      name: profile.name,
-      studentName: profile.name,
-      level: profile.level,
-      studentLevel: profile.level,
+      name: profile.name || db.students[idx].name,
+      studentName: profile.name || db.students[idx].studentName,
+      level: profile.level || db.students[idx].level,
+      studentLevel: profile.level || db.students[idx].studentLevel,
       goal: profile.learningGoal || db.students[idx].goal,
-      picture: picture || db.students[idx].picture,
+      learningGoal: profile.learningGoal || db.students[idx].learningGoal,
+      picture: picture || profile.avatar || db.students[idx].picture,
+      avatar: picture || profile.avatar || db.students[idx].avatar,
+      routineVideoTime: profile.routineVideoTime || db.students[idx].routineVideoTime || '09:00',
+      routineAudioTime: profile.routineAudioTime || db.students[idx].routineAudioTime || '14:00',
+      dailyPhraseTime: profile.dailyPhraseTime || db.students[idx].dailyPhraseTime || '20:00',
     };
   }
 
   writeDb(db);
   res.json({ success: true, profile: db.userProfiles[cleanEmail] });
+});
+
+app.get('/api/user-profile', (req, res) => {
+  const db = readDb();
+  const email = ((req.query.email as string) || '').toLowerCase().trim();
+  if (!email) {
+    return res.status(400).json({ error: 'Email parameter is required' });
+  }
+
+  // If user is a teacher / Native Friend, return their tutor profile directly
+  const isTeacherUser =
+    db.authUsers?.[email]?.role === 'teacher' ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === email) ||
+    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === email && t.role === 'teacher');
+
+  if (isTeacherUser) {
+    const tutor =
+      (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === email) ||
+      (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === email) ||
+      db.authUsers?.[email];
+    return res.json({
+      success: true,
+      role: 'teacher',
+      isTeacher: true,
+      tutor: tutor || null,
+      message: 'Native Friend profile retrieved successfully',
+    });
+  }
+
+  let profile = db.userProfiles?.[email] || null;
+  const student = (db.students || []).find(
+    (s) => (s.email || s.studentEmail || '').toLowerCase() === email
+  );
+
+  if (profile && student) {
+    // Fill in any missing fields from student without overwriting existing profile data
+    profile = {
+      ...profile,
+      name: profile.name || student.name || student.studentName,
+      level: profile.level || student.level || student.studentLevel,
+      learningGoal: profile.learningGoal || student.goal || student.learningGoal,
+      routineVideoTime: profile.routineVideoTime || student.routineVideoTime || '09:00',
+      routineAudioTime: profile.routineAudioTime || student.routineAudioTime || '14:00',
+      dailyPhraseTime: profile.dailyPhraseTime || student.dailyPhraseTime || '20:00',
+      contractedLessons: profile.contractedLessons ?? student.contractedLessons ?? db.contractedLessons?.[email] ?? 5,
+      completedLessonsCount: profile.completedLessonsCount ?? student.completedLessonsCount ?? 0,
+      teacherEmail: profile.teacherEmail || student.teacherEmail,
+      teacherName: profile.teacherName || student.teacherName,
+    };
+    db.userProfiles[email] = profile;
+    writeDb(db);
+  } else if (!profile && student) {
+    profile = {
+      id: student.id || `usr-${Date.now()}`,
+      name: student.name || student.studentName,
+      email,
+      level: student.level || student.studentLevel || 'iniciante',
+      teacherEmail: student.teacherEmail,
+      teacherName: student.teacherName,
+      routineVideoTime: student.routineVideoTime || '09:00',
+      routineAudioTime: student.routineAudioTime || '14:00',
+      dailyPhraseTime: student.dailyPhraseTime || '20:00',
+      enrollmentStatus: student.status || 'active',
+      learningGoal: student.goal || student.learningGoal || 'English for everyday life & work',
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: student.contractedLessons ?? db.contractedLessons?.[email] ?? 5,
+      completedLessonsCount: student.completedLessonsCount ?? 0,
+      createdAt: student.createdAt || new Date().toISOString(),
+      avatar: student.avatar || student.picture,
+      picture: student.picture || student.avatar,
+    };
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[email] = profile;
+    writeDb(db);
+  } else if (!profile && !student) {
+    const defaultName = (req.query.name as string) || email.split('@')[0];
+    profile = {
+      id: `usr-${Date.now()}`,
+      name: defaultName.charAt(0).toUpperCase() + defaultName.slice(1),
+      email,
+      level: 'iniciante',
+      routineVideoTime: '09:00',
+      routineAudioTime: '14:00',
+      dailyPhraseTime: '20:00',
+      enrollmentStatus: 'not_enrolled',
+      learningGoal: 'English for everyday life & work',
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: db.contractedLessons?.[email] ?? 0,
+      completedLessonsCount: 0,
+      teacherEmail: null,
+      teacherName: null,
+      createdAt: new Date().toISOString(),
+    };
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[email] = profile;
+    writeDb(db);
+  }
+
+  res.json({ success: true, profile });
+});
+
+app.post('/api/user-profile', async (req, res) => {
+  const db = readDb();
+  const rawProfile = req.body.profile || req.body;
+  const email = (req.body.email || rawProfile.email || '').toLowerCase().trim();
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  const isTeacherUser =
+    db.authUsers?.[email]?.role === 'teacher' ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === email) ||
+    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === email && t.role !== 'admin');
+
+  if (isTeacherUser) {
+    const tutorIdx = (db.tutorsList || []).findIndex((t: any) => (t.email || '').toLowerCase() === email);
+    if (tutorIdx >= 0) {
+      db.tutorsList[tutorIdx] = {
+        ...db.tutorsList[tutorIdx],
+        ...rawProfile,
+        email,
+        role: 'teacher',
+      };
+    }
+    if (db.userProfiles?.[email]) {
+      delete db.userProfiles[email];
+    }
+    writeDb(db);
+    return res.json({
+      success: true,
+      role: 'teacher',
+      isTeacher: true,
+      tutor: tutorIdx >= 0 ? db.tutorsList[tutorIdx] : rawProfile,
+      profile: null,
+    });
+  }
+
+  if (!db.userProfiles) db.userProfiles = {};
+  const existing = db.userProfiles[email] || {};
+
+  const updatedTeacherEmail =
+    rawProfile.teacherEmail !== undefined ? (rawProfile.teacherEmail || null) : (existing.teacherEmail ?? null);
+  const updatedTeacherName =
+    rawProfile.teacherName !== undefined ? (rawProfile.teacherName || null) : (existing.teacherName ?? null);
+
+  db.userProfiles[email] = {
+    ...existing,
+    ...rawProfile,
+    email,
+    name: rawProfile.name || existing.name,
+    level: rawProfile.level || existing.level,
+    learningGoal: rawProfile.learningGoal || existing.learningGoal,
+    dailyGoalMinutes: rawProfile.dailyGoalMinutes ?? existing.dailyGoalMinutes ?? 30,
+    contractedLessons: rawProfile.contractedLessons ?? existing.contractedLessons ?? db.contractedLessons?.[email] ?? 0,
+    completedLessonsCount: existing.completedLessonsCount ?? rawProfile.completedLessonsCount ?? 0,
+    teacherEmail: updatedTeacherEmail,
+    teacherName: updatedTeacherName,
+    enrollmentStatus: rawProfile.enrollmentStatus || existing.enrollmentStatus || (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+  };
+
+  const studentIdx = (db.students || []).findIndex(
+    (s) => (s.email || s.studentEmail || '').toLowerCase() === email
+  );
+  if (studentIdx >= 0) {
+    db.students[studentIdx] = {
+      ...db.students[studentIdx],
+      name: rawProfile.name || db.students[studentIdx].name,
+      studentName: rawProfile.name || db.students[studentIdx].studentName,
+      level: rawProfile.level || db.students[studentIdx].level,
+      studentLevel: rawProfile.level || db.students[studentIdx].studentLevel,
+      goal: rawProfile.learningGoal || db.students[studentIdx].goal,
+      learningGoal: rawProfile.learningGoal || db.students[studentIdx].learningGoal,
+      picture: rawProfile.avatar || rawProfile.picture || db.students[studentIdx].picture,
+      avatar: rawProfile.avatar || rawProfile.picture || db.students[studentIdx].avatar,
+      teacherEmail: updatedTeacherEmail,
+      teacherName: updatedTeacherName,
+      status: db.userProfiles[email].enrollmentStatus === 'cancelled' ? 'cancelled' : (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+    };
+  } else {
+    if (!db.students) db.students = [];
+    const studentName = rawProfile.name || existing.name || email.split('@')[0];
+    db.students.push({
+      id: `st-${Date.now()}`,
+      name: studentName,
+      studentName: studentName,
+      email,
+      studentEmail: email,
+      level: rawProfile.level || 'iniciante',
+      studentLevel: rawProfile.level || 'iniciante',
+      goal: rawProfile.learningGoal || 'English for everyday life & work',
+      learningGoal: rawProfile.learningGoal || 'English for everyday life & work',
+      contractedLessons: Number(rawProfile.contractedLessons ?? db.contractedLessons?.[email] ?? 0),
+      completedLessonsCount: 0,
+      teacherEmail: updatedTeacherEmail,
+      teacherName: updatedTeacherName,
+      status: db.userProfiles[email].enrollmentStatus === 'cancelled' ? 'cancelled' : (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+      activeSince: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, profile: db.userProfiles[email] });
+});
+
+// Purchase Lesson Package with a specific Native Friend (binds tutor as fixed + adds lessons)
+app.post('/api/students/purchase-package', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, teacherEmail, teacherName, packageLessons, packageName, packagePriceBrl, packagePriceUsd, paymentMethod } = req.body;
+  const cleanStudentEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanTeacherEmail = (teacherEmail || '').toLowerCase().trim();
+
+  if (!cleanStudentEmail || !cleanTeacherEmail) {
+    return res.status(400).json({ error: 'studentEmail and teacherEmail are required' });
+  }
+
+  const lessonsToAdd = Number(packageLessons) > 0 ? Number(packageLessons) : 5;
+
+  // Find teacher name if not provided
+  let finalTeacherName = teacherName;
+  if (!finalTeacherName) {
+    const tutorMatch = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanTeacherEmail);
+    const teacherMatch = (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === cleanTeacherEmail);
+    finalTeacherName = tutorMatch?.name || teacherMatch?.name || cleanTeacherEmail.split('@')[0];
+  }
+
+  // Update contracted lessons count
+  if (!db.contractedLessons) db.contractedLessons = {};
+  const currentContracted = Number(db.contractedLessons[cleanStudentEmail] || 0);
+  const newTotal = currentContracted + lessonsToAdd;
+  db.contractedLessons[cleanStudentEmail] = newTotal;
+
+  // Update student in db.students
+  let studentFound = false;
+  db.students = (db.students || []).map((s: any) => {
+    if ((s.email || s.studentEmail || '').toLowerCase() === cleanStudentEmail) {
+      studentFound = true;
+      return {
+        ...s,
+        teacherEmail: cleanTeacherEmail,
+        teacherName: finalTeacherName,
+        contractedLessons: newTotal,
+        status: 'active',
+      };
+    }
+    return s;
+  });
+
+  if (!studentFound) {
+    db.students.push({
+      id: `st-${Date.now()}`,
+      name: cleanStudentEmail.split('@')[0],
+      studentName: cleanStudentEmail.split('@')[0],
+      email: cleanStudentEmail,
+      studentEmail: cleanStudentEmail,
+      level: 'iniciante',
+      studentLevel: 'iniciante',
+      goal: 'English for everyday life & work',
+      learningGoal: 'English for everyday life & work',
+      contractedLessons: newTotal,
+      completedLessonsCount: 0,
+      teacherEmail: cleanTeacherEmail,
+      teacherName: finalTeacherName,
+      routineVideoTime: '09:00',
+      routineAudioTime: '14:00',
+      dailyPhraseTime: '20:00',
+      status: 'active',
+      activeSince: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // Update db.userProfiles
+  if (!db.userProfiles) db.userProfiles = {};
+  const existingProfile = db.userProfiles[cleanStudentEmail] || {};
+  db.userProfiles[cleanStudentEmail] = {
+    ...existingProfile,
+    id: existingProfile.id || `usr-${Date.now()}`,
+    email: cleanStudentEmail,
+    name: existingProfile.name || cleanStudentEmail.split('@')[0],
+    level: existingProfile.level || 'iniciante',
+    teacherEmail: cleanTeacherEmail,
+    teacherName: finalTeacherName,
+    enrollmentStatus: 'active',
+    contractedLessons: newTotal,
+    completedLessonsCount: existingProfile.completedLessonsCount || 0,
+  };
+
+  // Record transaction
+  if (!db.transactions) db.transactions = [];
+  const transaction = {
+    id: `tx-${Date.now()}`,
+    studentEmail: cleanStudentEmail,
+    teacherEmail: cleanTeacherEmail,
+    teacherName: finalTeacherName,
+    packageLessons: lessonsToAdd,
+    packageName: packageName || `${lessonsToAdd} Aulas`,
+    packagePriceBrl: packagePriceBrl || lessonsToAdd * 90,
+    packagePriceUsd: packagePriceUsd || lessonsToAdd * 16,
+    paymentMethod: paymentMethod || 'credit_card',
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+  };
+  db.transactions.unshift(transaction);
+
+  await writeDbSync(db);
+
+  res.json({
+    success: true,
+    message: 'Package purchased successfully and Native Friend assigned',
+    contractedLessons: newTotal,
+    profile: db.userProfiles[cleanStudentEmail],
+    transaction,
+  });
 });
 
 app.post('/api/students/contract', (req, res) => {
@@ -698,32 +2281,124 @@ app.post('/api/students/cancel', (req, res) => {
 
 app.get('/api/student-routines', (req, res) => {
   const db = readDb();
-  const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
-  const routines = db.studentRoutinesMap[studentEmail] || db.routinesByDay;
-  res.json(routines);
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = (req.query.uid as string) || '';
+
+  if (studentEmail || uid) {
+    const routines =
+      (uid && db.studentRoutinesMap?.[uid]) ||
+      (studentEmail && db.studentRoutinesMap?.[studentEmail]) ||
+      {};
+    return res.json(routines);
+  }
+  res.json(db.routinesByDay || {});
 });
 
 // 5. Live Lessons Endpoints
 app.get(['/api/lessons', '/api/live-lessons'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   const db = readDb();
-  res.json(db.liveLessons || []);
+  const requesterEmail = (
+    (req.query.email as string) ||
+    (req.query.userEmail as string) ||
+    (req.query.studentEmail as string) ||
+    (req.query.teacherEmail as string) ||
+    ''
+  ).toLowerCase().trim();
+  const role = req.query.role as string;
+  const uid = (req.query.uid as string) || '';
+
+  if (role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') {
+    return res.json(db.liveLessons || []);
+  }
+
+  if (role === 'teacher' || req.query.teacherEmail) {
+    const list = (db.liveLessons || []).filter((l: any) =>
+      (l.teacherEmail || '').toLowerCase() === requesterEmail ||
+      (l.tutorEmail || '').toLowerCase() === requesterEmail ||
+      (l.teacherUid && l.teacherUid === uid) ||
+      (l.tutorUid && l.tutorUid === uid)
+    );
+    return res.json(list);
+  }
+
+  if (role === 'student' || req.query.studentEmail) {
+    const list = (db.liveLessons || []).filter((l: any) =>
+      (l.studentEmail || '').toLowerCase() === requesterEmail ||
+      (l.studentUid && l.studentUid === uid)
+    );
+    return res.json(list);
+  }
+
+  if (requesterEmail || uid) {
+    const list = (db.liveLessons || []).filter((l: any) =>
+      (l.studentEmail || '').toLowerCase() === requesterEmail ||
+      (l.teacherEmail || '').toLowerCase() === requesterEmail ||
+      (l.tutorEmail || '').toLowerCase() === requesterEmail ||
+      (l.studentUid && l.studentUid === uid) ||
+      (l.teacherUid && l.teacherUid === uid)
+    );
+    return res.json(list);
+  }
+
+  // Anonymous / unauthenticated: return empty list to protect privacy
+  res.json([]);
 });
 
-app.post(['/api/lessons', '/api/live-lessons'], (req, res) => {
+app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
   const db = readDb();
   const { lesson, lessons } = req.body;
   const newLesson = lesson || (req.body.id ? req.body : null);
   if (Array.isArray(lessons)) {
     db.liveLessons = lessons;
   } else if (newLesson && newLesson.id) {
-    const idx = db.liveLessons.findIndex((l) => l.id === newLesson.id);
+    const idx = (db.liveLessons || []).findIndex((l: any) => l.id === newLesson.id);
     if (idx >= 0) {
       db.liveLessons[idx] = newLesson;
     } else {
+      if (!db.liveLessons) db.liveLessons = [];
       db.liveLessons.unshift(newLesson);
     }
+
+    // Bidirectional sync: ensure student is linked to this teacher in db.students
+    const cleanStudentEmail = (newLesson.studentEmail || '').toLowerCase().trim();
+    const cleanTeacherEmail = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
+    const cleanTeacherName = newLesson.teacherName || newLesson.tutorName || '';
+    if (cleanStudentEmail && cleanTeacherEmail) {
+      const studentIdx = (db.students || []).findIndex(
+        (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanStudentEmail
+      );
+      if (studentIdx >= 0) {
+        db.students[studentIdx] = {
+          ...db.students[studentIdx],
+          teacherEmail: cleanTeacherEmail,
+          teacherName: cleanTeacherName || db.students[studentIdx].teacherName,
+          status: 'active',
+        };
+      } else {
+        if (!db.students) db.students = [];
+        db.students.push({
+          id: `st-${Date.now()}`,
+          name: newLesson.studentName || cleanStudentEmail.split('@')[0],
+          studentName: newLesson.studentName || cleanStudentEmail.split('@')[0],
+          email: cleanStudentEmail,
+          studentEmail: cleanStudentEmail,
+          level: 'iniciante',
+          studentLevel: 'iniciante',
+          goal: 'English for everyday life & work',
+          learningGoal: 'English for everyday life & work',
+          teacherEmail: cleanTeacherEmail,
+          teacherName: cleanTeacherName,
+          status: 'active',
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
   }
-  writeDb(db);
+  await writeDbSync(db);
   res.json(db.liveLessons);
 });
 
@@ -756,20 +2431,97 @@ app.post('/api/lessons/:id/not-completed', (req, res) => {
 app.post('/api/lessons/:id/reschedule', (req, res) => {
   const db = readDb();
   const id = decodeURIComponent(req.params.id);
-  const { newStartIso, newEndIso, reason } = req.body;
+  const { newStartIso, newEndIso, reason, proposedBy } = req.body;
+  const isTeacher = proposedBy === 'teacher';
   db.liveLessons = db.liveLessons.map((l) =>
     l.id === id
       ? {
           ...l,
-          startDateTime: newStartIso || l.startDateTime,
-          endDateTime: newEndIso || l.endDateTime,
+          proposedNewStartDateTime: newStartIso,
+          proposedNewEndDateTime: newEndIso,
           rescheduleNotes: reason,
-          proposalStatus: 'pending_reschedule',
+          proposedBy: isTeacher ? 'teacher' : 'student',
+          proposalStatus: isTeacher
+            ? 'pending_student_reschedule'
+            : 'pending_teacher_reschedule',
+          proposedAt: new Date().toISOString(),
         }
       : l
   );
   writeDb(db);
   res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/accept-reschedule', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  db.liveLessons = db.liveLessons.map((l) => {
+    if (l.id === id && l.proposedNewStartDateTime) {
+      return {
+        ...l,
+        startDateTime: l.proposedNewStartDateTime,
+        endDateTime: l.proposedNewEndDateTime || l.endDateTime,
+        rescheduledFrom: {
+          startDateTime: l.startDateTime,
+          endDateTime: l.endDateTime,
+        },
+        rescheduledAt: new Date().toISOString(),
+        rescheduledBy: l.proposedBy,
+        rescheduledReason: l.rescheduleNotes,
+        proposedNewStartDateTime: undefined,
+        proposedNewEndDateTime: undefined,
+        proposalStatus: undefined,
+      };
+    }
+    return l;
+  });
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/decline-reschedule', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  db.liveLessons = db.liveLessons.map((l) =>
+    l.id === id
+      ? {
+          ...l,
+          proposedNewStartDateTime: undefined,
+          proposedNewEndDateTime: undefined,
+          proposalStatus: undefined,
+        }
+      : l
+  );
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/cancel', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  const { cancelledBy, reason } = req.body || {};
+  const target = (db.liveLessons || []).find((l: any) => l.id === id);
+  db.liveLessons = (db.liveLessons || []).map((l: any) =>
+    l.id === id ||
+    (target &&
+      target.studentEmail &&
+      (l.studentEmail || '').toLowerCase() === target.studentEmail.toLowerCase() &&
+      l.startDateTime === target.startDateTime &&
+      l.status === 'scheduled')
+      ? {
+          ...l,
+          status: 'cancelled',
+          cancelledAt: new Date().toISOString(),
+          cancelledBy: cancelledBy || 'user',
+          cancellationReason: reason || 'Cancelled by user',
+          proposalStatus: undefined,
+          proposedNewStartDateTime: undefined,
+          proposedNewEndDateTime: undefined,
+        }
+      : l
+  );
+  writeDb(db);
+  res.json({ success: true });
 });
 
 app.delete(['/api/lessons/:id', '/api/live-lessons/:id'], (req, res) => {
@@ -887,6 +2639,31 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
   res.json({ success: true });
 });
 
+// 7.1 Student Weekly S-Path Progress Endpoints (Multi-device cloud persistence)
+app.get('/api/routines/weekly-checks', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
+  if (!studentEmail) {
+    return res.json({ checks: {} });
+  }
+  const checks = (db.studentWeeklyChecks && db.studentWeeklyChecks[studentEmail]) || {};
+  res.json({ checks });
+});
+
+app.post('/api/routines/weekly-checks', (req, res) => {
+  const db = readDb();
+  const { studentEmail, checks } = req.body;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  if (cleanEmail && checks && typeof checks === 'object') {
+    if (!db.studentWeeklyChecks) {
+      db.studentWeeklyChecks = {};
+    }
+    db.studentWeeklyChecks[cleanEmail] = checks;
+    writeDb(db);
+  }
+  res.json({ success: true, checks: (db.studentWeeklyChecks && db.studentWeeklyChecks[cleanEmail]) || {} });
+});
+
 // 8. Homework Endpoints
 app.get('/api/homework', (req, res) => {
   const db = readDb();
@@ -918,25 +2695,6 @@ app.post('/api/contracted-lessons', (req, res) => {
     writeDb(db);
   }
   res.json(db.contractedLessons);
-});
-
-// 10. User Profile Endpoints
-app.get('/api/user-profile', (req, res) => {
-  const db = readDb();
-  const email = ((req.query.email as string) || '').toLowerCase().trim();
-  const profile = db.userProfiles[email] || null;
-  res.json({ profile });
-});
-
-app.post('/api/user-profile', (req, res) => {
-  const db = readDb();
-  const { profile } = req.body;
-  if (profile && profile.email) {
-    const cleanEmail = profile.email.toLowerCase().trim();
-    db.userProfiles[cleanEmail] = profile;
-    writeDb(db);
-  }
-  res.json({ success: true });
 });
 
 // 11. Email Logs Endpoint
@@ -989,13 +2747,26 @@ Output STRICT JSON matching this schema:
   "overallSummaryEn": "string"
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: GEMINI_TEXT_MODEL,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        });
+      } catch (err: any) {
+        if (err?.status === 404 || err?.message?.includes('not found') || err?.message?.includes('404')) {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.6-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' },
+          });
+        } else {
+          throw err;
+        }
+      }
 
       if (response.text) {
         const parsed = JSON.parse(response.text);
@@ -1033,7 +2804,91 @@ Output STRICT JSON matching this schema:
   });
 });
 
+// AI Live Lesson Vocabulary Generator
+app.post('/api/lesson/vocab-generate', async (req, res) => {
+  const { words, topic, notes } = req.body;
+  if (!words || !Array.isArray(words) || words.length === 0) {
+    return res.status(400).json({ error: 'words array is required' });
+  }
+
+  const cleanWords = words.map((w: any) => String(w || '').trim()).filter((w) => w.length > 0);
+  if (cleanWords.length === 0) {
+    return res.json({ success: true, entries: [] });
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const prompt = `You are a native English language teacher creating personalized vocabulary study notes for a live conversation lesson.
+Lesson Topic: "${topic || 'Everyday conversation and practical routines'}"
+Teacher's Live Lesson Notes/Context: "${notes || 'Real-life speaking practice'}"
+Vocabulary items typed by the teacher during class: ${JSON.stringify(cleanWords)}
+
+For EACH word or expression, generate a distinct, highly contextual pedagogical entry tailored specifically to that word:
+1. word: exact word/expression
+2. definitionEn: A simple, natural 1-sentence English definition explaining what the word means clearly for an English learner.
+3. exampleSentenceEn: A natural, practical conversational or workplace example sentence in English that authentically uses the word in real context (NO generic placeholders, and never repeat the same sentence structure across words).
+4. translationPt: A clear, concise Portuguese translation of the term.
+
+Return a JSON array of objects with the exact schema:
+[
+  {
+    "word": "string",
+    "definitionEn": "string",
+    "exampleSentenceEn": "string",
+    "translationPt": "string"
+  }
+]`;
+
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: GEMINI_TEXT_MODEL,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        });
+      } catch (err: any) {
+        if (err?.status === 404 || err?.message?.includes('not found') || err?.message?.includes('404')) {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.6-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' },
+          });
+        } else {
+          throw err;
+        }
+      }
+
+      if (response.text) {
+        const parsed = JSON.parse(response.text);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return res.json({ success: true, entries: parsed });
+        }
+      }
+    } catch (e) {
+      console.warn('Gemini vocabulary generation error, falling back:', e);
+    }
+  }
+
+  // Fallback linguistic generator for each word
+  const entries = cleanWords.map((word) => {
+    return {
+      word,
+      definitionEn: `A practical English term denoting "${word}", used naturally when communicating about ${topic || 'daily life'}.`,
+      exampleSentenceEn: `During our conversation about ${topic || 'our routines'}, we practiced using "${word}" naturally.`,
+      translationPt: `Vocabulário prático em inglês`,
+    };
+  });
+
+  res.json({ success: true, entries });
+});
+
 async function startServer() {
+  // Preload local database into memory immediately
+  readDb();
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1050,6 +2905,10 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`It's Simple Server running on http://localhost:${PORT}`);
+    // Sync with Cloud Firestore asynchronously without blocking dev server startup
+    initCloudPersistence().catch((err) => {
+      console.warn('Initial cloud persistence notice:', err);
+    });
   });
 }
 

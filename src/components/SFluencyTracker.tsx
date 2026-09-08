@@ -243,7 +243,7 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
     let totalWordsRecorded = 0;
 
     DAYS_OF_WEEK.forEach((dayKey) => {
-      const dayList = routinesByDay[dayKey] || [];
+      const dayList = (routinesByDay && routinesByDay[dayKey]) || [];
       dayList.forEach((act) => {
         totalWeekActivities += 1;
         if (act.completed) {
@@ -403,7 +403,7 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
 
   return (
     <div
-      className={`relative rounded-3xl p-6 sm:p-7 border-2 shadow-2xl text-white overflow-hidden space-y-6 animate-in fade-in zoom-in-95 duration-500 ${
+      className={`relative rounded-3xl p-4 sm:p-5 border-2 shadow-2xl text-white overflow-hidden space-y-3.5 animate-in fade-in zoom-in-95 duration-500 ${
         mode === 'student'
           ? 'bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] border-[#607EC9]'
           : 'bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] border-[#607EC9]'
@@ -411,15 +411,15 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
       id="s-fluency-path-tracker"
     >
       {/* Background ambient lighting */}
-      <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-[#9AB4FF]/20 blur-2xl pointer-events-none" />
-      <div className="absolute -bottom-12 -left-12 w-48 h-48 rounded-full bg-[#607EC9]/25 blur-2xl pointer-events-none" />
+      <div className="absolute -top-12 -right-12 w-48 h-48 rounded-full bg-[#9AB4FF]/15 blur-2xl pointer-events-none" />
+      <div className="absolute -bottom-12 -left-12 w-48 h-48 rounded-full bg-[#607EC9]/20 blur-2xl pointer-events-none" />
 
       {/* Header Banner */}
-      <div className="relative z-10 space-y-2">
+      <div className="relative z-10 space-y-1.5">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#000035]/80 border border-[#9AB4FF]/50 text-[#9AB4FF] text-xs font-black uppercase tracking-wider shadow-xs">
-              <Sparkles className="w-3.5 h-3.5 text-[#F4CA54] animate-pulse" />
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#000035]/80 border border-[#9AB4FF]/50 text-[#9AB4FF] text-[11px] font-black uppercase tracking-wider shadow-xs">
+              <Sparkles className="w-3 h-3 text-[#F4CA54] animate-pulse" />
               <span>
                 {mode === 'student'
                   ? isEn ? 'Your Weekly S-Fluency Path' : 'Seu Caminho do S para a Fluência'
@@ -427,39 +427,35 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
               </span>
             </div>
 
-            {mode === 'demo' ? (
-              <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-400/40 text-[#9AB4FF] text-[10px] font-bold uppercase tracking-wider">
-                {isEn ? 'Interactive Demo' : 'Demonstração Interativa'}
-              </span>
-            ) : (
-              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+            {mode === 'student' && (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
                 <Flame className="w-3 h-3 text-emerald-400" />
-                {isEn ? 'Live Weekly Progress' : 'Progresso Real Semanal'}
+                {isEn ? 'Live Weekly Progress' : 'Progresso Real'}
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 px-3 py-1 bg-[#1C4C96]/70 rounded-full border border-[#9AB4FF]/40 text-xs font-mono font-black text-white">
+          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#1C4C96]/70 rounded-full border border-[#9AB4FF]/40 text-[11px] font-mono font-black text-white">
             <span className="text-[#F4CA54]">{progressPercent}%</span>
-            <span className="text-[10px] text-[#9AB4FF] font-normal uppercase tracking-tight">
-              {isEn ? 'Weekly Target' : 'Meta da Semana'}
+            <span className="text-[9px] text-[#9AB4FF] font-normal uppercase tracking-tight">
+              {isEn ? 'Target' : 'Meta'}
             </span>
           </div>
         </div>
 
-        <p className="text-xs text-[#9AB4FF]/90 leading-relaxed font-medium">
+        <p className="text-[11px] text-[#9AB4FF]/90 leading-tight font-medium">
           {mode === 'student'
             ? isEn
-              ? 'Connected to your daily living moments, words bank, closing sentence, mentor chats, and memorization exercises. Complete all scheduled steps to reach 100%!'
-              : 'Conectado em tempo real com suas rotinas diárias, 5 palavras anotadas, frase de encerramento, conversa com o Amigo Nativo e atividade de memorização. Cumpra as etapas da semana para atingir 100%!'
+              ? 'Connected in real time to your daily living moments, words bank, mentor chats and memorization!'
+              : 'Conectado em tempo real às suas rotinas, palavras anotadas, conversas e memorização semanal!'
             : t.sSymbolSubtitle}
         </p>
       </div>
 
       {/* S-Pathway Center Visual Stage */}
-      <div className="relative z-10 bg-[#000035]/70 rounded-2xl p-4 sm:p-5 border border-[#607EC9]/40 flex flex-col sm:flex-row items-center gap-5">
+      <div className="relative z-10 bg-[#000035]/70 rounded-2xl p-3 border border-[#607EC9]/40 flex flex-row items-center gap-3.5">
         {/* The Animated S-Curve Vector */}
-        <div className="relative w-36 h-36 sm:w-44 sm:h-44 shrink-0 flex items-center justify-center">
+        <div className="relative w-24 h-24 sm:w-28 sm:h-28 shrink-0 flex items-center justify-center">
           <svg
             viewBox="0 0 100 100"
             className="w-full h-full drop-shadow-md"
@@ -594,29 +590,29 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
           </svg>
 
           {/* S Symbol Floating Badge */}
-          <div className="absolute -bottom-1 -right-1 px-2 py-0.5 bg-[#000035] border border-[#F4CA54] rounded-lg text-[10px] font-black text-[#F4CA54] shadow-md flex items-center gap-1">
+          <div className="absolute -bottom-1 -right-1 px-1.5 py-0.5 bg-[#000035] border border-[#F4CA54] rounded-lg text-[9px] font-black text-[#F4CA54] shadow-md flex items-center gap-1">
             <span>S</span>
-            <span className="text-[9px] text-[#9AB4FF]">PATH</span>
+            <span className="text-[8px] text-[#9AB4FF]">PATH</span>
           </div>
         </div>
 
         {/* Progress Metric & Message */}
-        <div className="space-y-2 text-left flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+        <div className="space-y-1.5 text-left flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xl sm:text-2xl font-black text-white tracking-tight">
               {progressPercent}%
             </span>
-            <span className="text-xs font-bold text-[#9AB4FF] uppercase tracking-wide">
+            <span className="text-[11px] font-bold text-[#9AB4FF] uppercase tracking-wide">
               {mode === 'student'
                 ? isEn ? 'Weekly S-Fluency Score' : 'Pontuação do S da Fluência'
                 : t.sSymbolPathProgress}
             </span>
           </div>
 
-          <p className="text-xs text-[#9AB4FF]/85 leading-snug">
+          <p className="text-[11px] text-[#9AB4FF]/85 leading-snug">
             {progressPercent === 100 ? (
-              <span className="text-[#F4CA54] font-black flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-[#F4CA54] shrink-0" />
+              <span className="text-[#F4CA54] font-black flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5 text-[#F4CA54] shrink-0" />
                 {isEn
                   ? '🎉 Outstanding! You completed 100% of your weekly living English path!'
                   : '🎉 Extraordinário! Você cumpriu 100% de todas as etapas programadas da sua semana!'}
@@ -632,7 +628,7 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
             )}
           </p>
 
-          <div className="w-full bg-[#000035] rounded-full h-2.5 overflow-hidden border border-[#607EC9]/40">
+          <div className="w-full bg-[#000035] rounded-full h-2 overflow-hidden border border-[#607EC9]/40">
             <div
               className="bg-gradient-to-r from-[#9AB4FF] via-[#607EC9] to-[#F4CA54] h-full transition-all duration-500 rounded-full"
               style={{ width: `${progressPercent}%` }}
@@ -687,9 +683,6 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
                         <span>{st.title}</span>
                         {st.isCompleted && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
                       </h4>
-                      <p className="text-[11px] text-[#9AB4FF]/80 truncate">
-                        {st.subtitle}
-                      </p>
                     </div>
                   </div>
 
@@ -718,15 +711,15 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
         </div>
       ) : (
         /* Demo Mode Step Items (Interactive showcase for prospective visitors) */
-        <div className="relative z-10 space-y-2">
+        <div className="relative z-10 space-y-1.5">
           <div className="flex items-center justify-between text-[11px] text-[#9AB4FF] font-bold">
             <span>{t.sSymbolInteractiveHint}</span>
             <span className="text-[10px] text-[#9AB4FF]/70">
-              {isEn ? 'Click to toggle (Demo)' : 'Clique para marcar (Demonstração)'}
+              {isEn ? 'Click to mark' : 'Clique para marcar'}
             </span>
           </div>
 
-          <div className="grid grid-cols-1 gap-2">
+          <div className="grid grid-cols-1 gap-1.5">
             {DEMO_DAILY_STEPS.map((step) => {
               const Icon = step.icon;
               const isChecked = Boolean(demoCompletedSteps[step.id]);
@@ -736,49 +729,46 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
                   key={step.id}
                   type="button"
                   onClick={() => toggleDemoStep(step.id)}
-                  className={`w-full p-3 rounded-2xl border text-left transition flex items-center justify-between gap-3 cursor-pointer ${
+                  className={`w-full py-2 px-3 rounded-xl border text-left transition flex items-center justify-between gap-2.5 cursor-pointer ${
                     isChecked
                       ? 'bg-[#062863]/90 border-[#607EC9] shadow-xs'
                       : 'bg-[#000035]/60 border-[#1C4C96]/60 hover:border-[#607EC9]/60 opacity-75'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <div
-                      className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border transition ${
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition ${
                         isChecked
                           ? 'bg-[#1C4C96] border-[#9AB4FF] text-white'
                           : 'bg-[#000035] border-[#607EC9]/40 text-[#9AB4FF]/60'
                       }`}
                     >
-                      <Icon className="w-4 h-4" />
+                      <Icon className="w-3.5 h-3.5" />
                     </div>
 
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono font-bold text-[#9AB4FF]/80">
+                        <span className="text-[10px] font-mono font-bold text-[#9AB4FF] px-1.5 py-0.2 rounded bg-[#000035]/70 border border-[#9AB4FF]/20 shrink-0">
                           {step.time}
                         </span>
                         <h4
-                          className={`text-xs font-black truncate ${
+                          className={`text-xs sm:text-sm font-black truncate ${
                             isChecked ? 'text-white' : 'text-slate-300'
                           }`}
                         >
                           {step.title[currentLanguage] || step.title.pt}
                         </h4>
                       </div>
-                      <p className="text-[11px] text-[#9AB4FF]/80 truncate">
-                        {step.subtitle[currentLanguage] || step.subtitle.pt}
-                      </p>
                     </div>
                   </div>
 
                   <div className="shrink-0">
                     {isChecked ? (
-                      <div className="w-6 h-6 rounded-full bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center border border-[#9AB4FF]">
-                        <CheckCircle2 className="w-4 h-4 text-[#9AB4FF]" />
+                      <div className="w-5 h-5 rounded-full bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center border border-[#9AB4FF]">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-[#9AB4FF]" />
                       </div>
                     ) : (
-                      <div className="w-6 h-6 rounded-full border-2 border-[#607EC9]/50 hover:border-[#9AB4FF] transition" />
+                      <div className="w-5 h-5 rounded-full border-2 border-[#607EC9]/50 hover:border-[#9AB4FF] transition" />
                     )}
                   </div>
                 </button>
@@ -787,32 +777,6 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
           </div>
         </div>
       )}
-
-      {/* Footer Encouragement & Live Summary */}
-      <div className="relative z-10 p-3 bg-[#000035]/80 rounded-2xl border border-[#607EC9]/40 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          <Award className="w-4 h-4 text-[#F4CA54]" />
-          <span className="font-bold text-white text-[11px] sm:text-xs">
-            {progressPercent === 100
-              ? isEn
-                ? '🏆 100% of weekly living English achieved! Keep it up!'
-                : '🏆 100% da meta semanal cumprida! Parabéns pelo compromisso!'
-              : isEn
-              ? 'Learn English by living your routine — Simple & Fun!'
-              : 'Aprenda inglês vivendo sua rotina — Simples & Divertido!'}
-          </span>
-        </div>
-
-        {mode === 'demo' && onExploreRoutines && (
-          <button
-            type="button"
-            onClick={onExploreRoutines}
-            className="text-[11px] font-bold text-[#9AB4FF] hover:text-white underline cursor-pointer shrink-0"
-          >
-            {isEn ? 'View Routines' : 'Ver Rotinas'}
-          </button>
-        )}
-      </div>
     </div>
   );
 };

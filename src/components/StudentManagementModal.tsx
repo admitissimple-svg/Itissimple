@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Users,
@@ -40,15 +40,25 @@ export const StudentManagementModal: React.FC<StudentManagementModalProps> = ({
   currentLanguage,
   t,
 }) => {
-  if (!isOpen) return null;
+  // Support ESC key to easily dismiss the modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const isEn = currentLanguage === 'en';
   const [isAdding, setIsAdding] = useState<boolean>(false);
   const [name, setName] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [level, setLevel] = useState<EnglishLevel>(EnglishLevel.BEGINNER);
-  const [goal, setGoal] = useState<string>('Daily Routine & Conversational English');
-  const [contractedCount, setContractedCount] = useState<number>(10);
+  const [goal, setGoal] = useState<string>('');
+  const [contractedCount, setContractedCount] = useState<number | ''>('');
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,8 +68,8 @@ export const StudentManagementModal: React.FC<StudentManagementModalProps> = ({
       name: name.trim(),
       email: email.trim().toLowerCase(),
       level,
-      goal,
-      contractedLessons: contractedCount,
+      goal: goal.trim(),
+      contractedLessons: Number(contractedCount) || 10,
       completedLessonsCount: 0,
       activeSince: new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString(),
@@ -67,11 +77,20 @@ export const StudentManagementModal: React.FC<StudentManagementModalProps> = ({
 
     setName('');
     setEmail('');
+    setGoal('');
+    setContractedCount('');
     setIsAdding(false);
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 bg-[#000035]/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-[#607EC9]/30 overflow-hidden my-auto">
         {/* Header */}
         <div className="px-6 py-4 bg-[#000035] text-white flex items-center justify-between border-b border-[#1C4C96]">
@@ -93,6 +112,8 @@ export const StudentManagementModal: React.FC<StudentManagementModalProps> = ({
             type="button"
             onClick={onClose}
             className="p-1.5 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-[#1C4C96] transition cursor-pointer"
+            aria-label="Close"
+            title="Fechar (Esc)"
           >
             <X className="w-5 h-5" />
           </button>
@@ -180,7 +201,8 @@ export const StudentManagementModal: React.FC<StudentManagementModalProps> = ({
                     min="1"
                     max="200"
                     value={contractedCount}
-                    onChange={(e) => setContractedCount(Number(e.target.value))}
+                    onChange={(e) => setContractedCount(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="10"
                     className="w-full p-2 bg-white border border-[#607EC9]/40 rounded-xl text-xs text-[#000035]"
                   />
                 </div>
