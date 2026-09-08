@@ -1,5 +1,5 @@
 import { LiveLesson, TeacherMeetSettings, DayOfWeek } from '../types';
-import { getDayKeyInTimeZone } from './timezone';
+import { getDayKeyInTimeZone, isLessonCancelled } from './timezone';
 
 export interface TeacherTimeSlot {
   start: string; // ISO string
@@ -141,7 +141,7 @@ export function generateTeacherAvailableSlots(
   dateString: string,
   teacherSettings: TeacherMeetSettings,
   busyEvents: any[] = [],
-  durationMinutes: 50 | 25 = 50,
+  durationMinutes: 25 | 30 = 25,
   existingLessons: LiveLesson[] = [],
   excludeLessonId?: string,
   studentEmail?: string,
@@ -230,7 +230,7 @@ export function generateTeacherAvailableSlots(
     // Check collision with existing scheduled lessons in the app
     if (isAvailable) {
       for (const lesson of cleanExistingLessons) {
-        if (lesson.id === excludeLessonId || lesson.status !== 'scheduled') {
+        if (lesson.id === excludeLessonId || lesson.status !== 'scheduled' || isLessonCancelled(lesson)) {
           continue;
         }
 

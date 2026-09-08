@@ -245,14 +245,42 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     return start.toISOString();
   };
 
+  // Real-time teacher lessons to ensure 100% accurate slot availability
+  const [teacherLessons, setTeacherLessons] = useState<LiveLesson[]>([]);
+
+  React.useEffect(() => {
+    if (!isOpen || !selectedTeacherObj.email) return;
+    const cleanTeacherEmail = selectedTeacherObj.email.toLowerCase().trim();
+    fetch(`/api/lessons?teacherEmail=${encodeURIComponent(cleanTeacherEmail)}&role=teacher`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setTeacherLessons(data);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen, selectedTeacherObj.email]);
+
+  // Combine parent lessons with freshly fetched teacher lessons (deduplicating by id)
+  const combinedLessons = useMemo(() => {
+    const map = new Map<string, LiveLesson>();
+    (lessons || []).forEach((l) => {
+      if (l && l.id) map.set(l.id, l);
+    });
+    teacherLessons.forEach((l) => {
+      if (l && l.id) map.set(l.id, l);
+    });
+    return Array.from(map.values());
+  }, [lessons, teacherLessons]);
+
   // 🌟 ANTI-DUPLICITY CONFLICT DETECTION
   const currentConflict = useMemo(() => {
     if (!selectedDate || !selectedStartTime || !selectedTeacherObj.email) return null;
     const startIso = calculateStartDateTime();
     const endIso = calculateEndDateTime();
     if (!startIso || !endIso) return null;
-    return findTeacherLessonConflict(selectedTeacherObj.email, startIso, endIso, lessons);
-  }, [selectedDate, selectedStartTime, durationMinutes, selectedTeacherObj.email, lessons]);
+    return findTeacherLessonConflict(selectedTeacherObj.email, startIso, endIso, combinedLessons);
+  }, [selectedDate, selectedStartTime, durationMinutes, selectedTeacherObj.email, combinedLessons]);
 
   // Slot conflict checker for dropdown options
   const checkSlotIsBooked = (slot: string) => {
@@ -261,7 +289,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     const start = new Date(selectedDate + 'T00:00:00');
     start.setHours(hours, mins, 0, 0);
     const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
-    const conflict = findTeacherLessonConflict(selectedTeacherObj.email, start.toISOString(), end.toISOString(), lessons);
+    const conflict = findTeacherLessonConflict(selectedTeacherObj.email, start.toISOString(), end.toISOString(), combinedLessons);
     return Boolean(conflict);
   };
 
@@ -509,7 +537,6 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               >
                 <option value={25}>25 {isEn ? 'minutes (1 slot)' : 'minutos (1 bloco)'}</option>
                 <option value={30}>30 {isEn ? 'minutes (1 slot)' : 'minutos (1 bloco)'}</option>
-                <option value={50}>50 {isEn ? 'minutes (2 slots)' : 'minutos (2 blocos)'}</option>
               </select>
             </div>
 

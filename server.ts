@@ -132,6 +132,12 @@ function mergeDbWithDefaults(parsed: any): AppDb {
       (t: any) => t.email?.toLowerCase() !== 'reginahelena1980@gmail.com' && !t.name?.toLowerCase().includes('regina')
     ),
     students: Array.isArray(parsed?.students) ? parsed.students : [],
+    liveLessons: (Array.isArray(parsed?.liveLessons) ? parsed.liveLessons : []).map((l: any) => {
+      if (l && (l.cancelledAt || l.cancelledBy || l.cancellationReason) && l.status !== 'cancelled') {
+        return { ...l, status: 'cancelled' };
+      }
+      return l;
+    }),
     contractedLessons: (parsed && parsed.contractedLessons) || {},
     userProfiles: (parsed && parsed.userProfiles) || DEFAULT_DB.userProfiles,
   };
@@ -265,10 +271,21 @@ async function initCloudPersistence() {
       localLessons.forEach((l: any) => {
         if (l.id) {
           const existing = lessonMap.get(l.id) || {};
-          lessonMap.set(l.id, { ...existing, ...l });
+          const merged = { ...existing, ...l };
+          if (existing.cancelledAt || l.cancelledAt || existing.status === 'cancelled' || l.status === 'cancelled') {
+            merged.status = 'cancelled';
+            merged.cancelledAt = l.cancelledAt || existing.cancelledAt || new Date().toISOString();
+            merged.cancelledBy = l.cancelledBy || existing.cancelledBy || 'student';
+          }
+          lessonMap.set(l.id, merged);
         }
       });
-      const mergedLiveLessons = Array.from(lessonMap.values());
+      const mergedLiveLessons = Array.from(lessonMap.values()).map((l: any) => {
+        if (l && (l.cancelledAt || l.cancelledBy || l.cancellationReason) && l.status !== 'cancelled') {
+          return { ...l, status: 'cancelled' };
+        }
+        return l;
+      });
 
       inMemoryDb = mergeDbWithDefaults({
         ...inMemoryDb,
@@ -2357,11 +2374,13 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
   } else if (newLesson && newLesson.id) {
     // Conflict Check (Strict Anti-Duplicity Rule)
     const proposedTeacher = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
-    if (proposedTeacher && newLesson.startDateTime && newLesson.endDateTime && newLesson.status !== 'cancelled') {
+    if (proposedTeacher && newLesson.startDateTime && newLesson.endDateTime && newLesson.status === 'scheduled' && !newLesson.cancelledAt) {
       const pStart = new Date(newLesson.startDateTime).getTime();
       const pEnd = new Date(newLesson.endDateTime).getTime();
       const conflict = (db.liveLessons || []).find((l: any) => {
-        if (l.id === newLesson.id || l.status === 'cancelled') return false;
+        if (l.id === newLesson.id) return false;
+        if (l.status === 'cancelled' || l.status === 'canceled' || Boolean(l.cancelledAt)) return false;
+        if (l.status && l.status !== 'scheduled') return false;
         const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
         if (lTeacher !== proposedTeacher) return false;
         if (!l.startDateTime || !l.endDateTime) return false;
@@ -2518,7 +2537,7 @@ app.post('/api/lessons/:id/decline-reschedule', (req, res) => {
   res.json({ success: true, liveLessons: db.liveLessons });
 });
 
-app.post('/api/lessons/:id/cancel', (req, res) => {
+app.post('/api/lessons/:id/cancel', async (req, res) => {
   const db = readDb();
   const id = decodeURIComponent(req.params.id);
   const { cancelledBy, reason } = req.body || {};
@@ -2528,22 +2547,21 @@ app.post('/api/lessons/:id/cancel', (req, res) => {
     (target &&
       target.studentEmail &&
       (l.studentEmail || '').toLowerCase() === target.studentEmail.toLowerCase() &&
-      l.startDateTime === target.startDateTime &&
-      l.status === 'scheduled')
+      l.startDateTime === target.startDateTime)
       ? {
           ...l,
           status: 'cancelled',
-          cancelledAt: new Date().toISOString(),
-          cancelledBy: cancelledBy || 'user',
-          cancellationReason: reason || 'Cancelled by user',
+          cancelledAt: l.cancelledAt || new Date().toISOString(),
+          cancelledBy: cancelledBy || l.cancelledBy || 'user',
+          cancellationReason: reason || l.cancellationReason || 'Cancelled by user',
           proposalStatus: undefined,
           proposedNewStartDateTime: undefined,
           proposedNewEndDateTime: undefined,
         }
       : l
   );
-  writeDb(db);
-  res.json({ success: true });
+  await writeDbSync(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
 });
 
 app.delete(['/api/lessons/:id', '/api/live-lessons/:id'], (req, res) => {

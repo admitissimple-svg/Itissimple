@@ -954,12 +954,11 @@ export default function App() {
         (target &&
           l.studentEmail &&
           l.studentEmail.toLowerCase() === (target.studentEmail || '').toLowerCase() &&
-          l.startDateTime === target.startDateTime &&
-          l.status === 'scheduled')
+          l.startDateTime === target.startDateTime)
           ? {
               ...l,
               status: 'cancelled',
-              cancelledAt: new Date().toISOString(),
+              cancelledAt: l.cancelledAt || new Date().toISOString(),
               cancelledBy: finalCancelledBy,
               cancellationReason: finalReason,
             }

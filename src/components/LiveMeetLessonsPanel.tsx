@@ -112,8 +112,8 @@ export const LiveMeetLessonsPanel: React.FC<LiveMeetLessonsPanelProps> = ({
             </div>
             <p className="text-xs text-[#607EC9] mt-0.5">
               {isEn
-                ? 'Schedule custom 25 or 50-minute practice sessions via Google Meet'
-                : 'Agende sessões personalizadas de 25 ou 50 minutos de conversa via Google Meet'}
+                ? 'Schedule custom 25 or 30-minute practice sessions via Google Meet'
+                : 'Agende sessões personalizadas de 25 ou 30 minutos de conversa via Google Meet'}
             </p>
           </div>
         </div>

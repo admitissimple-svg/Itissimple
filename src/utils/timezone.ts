@@ -166,6 +166,13 @@ export function checkTimeRangesOverlap(
   return sA < eB && eA > sB;
 }
 
+export function isLessonCancelled(l: any): boolean {
+  if (!l) return false;
+  if (l.status === 'cancelled' || l.status === 'canceled') return true;
+  if (Boolean(l.cancelledAt)) return true;
+  return false;
+}
+
 /**
  * Finds if there is an existing scheduled lesson conflicting with the proposed time range for a teacher
  */
@@ -174,6 +181,7 @@ export function findTeacherLessonConflict<T extends {
   teacherEmail?: string;
   tutorEmail?: string;
   status?: string;
+  cancelledAt?: string;
   startDateTime?: string;
   endDateTime?: string;
   [key: string]: any;
@@ -196,8 +204,9 @@ export function findTeacherLessonConflict<T extends {
 
   for (const l of lessons) {
     if (excludeLessonId && l.id === excludeLessonId) continue;
-    // Cancelled lessons do not occupy slots
-    if (l.status === 'cancelled') continue;
+    // Cancelled lessons or lessons not currently in active 'scheduled' status do not occupy slots
+    if (isLessonCancelled(l)) continue;
+    if (l.status && l.status !== 'scheduled') continue;
 
     const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
     if (lTeacher !== cleanTeacher) continue;

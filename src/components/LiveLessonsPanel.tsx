@@ -129,7 +129,7 @@ export const LiveLessonsPanel: React.FC<LiveLessonsPanelProps> = ({
     meetLink: 'https://meet.google.com/new',
     workingHoursStart: '08:00',
     workingHoursEnd: '18:00',
-    slotDurationMinutes: 50,
+    slotDurationMinutes: 30,
     availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
     timezone: 'America/Sao_Paulo',
   };
