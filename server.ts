@@ -1164,11 +1164,13 @@ app.post('/api/auth/google', (req, res) => {
   let role = requestedRole === 'teacher' ? 'teacher' : 'student';
   let displayName = name || cleanEmail.split('@')[0];
 
-  if (cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin')) {
-    role = 'admin';
-    displayName = "Admin It's Simple";
+  if (cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('adm')) {
+    role = requestedRole || 'admin';
+    if (role === 'admin' && (!name || name === cleanEmail.split('@')[0])) {
+      displayName = "Admin It's Simple";
+    }
   } else if (requestedRole) {
-    role = requestedRole === 'teacher' ? 'teacher' : 'student';
+    role = requestedRole === 'teacher' ? 'teacher' : requestedRole === 'admin' ? 'admin' : 'student';
   } else if (
     db.teachers?.some((t) => t.email.toLowerCase() === cleanEmail) ||
     db.tutorsList?.some((t) => t.email.toLowerCase() === cleanEmail)
@@ -2563,17 +2565,17 @@ app.post('/api/lessons/:id/notes', async (req, res) => {
   const id = decodeURIComponent(req.params.id);
   const { topic, liveNotes, recommendations, pronunciationNotes, grammarAndPhrasing, vocabularyNotes } = req.body || {};
 
-  let targetStudentEmail = '';
-  let targetStudentUid = '';
-  let teacherName = '';
-  let teacherEmail = '';
+  let targetStudentEmail = (req.body?.studentEmail || '').toLowerCase().trim();
+  let targetStudentUid = req.body?.studentUid || '';
+  let teacherName = req.body?.teacherName || '';
+  let teacherEmail = (req.body?.teacherEmail || '').toLowerCase().trim();
 
   db.liveLessons = (db.liveLessons || []).map((l: any) => {
     if (l.id === id) {
-      targetStudentEmail = (l.studentEmail || '').toLowerCase().trim();
-      targetStudentUid = l.studentUid || '';
-      teacherName = l.teacherName || l.tutorName || '';
-      teacherEmail = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+      if (!targetStudentEmail && l.studentEmail) targetStudentEmail = (l.studentEmail || '').toLowerCase().trim();
+      if (!targetStudentUid && l.studentUid) targetStudentUid = l.studentUid || '';
+      if (!teacherName && (l.teacherName || l.tutorName)) teacherName = l.teacherName || l.tutorName || '';
+      if (!teacherEmail && (l.teacherEmail || l.tutorEmail)) teacherEmail = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
       return {
         ...l,
         title: topic || l.title,
@@ -2646,10 +2648,14 @@ app.get('/api/student-dictionary', (req, res) => {
   }
 
   if (studentEmail || uid) {
-    const list =
-      (uid && db.studentDictionaryMap?.[uid]) ||
-      (studentEmail && db.studentDictionaryMap?.[studentEmail]) ||
-      [];
+    const fromEmail: any[] = (studentEmail && db.studentDictionaryMap?.[studentEmail]) || [];
+    const fromUid: any[] = (uid && db.studentDictionaryMap?.[uid]) || [];
+    const map = new Map<string, any>();
+    [...fromEmail, ...fromUid].forEach((entry: any) => {
+      const w = (entry.word || '').toLowerCase().trim();
+      if (w) map.set(w, entry);
+    });
+    const list = Array.from(map.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
     return res.json(list);
   }
 

@@ -138,14 +138,33 @@ export function generateWeeklyHomework(
   routinesByDay: Record<DayOfWeek, RoutineItem[]>,
   userProfile?: UserProfile,
   studentEmail?: string,
-  studentName?: string
+  studentName?: string,
+  customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>
 ): WeeklyHomeworkData {
   const email = studentEmail || userProfile?.email || '';
   const name = studentName || userProfile?.name || (email ? email.split('@')[0] : 'Student');
 
-  // 1. Gather all words typed across the entire week
+  // 1. Gather all words typed across the entire week and words saved by native friends
   const rawWords: HomeworkVocabItem[] = [];
   const seenWords = new Set<string>();
+
+  // Prioritize words saved in personal dictionary by native friends or student
+  if (Array.isArray(customWords)) {
+    customWords.forEach((cw) => {
+      const trimmed = (cw?.word || '').trim();
+      if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
+        seenWords.add(trimmed.toLowerCase());
+        rawWords.push({
+          word: trimmed,
+          sourceActivityName: cw.sourceActivityName || 'Live Session',
+          sourceDay: cw.sourceDay || 'monday',
+          definitionEn: cw.definitionEn || `Active vocabulary practiced during your native friend conversation.`,
+          translationPt: cw.translationPt || `Vocabulário anotado pelo Amigo Nativo (${trimmed})`,
+          exampleSentence: cw.exampleSentence || `I use "${trimmed}" naturally in my daily conversations.`,
+        });
+      }
+    });
+  }
 
   const days: DayOfWeek[] = [
     'monday',
@@ -313,12 +332,14 @@ export function generateWeeklyHomeworkFromRoutines(params: {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
   studentName?: string;
   studentLevel?: string;
+  customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
 }): WeeklyHomeworkData {
   return generateWeeklyHomework(
     params.routinesByDay,
     undefined,
     undefined,
-    params.studentName
+    params.studentName,
+    params.customWords
   );
 }
 

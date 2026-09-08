@@ -8,7 +8,7 @@ import {
   BookMarked,
   Layers,
 } from 'lucide-react';
-import { WeeklyHomeworkData, Language, RoutineItem, DayOfWeek, HomeworkVocabItem } from '../types';
+import { WeeklyHomeworkData, Language, RoutineItem, DayOfWeek, HomeworkVocabItem, StudentDictionaryEntry } from '../types';
 import { getTranslations } from '../utils/i18n';
 
 interface WeeklyHomeworkSectionProps {
@@ -17,6 +17,7 @@ interface WeeklyHomeworkSectionProps {
   onOpenHomeworkModal: () => void;
   onOpenDictionaryModal?: () => void;
   currentLanguage: Language;
+  dictionaryEntries?: StudentDictionaryEntry[];
 }
 
 export const WeeklyHomeworkSection: React.FC<WeeklyHomeworkSectionProps> = ({
@@ -25,6 +26,7 @@ export const WeeklyHomeworkSection: React.FC<WeeklyHomeworkSectionProps> = ({
   onOpenHomeworkModal,
   onOpenDictionaryModal,
   currentLanguage,
+  dictionaryEntries,
 }) => {
   const t = getTranslations(currentLanguage);
   const isEn = currentLanguage === 'en';
@@ -67,7 +69,10 @@ export const WeeklyHomeworkSection: React.FC<WeeklyHomeworkSectionProps> = ({
   }, [homework, routinesByDay]);
 
   const allWords = extractedWordsFromRoutines;
-  const totalWords = homework?.totalWordsCollected || allWords.length || 0;
+  const dictWordsCount = Array.isArray(dictionaryEntries)
+    ? new Set(dictionaryEntries.map((d) => (d.word || '').trim().toLowerCase()).filter(Boolean)).size
+    : 0;
+  const totalWords = homework?.totalWordsCollected || Math.max(allWords.length, dictWordsCount);
   const isCompleted = Boolean(homework?.isCompleted);
   const score = homework?.score ?? 100;
 

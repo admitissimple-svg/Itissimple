@@ -281,15 +281,22 @@ export default function App() {
     return currentDayRoutines.find((item) => item.id === selectedActivityId) || currentDayRoutines[0] || null;
   }, [currentDayRoutines, selectedActivityId]);
 
-  // Generate Weekly Homework automatically whenever routines change
+  // Generate Weekly Homework automatically whenever routines or dictionary change
   useEffect(() => {
     const generated = generateWeeklyHomeworkFromRoutines({
       routinesByDay,
       studentName: userProfile.name,
       studentLevel: userProfile.level,
+      customWords: studentDictionaryEntries.map((e) => ({
+        word: e.word,
+        definitionEn: e.definitionEn,
+        exampleSentence: e.exampleSentenceEn,
+        translationPt: e.translationPt || `Vocabulário da aula ao vivo (${e.word})`,
+        sourceActivityName: e.sourceActivityName || 'Live Session',
+      })),
     });
     setWeeklyHomework(generated);
-  }, [routinesByDay, userProfile.name, userProfile.level]);
+  }, [routinesByDay, userProfile.name, userProfile.level, studentDictionaryEntries]);
 
   // Synchronize isolated student profile, lessons, routines, and settings whenever currentAccount changes
   useEffect(() => {
@@ -419,7 +426,7 @@ export default function App() {
     }
 
     // Fetch user-isolated student dictionary entries
-    const dictEmail = role === 'student' ? email : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '');
+    const dictEmail = (role === 'student' ? email : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
     if (dictEmail || (role === 'student' && uid)) {
       fetch(`/api/student-dictionary?studentEmail=${encodeURIComponent(dictEmail)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
         .then((r) => (r.ok ? r.json() : []))
@@ -428,7 +435,22 @@ export default function App() {
         })
         .catch((err) => console.warn('Could not fetch student dictionary:', err));
     }
-  }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter]);
+  }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter, userProfile?.email]);
+
+  // Refresh student dictionary whenever the modal is opened
+  useEffect(() => {
+    if (!isPersonalDictionaryOpen) return;
+    const dictEmail = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
+    const uid = currentAccount?.uid || '';
+    if (dictEmail || uid) {
+      fetch(`/api/student-dictionary?studentEmail=${encodeURIComponent(dictEmail)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          if (Array.isArray(data)) setStudentDictionaryEntries(data);
+        })
+        .catch((err) => console.warn('Could not refresh student dictionary:', err));
+    }
+  }, [isPersonalDictionaryOpen, currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter, userProfile?.email]);
 
   // Handler: Manage/Update Native Friend Subscription
   const handleUpdateSubscription = async (teacherEmail: string | null, teacherName: string | null) => {
@@ -2269,6 +2291,8 @@ export default function App() {
                   onOpenHomeworkModal={() => setIsHomeworkModalOpen(true)}
                   onOpenDictionaryModal={() => setIsPersonalDictionaryOpen(true)}
                   currentLanguage={currentLanguage}
+                  dictionaryEntries={studentDictionaryEntries}
+                  wordsFromRoutines={wordsFromRoutines}
                 />
               </div>
             )}

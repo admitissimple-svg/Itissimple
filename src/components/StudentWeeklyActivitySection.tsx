@@ -18,6 +18,7 @@ import {
   RoutineItem,
   WeeklyHomeworkData,
   UserProfile,
+  StudentDictionaryEntry,
 } from '../types';
 import { Translations, getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK } from '../utils/notifications';
@@ -29,6 +30,8 @@ interface StudentWeeklyActivitySectionProps {
   onOpenHomeworkModal: () => void;
   onOpenDictionaryModal: () => void;
   currentLanguage: Language;
+  dictionaryEntries?: StudentDictionaryEntry[];
+  wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
@@ -87,28 +90,94 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   onOpenHomeworkModal,
   onOpenDictionaryModal,
   currentLanguage,
+  dictionaryEntries,
+  wordsFromRoutines,
 }) => {
   const isEn = currentLanguage === 'en';
   const t = getTranslations(currentLanguage);
+  const studentEmail = userProfile?.email || '';
 
-  // Total learned words calculation across all days
+  // Local state for dictionary entries loaded directly from server database
+  const [loadedDictEntries, setLoadedDictEntries] = useState<StudentDictionaryEntry[]>([]);
+
+  // Sync loaded entries whenever dictionaryEntries prop changes
+  useEffect(() => {
+    if (Array.isArray(dictionaryEntries)) {
+      setLoadedDictEntries(dictionaryEntries);
+    }
+  }, [dictionaryEntries]);
+
+  // Fetch dictionary directly from server database for the active student
+  useEffect(() => {
+    if (!studentEmail) return;
+    let isMounted = true;
+    fetch(`/api/student-dictionary?studentEmail=${encodeURIComponent(studentEmail)}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (isMounted && Array.isArray(data) && data.length > 0) {
+          setLoadedDictEntries((prev) => {
+            const map = new Map<string, StudentDictionaryEntry>();
+            prev.forEach((e) => {
+              if (e && e.word) map.set(e.word.toLowerCase().trim(), e);
+            });
+            data.forEach((e: StudentDictionaryEntry) => {
+              if (e && e.word) map.set(e.word.toLowerCase().trim(), e);
+            });
+            return Array.from(map.values());
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('Error loading student dictionary for weekly activity counter:', err);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [studentEmail]);
+
+  // Total learned / practiced words calculation across student personal dictionary (saved by native friend or student), routines, and live sessions
   const totalWords = useMemo(() => {
-    let count = 0;
+    const uniqueWords = new Set<string>();
+
+    // 1. Personal dictionary words (saved by native friends during live lessons or student)
+    const activeDict = (dictionaryEntries && dictionaryEntries.length > 0)
+      ? dictionaryEntries
+      : loadedDictEntries;
+
+    if (Array.isArray(activeDict)) {
+      activeDict.forEach((entry) => {
+        const clean = (entry?.word || '').trim().toLowerCase();
+        if (clean) uniqueWords.add(clean);
+      });
+    }
+
+    // 2. Words from routines and live lesson notes
+    if (Array.isArray(wordsFromRoutines)) {
+      wordsFromRoutines.forEach((item) => {
+        const clean = (item?.word || '').trim().toLowerCase();
+        if (clean) uniqueWords.add(clean);
+      });
+    }
+
+    // 3. Directly inspect routinesByDay items
     if (routinesByDay && typeof routinesByDay === 'object') {
       Object.values(routinesByDay as Record<string, RoutineItem[]>).forEach((dayItems) => {
         if (Array.isArray(dayItems)) {
           dayItems.forEach((item) => {
             if (item?.learnedWords && Array.isArray(item.learnedWords)) {
-              count += item.learnedWords.filter((w) => typeof w === 'string' && w.trim().length > 0).length;
+              item.learnedWords.forEach((w) => {
+                if (typeof w === 'string' && w.trim().length > 0) {
+                  uniqueWords.add(w.trim().toLowerCase());
+                }
+              });
             }
           });
         }
       });
     }
-    return count;
-  }, [routinesByDay]);
 
-  const studentEmail = userProfile?.email || '';
+    return uniqueWords.size;
+  }, [dictionaryEntries, loadedDictEntries, wordsFromRoutines, routinesByDay]);
 
   // 7-day checklist grid state: map of "stepId_dayKey" -> boolean
   // Starts with no markings (0%) and persists in backend server database for multi-device sync

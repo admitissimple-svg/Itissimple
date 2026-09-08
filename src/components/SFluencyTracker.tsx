@@ -24,6 +24,7 @@ import {
   RoutineItem,
   UserProfile,
   WeeklyHomeworkData,
+  StudentDictionaryEntry,
 } from '../types';
 import { getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK, getDayLabel } from '../utils/notifications';
@@ -40,6 +41,7 @@ export interface SFluencyTrackerProps {
   userProfile?: UserProfile;
   lessons?: LiveLesson[];
   weeklyHomework?: WeeklyHomeworkData | null;
+  dictionaryEntries?: StudentDictionaryEntry[];
   onSelectDay?: (day: DayOfWeek) => void;
   onSelectActivity?: (activityId: string) => void;
   onToggleActivityComplete?: (activityId: string) => void;
@@ -78,18 +80,18 @@ const DEMO_DAILY_STEPS: DemoRoutineStep[] = [
       tr: 'Günün Videosu',
     },
     subtitle: {
-      pt: 'Anotou: sip, brew, mug, steam, aroma',
-      en: 'Recorded: sip, brew, mug, steam, aroma',
-      es: 'Anotado: sip, brew, mug, steam, aroma',
-      fr: 'Enregistré: sip, brew, mug, steam, aroma',
-      de: 'Notiert: sip, brew, mug, steam, aroma',
-      it: 'Annotato: sip, brew, mug, steam, aroma',
-      ja: '記録: sip, brew, mug, steam, aroma',
-      ko: '기록됨: sip, brew, mug, steam, aroma',
-      zh: '已记录: sip, brew, mug, steam, aroma',
-      ru: 'Записано: sip, brew, mug, steam, aroma',
-      ar: 'تم التسجيل: sip, brew, mug, steam, aroma',
-      tr: 'Kaydedildi: sip, brew, mug, steam, aroma',
+      pt: 'Assista ao vídeo e anote suas palavras-chave',
+      en: 'Watch the video and note down your key words',
+      es: 'Mira el video y anota tus palabras clave',
+      fr: 'Regardez la vidéo et notez vos mots-clés',
+      de: 'Schau das Video und notiere deine Schlüsselwörter',
+      it: 'Guarda il video e annota le tue parole chiave',
+      ja: '動画を視聴してキーワードをメモ',
+      ko: '동영상을 시청하고 키워드를 기록하세요',
+      zh: '观看视频并记录核心关键词',
+      ru: 'Посмотрите видео и запишите ключевые слова',
+      ar: 'شاهد الفيديو ودون كلماتك الأساسية',
+      tr: 'Videoyu izleyin ve anahtar kelimelerinizi not edin',
     },
   },
   {
@@ -205,6 +207,7 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
   userProfile,
   lessons = [],
   weeklyHomework,
+  dictionaryEntries,
   onSelectDay,
   onSelectActivity,
   onToggleActivityComplete,
@@ -242,6 +245,8 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
     let activitiesWithWords = 0;
     let totalWordsRecorded = 0;
 
+    const uniqueWordsSet = new Set<string>();
+
     DAYS_OF_WEEK.forEach((dayKey) => {
       const dayList = (routinesByDay && routinesByDay[dayKey]) || [];
       dayList.forEach((act) => {
@@ -249,13 +254,23 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
         if (act.completed) {
           completedWeekActivities += 1;
         }
-        const wordsCount = act.learnedWords ? act.learnedWords.filter((w) => w && w.trim().length > 0).length : 0;
-        totalWordsRecorded += wordsCount;
-        if (wordsCount >= 3) {
+        const words = act.learnedWords ? act.learnedWords.filter((w) => w && w.trim().length > 0) : [];
+        words.forEach((w) => uniqueWordsSet.add(w.trim().toLowerCase()));
+        if (words.length >= 3) {
           activitiesWithWords += 1;
         }
       });
     });
+
+    // Also include words from personal dictionary (saved by native friends or student)
+    if (Array.isArray(dictionaryEntries)) {
+      dictionaryEntries.forEach((entry) => {
+        const w = (entry?.word || '').trim().toLowerCase();
+        if (w) uniqueWordsSet.add(w);
+      });
+    }
+
+    totalWordsRecorded = uniqueWordsSet.size;
 
     // 2. Current selected day routines
     const currentDayList = routinesByDay[selectedDay] || [];

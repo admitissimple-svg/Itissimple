@@ -128,7 +128,7 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
 
     // Strictly sort in ascending alphabetical order
     return Array.from(map.values()).sort((a, b) =>
-      (a.word || '').toLowerCase().localeCompare((b.word || '').toLowerCase())
+      (a.word || '').localeCompare((b.word || ''), ['en', 'pt'], { sensitivity: 'base' })
     );
   }, [wordsFromRoutines, customSavedEntries, apiEnrichedEntries]);
 
@@ -440,7 +440,7 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
                     {isEn ? 'Meaning' : 'Significado'}
                   </th>
                   <th className="py-3 px-4 sm:px-6 w-1/3">
-                    {isEn ? 'Example' : 'Exemplo'}
+                    {isEn ? 'Example in a Sentence' : 'Exemplo em uma Frase'}
                   </th>
                   <th className="py-3 px-3 text-right w-16">
                     {isEn ? 'Audio' : 'Áudio'}

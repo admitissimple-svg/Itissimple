@@ -48,7 +48,7 @@ interface TeacherLiveLessonNotesPanelProps {
       vocabularyNotes?: LiveLessonVocabNote[];
     }
   ) => void;
-  onAddWordsToDictionary?: (words: StudentDictionaryEntry[]) => void;
+  onAddWordsToDictionary?: (words: StudentDictionaryEntry[], studentEmail?: string) => void;
   onAddWordsToWeeklyActivity?: (words: string[], studentEmail: string) => void;
   onSendStudentNotification?: (
     studentEmail: string,
@@ -349,18 +349,38 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
       });
     }
 
-    // Also auto-add vocabulary words to student's dictionary if callback provided
-    if (onAddWordsToDictionary && vocabList.length > 0 && selectedStudentEmail) {
+    // Also auto-add vocabulary words to student's personal dictionary
+    if (vocabList.length > 0 && selectedStudentEmail) {
+      const cleanStudentEmail = selectedStudentEmail.toLowerCase().trim();
       const dictEntries: StudentDictionaryEntry[] = vocabList.map((v) => ({
         id: 'dict_live_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
-        word: v.word,
-        partOfSpeech: v.partOfSpeech,
-        definitionEn: v.meaningOrTip || 'Learned during live session with Native Friend',
+        word: v.word.trim(),
+        partOfSpeech: v.partOfSpeech || '',
+        definitionEn: v.meaningOrTip || '',
         exampleSentenceEn: v.exampleSentence || '',
         learnedAt: new Date().toISOString(),
-        customNotes: `Live Session with ${currentAccount?.name || 'Native Friend'}`,
+        source: 'api',
+        sourceActivityName: `Live Session with ${currentAccount?.name || 'Native Friend'}`,
+        teacherEmail: currentAccount?.email,
+        teacherName: currentAccount?.name,
+        studentEmail: cleanStudentEmail,
       }));
-      onAddWordsToDictionary(dictEntries);
+
+      if (onAddWordsToDictionary) {
+        onAddWordsToDictionary(dictEntries, cleanStudentEmail);
+      }
+
+      // Direct asynchronous backend persistence for multi-device sync
+      fetch('/api/student-dictionary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: cleanStudentEmail,
+          teacherEmail: currentAccount?.email,
+          teacherName: currentAccount?.name,
+          entries: dictEntries,
+        }),
+      }).catch((err) => console.warn('Sync student dictionary error:', err));
     }
 
     // Insert into student's weekly activity vocabulary

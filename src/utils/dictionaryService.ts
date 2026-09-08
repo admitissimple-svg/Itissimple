@@ -194,7 +194,7 @@ async function fetchFromBackendApi(
         return {
           word: cleanWord,
           partOfSpeech: '',
-          definitionEn: 'Palavra não localizada no dicionário oficial.',
+          definitionEn: '',
           exampleSentenceEn: '',
           source: 'not_found',
           notFound: true,
