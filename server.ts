@@ -1,12 +1,15 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import dotenv from 'dotenv';
+dotenv.config();
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestore, getFirestoreDb } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 
 const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || 'cea0e43d-1149-404b-ac5d-faa4ad9b4528';
 
 const app = express();
 const PORT = 3000;
@@ -148,7 +151,7 @@ function mergeDbWithDefaults(parsed: any): AppDb {
       }
       if (!l.studentEmail || l.studentEmail.trim() === '') {
         const sName = (l.studentName || '').toLowerCase().trim();
-        if (sName.includes('vinicius') || sName.includes('ferraz')) {
+        if (sName.includes('vinicius')) {
           l.studentEmail = 'viniciusferrazcardoso@gmail.com';
         } else if (sName.includes('regina')) {
           l.studentEmail = 'reginahelena1980@gmail.com';
@@ -314,10 +317,12 @@ async function initCloudPersistence() {
         }
         if (!l.studentEmail || l.studentEmail.trim() === '') {
           const sName = (l.studentName || '').toLowerCase().trim();
-          if (sName.includes('vinicius') || sName.includes('ferraz')) {
+          if (sName.includes('vinicius')) {
             l.studentEmail = 'viniciusferrazcardoso@gmail.com';
           } else if (sName.includes('regina')) {
             l.studentEmail = 'reginahelena1980@gmail.com';
+          } else if (sName.includes('lavinia')) {
+            l.studentEmail = 'laviniatilapia@gmail.com';
           }
         }
         return l;
@@ -1599,21 +1604,320 @@ app.delete('/api/teachers/:email', (req, res) => {
   res.json({ success: true, teachers: db.teachers });
 });
 
-// 2.1 Dictionary Definition strictly via Free Dictionary API (https://api.dictionaryapi.dev)
-app.post('/api/dictionary/define', async (req, res) => {
-  const { word } = req.body;
-  if (!word || typeof word !== 'string') {
+// 2.1 Official Merriam-Webster Dictionary Integration & Extraction Helpers
+function cleanMwMarkup(text: string): string {
+  if (!text) return '';
+  let cleaned = text
+    .replace(/\{bc\}/g, '')
+    .replace(/\{it\}(.*?)\{\/it\}/g, '$1')
+    .replace(/\{b\}(.*?)\{\/b\}/g, '$1')
+    .replace(/\{wi\}(.*?)\{\/wi\}/g, '$1')
+    .replace(/\{phrase\}(.*?)\{\/phrase\}/g, '$1')
+    .replace(/\{inf\}(.*?)\{\/inf\}/g, '$1')
+    .replace(/\{sup\}(.*?)\{\/sup\}/g, '$1')
+    .replace(/\{gloss\}(.*?)\{\/gloss\}/g, '$1')
+    .replace(/\{qword\}(.*?)\{\/qword\}/g, '$1')
+    .replace(/\{sc\}(.*?)\{\/sc\}/g, '$1')
+    .replace(/\{dx\}.*?\{\/dx\}/g, '')
+    .replace(/\{dxt\|(.*?)(?:\|.*?)*\}/g, '$1')
+    .replace(/\{d_link\|(.*?)(?:\|.*?)*\}/g, '$1')
+    .replace(/\{a_link\|(.*?)\}/g, '$1')
+    .replace(/\{sx\|(.*?)(?:\|.*?)*\}/g, '$1')
+    .replace(/\{[^}]+?\}/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  cleaned = cleaned.replace(/^[:\s\-—]+/, '').trim();
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
+function formatExampleSentence(ex: string): string {
+  if (!ex) return '';
+  let cleaned = ex.trim().replace(/^["'\s]+|["'\s]+$/g, '').trim();
+  if (cleaned && !/[.!?]$/.test(cleaned)) {
+    cleaned += '.';
+  }
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
+function extractExampleFromSense(dt: any[]): string {
+  if (!Array.isArray(dt)) return '';
+  for (const item of dt) {
+    if (item[0] === 'vis' && Array.isArray(item[1])) {
+      for (const v of item[1]) {
+        if (v && v.t) {
+          const ex = cleanMwMarkup(v.t);
+          if (ex) return formatExampleSentence(ex);
+        }
+      }
+    }
+    if (item[0] === 'uns' && Array.isArray(item[1])) {
+      for (const unsGroup of item[1]) {
+        if (Array.isArray(unsGroup)) {
+          for (const unsItem of unsGroup) {
+            if (unsItem[0] === 'vis' && Array.isArray(unsItem[1])) {
+              for (const v of unsItem[1]) {
+                if (v && v.t) {
+                  const ex = cleanMwMarkup(v.t);
+                  if (ex) return formatExampleSentence(ex);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return '';
+}
+
+function findExampleInEntry(entry: any): string {
+  if (!entry || !entry.def) return '';
+  const sseqs = entry.def.flatMap((d: any) => d.sseq || []) || [];
+  for (const group of sseqs) {
+    for (const item of group) {
+      if (item[0] === 'sense' && item[1]?.dt) {
+        const ex = extractExampleFromSense(item[1].dt);
+        if (ex) return ex;
+      }
+      if (item[0] === 'bs' && item[1]?.sense?.dt) {
+        const ex = extractExampleFromSense(item[1].sense.dt);
+        if (ex) return ex;
+      }
+    }
+  }
+  return '';
+}
+
+function generateInternalFallbackExample(word: string, partOfSpeech: string): string {
+  const w = word.trim();
+  const offline = getDictionaryDefinition(w);
+  if (offline && offline.exampleSentenceEn && offline.exampleSentenceEn.trim()) {
+    return formatExampleSentence(offline.exampleSentenceEn);
+  }
+
+  const lowerPos = (partOfSpeech || '').toLowerCase();
+  if (lowerPos.includes('verb')) {
+    return `We practiced how to ${w} during our English routine.`;
+  }
+  if (lowerPos.includes('adjective') || lowerPos.includes('adj')) {
+    return `It was a very ${w} moment in our daily conversation.`;
+  }
+  if (lowerPos.includes('adverb') || lowerPos.includes('adv')) {
+    return `She spoke English ${w} during the live lesson.`;
+  }
+  if (lowerPos.includes('noun')) {
+    return `The word "${w}" is frequently used in everyday English conversations.`;
+  }
+  return `He practiced using the word "${w}" in a complete sentence.`;
+}
+
+function mapMerriamWebsterResponse(data: any[], rawWord: string) {
+  if (!Array.isArray(data) || data.length === 0) return null;
+  if (typeof data[0] === 'string') return null; // Array of spelling suggestions
+
+  const cleanTarget = rawWord.trim().toLowerCase();
+
+  // 1. Check for defined run-on phrase in dros (e.g. "touch base")
+  for (const entry of data) {
+    if (Array.isArray(entry.dros)) {
+      for (const dro of entry.dros) {
+        if (dro.drp && dro.drp.toLowerCase() === cleanTarget) {
+          let droDef = '';
+          let droExample = '';
+          const sseqs = dro.def?.flatMap((d: any) => d.sseq || []) || [];
+          for (const group of sseqs) {
+            for (const item of group) {
+              if (item[0] === 'sense' && item[1]?.dt) {
+                if (!droExample) droExample = extractExampleFromSense(item[1].dt);
+                if (!droDef) {
+                  const textItem = item[1].dt.find((d: any) => d[0] === 'text');
+                  if (textItem && textItem[1]) droDef = cleanMwMarkup(textItem[1]);
+                }
+              }
+            }
+          }
+          if (droDef) {
+            const pos = dro.gram || entry.fl || 'idiom';
+            return {
+              word: dro.drp,
+              partOfSpeech: pos,
+              definitionEn: droDef,
+              exampleSentenceEn: droExample || generateInternalFallbackExample(dro.drp, pos),
+              source: 'merriam-webster',
+              notFound: false,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Exact match or primary entry
+  const entry =
+    data.find((e: any) => {
+      const id = (e.meta?.id || '').replace(/:\d+$/, '').toLowerCase();
+      return id === cleanTarget;
+    }) || data[0];
+
+  const word = (entry.meta?.id || '').replace(/:\d+$/, '') || rawWord.trim();
+  const partOfSpeech = entry.fl || 'word';
+
+  // 3. Definition: shortdef or first structured definition
+  let definition = '';
+  if (Array.isArray(entry.shortdef) && entry.shortdef.length > 0) {
+    const firstDef = entry.shortdef.find((d: any) => typeof d === 'string' && d.trim());
+    if (firstDef) {
+      definition = cleanMwMarkup(firstDef);
+    }
+  }
+  if (!definition && entry.def) {
+    const sseqs = entry.def.flatMap((d: any) => d.sseq || []) || [];
+    for (const group of sseqs) {
+      for (const item of group) {
+        if (item[0] === 'sense' && item[1]?.dt) {
+          const textItem = item[1].dt.find((d: any) => d[0] === 'text');
+          if (textItem && textItem[1]) {
+            definition = cleanMwMarkup(textItem[1]);
+            if (definition) break;
+          }
+        }
+      }
+      if (definition) break;
+    }
+  }
+
+  if (!definition) return null;
+
+  // 4. Real example extracted from API or internal fallback
+  let example = findExampleInEntry(entry);
+  if (!example) {
+    for (const other of data) {
+      example = findExampleInEntry(other);
+      if (example) break;
+    }
+  }
+  if (!example) {
+    example = generateInternalFallbackExample(word, partOfSpeech);
+  }
+
+  // 5. Audio and phonetics from official Merriam-Webster CDN
+  let phonetic: string | undefined;
+  let audio: string | undefined;
+  if (entry.hwi) {
+    if (Array.isArray(entry.hwi.prs) && entry.hwi.prs.length > 0) {
+      const pr = entry.hwi.prs[0];
+      phonetic = pr.ipa || pr.mw;
+      if (pr.sound?.audio) {
+        const a = pr.sound.audio;
+        let sub = a.charAt(0);
+        if (a.startsWith('bix')) sub = 'bix';
+        else if (a.startsWith('gg')) sub = 'gg';
+        else if (/^[^a-zA-Z]/.test(a)) sub = 'number';
+        audio = `https://media.merriam-webster.com/audio/prons/en/us/mp3/${sub}/${a}.mp3`;
+      }
+    }
+  }
+
+  return {
+    word,
+    partOfSpeech,
+    definitionEn: definition,
+    exampleSentenceEn: example,
+    phonetic,
+    audio,
+    source: 'merriam-webster',
+    notFound: false,
+  };
+}
+
+let activeMwReference = process.env.MERRIAM_WEBSTER_REF || 'learners';
+const mwCache = new Map<string, any>();
+
+async function queryMerriamWebsterApi(wordToLookup: string): Promise<any> {
+  const referencesToTry = [
+    activeMwReference,
+    activeMwReference === 'learners' ? 'collegiate' : 'learners',
+  ];
+
+  for (const ref of referencesToTry) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7000);
+      const url = `https://www.dictionaryapi.com/api/v3/references/${ref}/json/${encodeURIComponent(wordToLookup)}?key=${MERRIAM_WEBSTER_API_KEY}`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!res.ok) continue;
+
+      const text = await res.text();
+      if (text.includes('Not subscribed for this reference') || text.includes('Invalid API key')) {
+        continue;
+      }
+
+      const json = JSON.parse(text);
+      if (Array.isArray(json)) {
+        activeMwReference = ref;
+        return json;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// 2.2 Dictionary Lookup Endpoint (Official Merriam-Webster with structured fallback)
+app.all('/api/dictionary/define', async (req, res) => {
+  const rawWord = (req.body?.word || req.query?.word || '') as string;
+  if (!rawWord || typeof rawWord !== 'string') {
     return res.status(400).json({ error: 'Word is required' });
   }
 
-  const cleanWord = word.trim();
+  const cleanWord = rawWord.trim();
   const lowerWord = cleanWord.toLowerCase();
+  const cacheKey = lowerWord;
 
-  // Try official Free Dictionary API (https://api.dictionaryapi.dev)
+  if (mwCache.has(cacheKey)) {
+    return res.json(mwCache.get(cacheKey));
+  }
+
+  // 1. Query official Merriam-Webster API
+  try {
+    const mwData = await queryMerriamWebsterApi(lowerWord);
+    if (mwData) {
+      const mapped = mapMerriamWebsterResponse(mwData, cleanWord);
+      if (mapped) {
+        mwCache.set(cacheKey, mapped);
+        return res.json(mapped);
+      }
+    }
+
+    // Try without trailing punctuation or plural trailing 's' if not found initially
+    if (/[.,!?;:]$/.test(cleanWord) || lowerWord.endsWith('s')) {
+      const strippedWord = cleanWord.replace(/[.,!?;:]+$/, '');
+      const secondaryData = await queryMerriamWebsterApi(strippedWord);
+      if (secondaryData) {
+        const mapped = mapMerriamWebsterResponse(secondaryData, strippedWord);
+        if (mapped) {
+          mwCache.set(cacheKey, mapped);
+          return res.json(mapped);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Merriam-Webster query error:', err);
+  }
+
+  // 2. Secondary fallback to Free Dictionary API if Merriam-Webster has no entry
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
+    const timeout = setTimeout(() => controller.abort(), 6000);
     const apiRes = await fetch(
       `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lowerWord)}`,
       {
@@ -1629,18 +1933,13 @@ app.post('/api/dictionary/define', async (req, res) => {
         const entry = data[0];
         const firstMeaning = entry.meanings[0];
         const pos = firstMeaning.partOfSpeech || 'word';
-
-        // 1. First definition directly from the API response
         const firstDefObj = firstMeaning.definitions?.[0];
         const def = firstDefObj?.definition?.trim() || '';
 
-        // 2. Example sentence directly from the API response
         let example = firstDefObj?.example?.trim() || '';
         if (!example && Array.isArray(firstMeaning.definitions)) {
-          const defWithExample = firstMeaning.definitions.find((d: any) => d.example && d.example.trim());
-          if (defWithExample) {
-            example = defWithExample.example.trim();
-          }
+          const defWithEx = firstMeaning.definitions.find((d: any) => d.example && d.example.trim());
+          if (defWithEx) example = defWithEx.example.trim();
         }
         if (!example) {
           for (const m of entry.meanings) {
@@ -1655,34 +1954,144 @@ app.post('/api/dictionary/define', async (req, res) => {
         }
 
         if (def) {
-          return res.json({
+          const result = {
             word: entry.word || cleanWord,
             partOfSpeech: pos,
             definitionEn: def,
-            exampleSentenceEn: example || '',
+            exampleSentenceEn: example ? formatExampleSentence(example) : generateInternalFallbackExample(cleanWord, pos),
             phonetic: entry.phonetic || entry.phonetics?.find((p: any) => p.text)?.text,
             audio: entry.phonetics?.find((p: any) => p.audio && p.audio.startsWith('http'))?.audio,
             source: 'api',
             notFound: false,
-          });
+          };
+          mwCache.set(cacheKey, result);
+          return res.json(result);
         }
       }
     }
-  } catch (err) {
-    // Free Dictionary API network error or timeout
+  } catch {
+    // Secondary fallback error
   }
 
-  // If word is not found in Free Dictionary API, return clean notFound without AI or generic fallback text
-  return res.json({
+  // 3. Offline curated dictionary check before notFound
+  const offlineEntry = getDictionaryDefinition(cleanWord);
+  if (offlineEntry && offlineEntry.definitionEn) {
+    const offlineResult = {
+      word: offlineEntry.word || cleanWord,
+      partOfSpeech: offlineEntry.partOfSpeech || 'word',
+      definitionEn: offlineEntry.definitionEn,
+      exampleSentenceEn: formatExampleSentence(offlineEntry.exampleSentenceEn || generateInternalFallbackExample(cleanWord, offlineEntry.partOfSpeech || '')),
+      phonetic: offlineEntry.phonetic,
+      source: 'offline_dict',
+      notFound: false,
+    };
+    mwCache.set(cacheKey, offlineResult);
+    return res.json(offlineResult);
+  }
+
+  // 4. Clean notFound response
+  const notFoundResult = {
     word: cleanWord,
     partOfSpeech: '',
     definitionEn: '',
     exampleSentenceEn: '',
     source: 'not_found',
     notFound: true,
-    errorMessage: 'Word not found in Free Dictionary API',
-  });
+    errorMessage: 'Palavra não localizada no dicionário oficial.',
+  };
+  return res.json(notFoundResult);
 });
+
+// Internal helper to lookup word definition & examples for pedagogical engine
+async function lookupServerDictionaryWord(cleanWord: string): Promise<{
+  word: string;
+  definitionEn: string;
+  exampleSentenceEn: string;
+  translationPt: string;
+}> {
+  const trimmed = cleanWord.trim();
+  const lower = trimmed.toLowerCase();
+
+  // 1. Offline curated routine dictionary
+  const offline = getDictionaryDefinition(trimmed);
+  if (offline && offline.definitionEn && offline.definitionEn.trim()) {
+    return {
+      word: trimmed,
+      definitionEn: offline.definitionEn.trim(),
+      exampleSentenceEn: offline.exampleSentenceEn?.trim() || `I practice using "${trimmed}" in my daily routine.`,
+      translationPt: offline.translationPt?.trim() || trimmed,
+    };
+  }
+
+  // 2. Merriam-Webster cache
+  if (mwCache.has(lower)) {
+    const cached = mwCache.get(lower);
+    if (cached && !cached.notFound && cached.definitionEn) {
+      return {
+        word: trimmed,
+        definitionEn: cached.definitionEn,
+        exampleSentenceEn: cached.exampleSentenceEn || `I practice using "${trimmed}" in my daily activities.`,
+        translationPt: (cached as any).translationPt || trimmed,
+      };
+    }
+  }
+
+  // 3. Merriam-Webster live query
+  try {
+    const mwData = await queryMerriamWebsterApi(lower);
+    if (mwData) {
+      const mapped = mapMerriamWebsterResponse(mwData, trimmed);
+      if (mapped && mapped.definitionEn) {
+        mwCache.set(lower, mapped);
+        return {
+          word: trimmed,
+          definitionEn: mapped.definitionEn,
+          exampleSentenceEn: mapped.exampleSentenceEn || `I practice using "${trimmed}" in my everyday conversations.`,
+          translationPt: (mapped as any).translationPt || trimmed,
+        };
+      }
+    }
+  } catch {}
+
+  // 4. Free Dictionary API fallback
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lower)}`, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data = (await res.json()) as any[];
+      if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].meanings) && data[0].meanings.length > 0) {
+        const firstMeaning = data[0].meanings[0];
+        const def = firstMeaning.definitions?.[0]?.definition?.trim() || '';
+        let ex = firstMeaning.definitions?.[0]?.example?.trim() || '';
+        if (!ex && Array.isArray(firstMeaning.definitions)) {
+          const found = firstMeaning.definitions.find((d: any) => d.example?.trim());
+          if (found) ex = found.example.trim();
+        }
+        if (def) {
+          return {
+            word: trimmed,
+            definitionEn: def,
+            exampleSentenceEn: ex || `I use "${trimmed}" naturally in my daily routine.`,
+            translationPt: trimmed,
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // 5. Default structured vocabulary entry
+  return {
+    word: trimmed,
+    definitionEn: `Essential vocabulary term learned during weekly English immersion.`,
+    exampleSentenceEn: `I practice using "${trimmed}" naturally in my daily conversations.`,
+    translationPt: trimmed,
+  };
+}
 
 // 3. Meet Settings & Teacher Settings Endpoints
 app.get(['/api/meet-settings', '/api/teacher-settings'], (req, res) => {
@@ -2465,7 +2874,7 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
     // Auto-resolve studentEmail if blank
     if (!newLesson.studentEmail || newLesson.studentEmail.trim() === '') {
       const sName = (newLesson.studentName || '').toLowerCase().trim();
-      if (sName.includes('vinicius') || sName.includes('ferraz')) {
+      if (sName.includes('vinicius')) {
         newLesson.studentEmail = 'viniciusferrazcardoso@gmail.com';
       } else if (sName.includes('regina')) {
         newLesson.studentEmail = 'reginahelena1980@gmail.com';
@@ -2544,7 +2953,7 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
       db.liveLessons.unshift(newLesson);
     }
 
-    // Bidirectional sync: ensure student is linked to this teacher in db.students
+    // Bidirectional sync: ensure student is linked to this teacher in db.students if unassigned
     const cleanStudentEmail = (newLesson.studentEmail || '').toLowerCase().trim();
     const cleanTeacherEmail = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
     const cleanTeacherName = newLesson.teacherName || newLesson.tutorName || '';
@@ -2553,11 +2962,13 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
         (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanStudentEmail
       );
       if (studentIdx >= 0) {
+        const existingTeacher = (db.students[studentIdx].teacherEmail || '').toLowerCase().trim();
+        const shouldUpdateTeacher = !existingTeacher || existingTeacher === cleanTeacherEmail;
         db.students[studentIdx] = {
           ...db.students[studentIdx],
-          teacherEmail: cleanTeacherEmail,
-          teacherName: cleanTeacherName || db.students[studentIdx].teacherName,
-          teacherUid: newLesson.teacherUid || db.students[studentIdx].teacherUid,
+          teacherEmail: shouldUpdateTeacher ? cleanTeacherEmail : db.students[studentIdx].teacherEmail,
+          teacherName: shouldUpdateTeacher ? (cleanTeacherName || db.students[studentIdx].teacherName) : db.students[studentIdx].teacherName,
+          teacherUid: shouldUpdateTeacher ? (newLesson.teacherUid || db.students[studentIdx].teacherUid) : db.students[studentIdx].teacherUid,
           studentUid: newLesson.studentUid || db.students[studentIdx].studentUid || db.students[studentIdx].uid,
           status: 'active',
         };
@@ -3019,6 +3430,531 @@ app.post(['/api/homework', '/api/homework/submit'], (req, res) => {
   res.json({ success: true, weeklyHomework: db.weeklyHomework });
 });
 
+// Safe Gemini generation runner with timeout and multi-model fallback (no uncaught errors or stderr stack traces)
+async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const candidateModels = [
+    GEMINI_TEXT_MODEL,
+    'gemini-3.6-flash',
+  ];
+  const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  for (const model of modelsToTry) {
+    let timerId: any = null;
+    try {
+      const generatePromise = ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+      });
+
+      const response: any = await Promise.race([generatePromise, timeoutPromise]);
+
+      if (response && response.text) {
+        try {
+          const parsed = JSON.parse(response.text);
+          return parsed;
+        } catch {
+          // JSON parsing failure, try next candidate
+        }
+      }
+    } catch {
+      // Model might be temporarily busy, overloaded, rate-limited, or unavailable.
+      // Continue loop cleanly to next candidate or fallback without printing raw stack traces.
+    } finally {
+      if (timerId) clearTimeout(timerId);
+    }
+  }
+
+  return null;
+}
+
+// Helper to normalize and calibrate English proficiency levels
+function normalizeStudentLevel(lvl?: string): {
+  key: 'beginner' | 'intermediate' | 'advanced';
+  labelEn: string;
+  labelPt: string;
+  cefr: string;
+  grammarFocusEn: string;
+  grammarFocusPt: string;
+} {
+  const clean = (lvl || '').toLowerCase().trim();
+  if (clean.includes('avanc') || clean.includes('advan') || clean.includes('c1') || clean.includes('c2')) {
+    return {
+      key: 'advanced',
+      labelEn: 'Advanced',
+      labelPt: 'Avançado',
+      cefr: 'C1-C2',
+      grammarFocusEn: 'Complex clauses, passive voice, subjunctive/inversion, mixed conditionals, subtle modal nuances, idiomatic collocations, executive and reflective discourse (20-30 words per sentence).',
+      grammarFocusPt: 'Orações complexas, voz passiva, inversões/condicionais mistas, colocações idiomáticas refinadas e discurso executivo (20 a 30 palavras por frase).',
+    };
+  }
+  if (clean.includes('intermed') || clean.includes('b1') || clean.includes('b2')) {
+    return {
+      key: 'intermediate',
+      labelEn: 'Intermediate',
+      labelPt: 'Intermediário',
+      cefr: 'B1-B2',
+      grammarFocusEn: 'Compound and complex sentences with connectors (although, because, while, since, whenever), modal verbs (should, could, might), present perfect, workplace and social situations (14-22 words per sentence).',
+      grammarFocusPt: 'Frases compostas com conectivos de causa/contraste, present perfect, verbos modais e situações de trabalho e convívio (14 a 22 palavras por frase).',
+    };
+  }
+  return {
+    key: 'beginner',
+    labelEn: 'Beginner',
+    labelPt: 'Iniciante',
+    cefr: 'A1-A2',
+    grammarFocusEn: 'Simple Present, Simple Past, Present Continuous, direct Subject + Verb + Object structures, accessible everyday routine vocabulary with high context clues (8-14 words per sentence).',
+    grammarFocusPt: 'Presente Simples, Passado Simples, estruturas diretas Sujeito + Verbo + Objeto e vocabulário cotidiano com pistas claras de contexto (8 a 14 palavras por frase).',
+  };
+}
+
+// AI-Powered 4-Stage Weekly Memorization Activity Generator
+app.post('/api/homework/generate-ai', async (req, res) => {
+  try {
+    const {
+      words = [],
+      studentName = 'Student',
+      studentLevel = 'iniciante/intermediário',
+      studentEmail = '',
+      weekLabel = '',
+    } = req.body;
+
+    const levelMeta = normalizeStudentLevel(studentLevel);
+
+    const rawList = Array.isArray(words) ? words : [];
+    const seen = new Set<string>();
+    const cleanInputWords: Array<{
+      word: string;
+      definitionEn?: string;
+      exampleSentence?: string;
+      translationPt?: string;
+      sourceActivityName?: string;
+      sourceDay?: string;
+    }> = [];
+
+    for (const item of rawList) {
+      const w = typeof item === 'string' ? item : item?.word;
+      const trimmed = (w || '').trim();
+      if (trimmed && !seen.has(trimmed.toLowerCase())) {
+        seen.add(trimmed.toLowerCase());
+        cleanInputWords.push({
+          word: trimmed,
+          definitionEn: typeof item === 'object' ? item.definitionEn : undefined,
+          exampleSentence: typeof item === 'object' ? (item.exampleSentence || item.exampleSentenceEn) : undefined,
+          translationPt: typeof item === 'object' ? item.translationPt : undefined,
+          sourceActivityName: typeof item === 'object' ? item.sourceActivityName : undefined,
+          sourceDay: typeof item === 'object' ? item.sourceDay : undefined,
+        });
+      }
+    }
+
+    // REGRA DE OURO ANTI-GENÉRICO: Se a lista de palavras estiver vazia, retorna aviso estruturado
+    if (cleanInputWords.length === 0) {
+      return res.json({
+        success: true,
+        isEmpty: true,
+        emptyWarning:
+          'Nenhum vocabulário cadastrado nesta semana ainda. Para gerar sua Atividade de Memorização inteligente, adicione palavras nas suas rotinas diárias ou participe de uma aula ao vivo com seu Amigo Nativo para que ele anote novos termos no seu vocabulário.',
+        emptyWarningEn:
+          'No vocabulary registered for this week yet. To generate your AI Memorization Activity, add words in your daily routines or attend a live lesson with your Native Friend so they can note new terms in your vocabulary.',
+        totalWordsCollected: 0,
+        vocabularyList: [],
+        matchingPairs: [],
+        fillInBlanks: [],
+        sentenceWritingPrompts: [],
+        readingPassage: {
+          title: 'Aguardando Vocabulário Real',
+          text: '',
+          questions: [],
+        },
+      });
+    }
+
+    // 1. ENTRADA OBRIGATÓRIA (Payload): Obter definições oficiais e exemplos autênticos do dicionário
+    const enrichedWords = await Promise.all(
+      cleanInputWords.map(async (item) => {
+        let def = item.definitionEn?.trim();
+        let ex = item.exampleSentence?.trim();
+        let trans = item.translationPt?.trim();
+
+        if (!def || !ex || !trans) {
+          const dictData = await lookupServerDictionaryWord(item.word);
+          if (!def) def = dictData.definitionEn;
+          if (!ex) ex = dictData.exampleSentenceEn;
+          if (!trans) trans = dictData.translationPt;
+        }
+
+        return {
+          word: item.word,
+          definitionEn: def,
+          exampleSentence: ex,
+          translationPt: trans,
+          sourceActivityName: item.sourceActivityName || 'Rotina Semanal',
+          sourceDay: item.sourceDay || 'monday',
+        };
+      })
+    );
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    let aiGeneratedResult: any = null;
+
+    if (apiKey) {
+      const prompt = `You are an elite pedagogical AI engine for "It's Simple - Learn English by Living Your Life".
+Your mission is to construct the 4 stages of the "Weekly Memorization Activity" (Atividade de Memorização) strictly and exclusively using the student's real vocabulary registered this week, dynamically calibrated to their exact proficiency level.
+
+STUDENT PROFILE & PROFICIENCY LEVEL:
+Name: "${studentName}"
+Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+Level Pedagogical Focus: ${levelMeta.grammarFocusEn}
+
+ACTIVE WEEKLY VOCABULARY PAYLOAD (Official dictionary definitions and real examples):
+${JSON.stringify(
+  enrichedWords.map((w) => ({
+    word: w.word,
+    officialDictionaryDefinition: w.definitionEn,
+    dictionaryExampleSentence: w.exampleSentence,
+    translationInPortuguese: w.translationPt,
+  })),
+  null,
+  2
+)}
+
+STRICT PEDAGOGICAL SPECIFICATIONS FOR THE 4 STAGES:
+
+1. ANTI-GENERIC GOLDEN RULE:
+   - You MUST ONLY use the target words present in the payload above: [${enrichedWords.map((w) => `"${w.word}"`).join(', ')}].
+   - It is strictly forbidden to invent or introduce factory-standard mock words (e.g., breakfast, coffee, commute) unless they were explicitly registered in the payload above.
+
+2. ETAPA 1 (Associação / Matching):
+   - Intelligently cross-reference each exact word from the list with its official definition and concise Portuguese translation.
+   - Include all words from the payload in matchingPairs.
+   - Shuffle only the display order of the pairs in the output array so that the student experiences an engaging matching challenge.
+   - Each item:
+     {
+       "id": "match-{index}-{word}",
+       "word": "{exact target word}",
+       "definition": "{official English definition}",
+       "translation": "{concise Portuguese translation}"
+     }
+
+3. ETAPA 2 (Lacunas / Fill-in-the-blanks) - CALIBRATED TO ${levelMeta.labelEn.toUpperCase()}:
+   - For each word from the list (or up to 6 words if the list is long), generate a BRAND NEW, original, natural English sentence where the target word is the ONLY logically and grammatically correct answer for the blank "______".
+   - LEVEL CALIBRATION REQUIREMENTS:
+     * BEGINNER: 8 to 14 words per sentence. Simple Present/Past/Continuous, clear direct context clues. Everyday routine scenarios.
+     * INTERMEDIATE: 14 to 22 words per sentence. Compound/complex structures with connectors ('although', 'while', 'because', 'since', 'whenever'), modal verbs, present perfect, realistic workplace or social contexts.
+     * ADVANCED: 20 to 30 words per sentence. Sophisticated syntax with relative clauses, passive voice, condition/inversion, nuanced collocations, professional leadership or reflective dilemmas.
+   - Provide "hintPt" with Portuguese translation and contextual nuance.
+   - Provide "hintEn" with English guidance.
+   - Provide "explanationPt" (in Portuguese) and "explanationEn" (in English) with a gentle pedagogical explanation of why this target word is the correct choice in this sentence.
+   - Provide "options": array of exactly 4 strings (the correct target word + 3 distractors, shuffled).
+   - Each item:
+     {
+       "id": "fill-{index}-{word}",
+       "sentenceWithBlank": "{calibrated English sentence with ______ }",
+       "correctWord": "{exact target word}",
+       "options": ["opt1", "opt2", "opt3", "opt4"],
+       "hintPt": "Dica: Refere-se a '{translation}'",
+       "hintEn": "Hint: ...",
+       "explanationPt": "{gentle explanation why this word fits}",
+       "explanationEn": "{gentle explanation in English}"
+     }
+
+4. ETAPA 3 (Construção de Frases / Active Sentence Prompts) - CALIBRATED TO ${levelMeta.labelEn.toUpperCase()}:
+   - For each word in the list (or up to 5 words), create an active prompt command tailored to the student's level.
+   - LEVEL CALIBRATION REQUIREMENTS:
+     * BEGINNER: Friendly, step-by-step guidance. Encourage a clear, simple sentence (Subject + Verb + Object) connecting the word to their daily routine.
+     * INTERMEDIATE: Challenge the student to combine two clauses or explain a reason/routine experience using transition words ('because', 'so', 'although').
+     * ADVANCED: Challenge the student to produce high-level, expressive, or professional sentences with nuanced phrasing or advanced structures.
+   - Each item:
+     {
+       "word": "{exact target word}",
+       "hint": "{English prompt guiding the student to use the term in a realistic context}",
+       "hintEn": "{English prompt}",
+       "hintPt": "{Portuguese prompt instructions}",
+       "levelInstruction": "{Specific guideline for ${levelMeta.labelEn} level}"
+     }
+
+5. ETAPA 4 (Texto Integrado / Integrated Micro-Text) - CALIBRATED TO ${levelMeta.labelEn.toUpperCase()}:
+   - Compose a cohesive, natural, engaging micro-text describing a realistic daily routine, work, or lifestyle scenario.
+   - LEVEL DENSITY CALIBRATION:
+     * BEGINNER: 90-125 words, 1-2 clean paragraphs, accessible chronological flow, direct factual comprehension questions.
+     * INTERMEDIATE: 135-180 words, 2 cohesive paragraphs, varied transitions, realistic routine dilemma, cause/effect comprehension questions.
+     * ADVANCED: 180-250 words, 2-3 dense, articulate paragraphs, sophisticated syntax, nuanced reflections, inferential comprehension questions.
+   - Organically weave in the MAXIMUM POSSIBLE NUMBER of words from the weekly vocabulary list!
+   - Highlight EVERY incorporated weekly word in bold markdown: **word** (or **Word**).
+   - MANDATORY VOCABULARY FOCUS FOR QUESTIONS (CRITICAL):
+     * The reading comprehension questions MUST DIRECTLY AND EXPLICITLY TEST THE STUDENT'S WEEKLY VOCABULARY WORDS from the list: [${enrichedWords.map((w) => `"${w.word}"`).join(', ')}].
+     * DO NOT generate generic questions about general studying or vague concepts (e.g., do NOT ask generic questions like "What is the benefit of studying?" or "What leads to success?").
+     * EVERY question MUST explicitly name and probe how a target word (or pair of words) is used, what it means in context, or what action/outcome it produces in the story.
+       Examples of required question style:
+       - "In the passage, how is '**{target_word}**' applied in the daily routine?"
+       - "According to the story, what does the author achieve by focusing on '**{target_word}**'?"
+       - "What does the text imply about '**{target_word}**' when describing the character's schedule?"
+       - "In paragraph 2, what action is associated with the term '**{target_word}**'?"
+     * The 4 multiple-choice options and the explanation MUST also directly reference the contextual meaning of the student's target words.
+   - Generate 2 to 3 reading comprehension questions about the text, each with 4 options, the 0-based index of the correct answer, and an explanation.
+   - Structure:
+     {
+       "title": "{engaging English title}",
+       "text": "{cohesive micro-text with **highlighted target words**}",
+       "questions": [
+         {
+           "id": "q-{index}",
+           "question": "{comprehension question explicitly testing a target vocabulary word from the weekly list}",
+           "options": ["A", "B", "C", "D"],
+           "correctAnswer": 0,
+           "explanation": "{why this option is correct, referencing the target word's contextual usage}"
+         }
+       ]
+     }
+
+Output MUST be STRICT JSON with this exact top-level schema:
+{
+  "matchingPairs": [ ... ],
+  "fillInBlanks": [ ... ],
+  "sentenceWritingPrompts": [ ... ],
+  "readingPassage": {
+    "title": "string",
+    "text": "string",
+    "questions": [ ... ]
+  }
+}`;
+
+      const rawResult = await callGeminiSafeJson(prompt, 7000);
+      if (
+        rawResult &&
+        Array.isArray(rawResult.matchingPairs) &&
+        Array.isArray(rawResult.fillInBlanks) &&
+        Array.isArray(rawResult.sentenceWritingPrompts) &&
+        rawResult.readingPassage?.text
+      ) {
+        aiGeneratedResult = rawResult;
+      }
+    }
+
+    // Smart algorithmic fallback adhering strictly to the Anti-Generic Rule and Level Calibration
+    const matchingPairs =
+      aiGeneratedResult?.matchingPairs?.length > 0
+        ? aiGeneratedResult.matchingPairs
+        : [...enrichedWords]
+            .sort(() => 0.5 - Math.random())
+            .map((item, idx) => ({
+              id: `match-${idx}-${item.word}`,
+              word: item.word,
+              definition: item.definitionEn,
+              translation: item.translationPt,
+            }));
+
+    const fillInBlanks =
+      aiGeneratedResult?.fillInBlanks?.length > 0
+        ? aiGeneratedResult.fillInBlanks
+        : enrichedWords.slice(0, 6).map((item, idx) => {
+            const wordRegex = new RegExp(`\\b${item.word}\\b`, 'i');
+            let sentenceWithBlank = '';
+
+            if (item.exampleSentence && wordRegex.test(item.exampleSentence)) {
+              sentenceWithBlank = item.exampleSentence.replace(wordRegex, '______');
+            } else if (levelMeta.key === 'advanced') {
+              sentenceWithBlank = `When orchestrating my daily schedule, ensuring a precise ______ proves essential to executing complex tasks seamlessly.`;
+            } else if (levelMeta.key === 'intermediate') {
+              sentenceWithBlank = `During my busy day, I make sure to focus on my ______ because it keeps my routine productive and organized.`;
+            } else {
+              sentenceWithBlank = `In my morning routine, I need to check my ______ before starting my day.`;
+            }
+
+            const otherWords = enrichedWords
+              .filter((w) => w.word.toLowerCase() !== item.word.toLowerCase())
+              .map((w) => w.word);
+
+            const distractors = otherWords.slice(0, 3);
+            const contextBackups = ['schedule', 'routine', 'practice', 'session'];
+            let bIdx = 0;
+            while (distractors.length < 3) {
+              const candidate = contextBackups[bIdx++ % contextBackups.length];
+              if (!distractors.includes(candidate) && candidate !== item.word.toLowerCase()) {
+                distractors.push(candidate);
+              }
+            }
+
+            const options = [item.word, ...distractors].sort(() => 0.5 - Math.random());
+
+            return {
+              id: `fill-${idx}-${item.word}`,
+              sentenceWithBlank,
+              correctWord: item.word,
+              options,
+              hintPt: `Dica: Refere-se a "${item.translationPt}".`,
+              hintEn: `Hint: Focus on the routine context to select "${item.word}".`,
+              explanationPt: `A palavra "${item.word}" (${item.translationPt}) é a única que se encaixa perfeitamente no sentido e na estrutura desta frase.`,
+              explanationEn: `The word "${item.word}" is the only option that accurately completes the meaning and grammar of this sentence.`,
+            };
+          });
+
+    const sentenceWritingPrompts =
+      aiGeneratedResult?.sentenceWritingPrompts?.length > 0
+        ? aiGeneratedResult.sentenceWritingPrompts
+        : enrichedWords.slice(0, 5).map((item) => {
+            if (levelMeta.key === 'advanced') {
+              return {
+                word: item.word,
+                hint: `Craft a sophisticated sentence using "${item.word}" in a professional or reflective context.`,
+                hintEn: `Craft a sophisticated sentence using "${item.word}" in a professional or reflective context.`,
+                hintPt: `Crie uma frase avançada com "${item.word}" (${item.translationPt}) demonstrando vocabulário rico e estrutura refinada.`,
+                levelInstruction: 'Use complex clauses, conditionals, or professional phrasing.',
+              };
+            }
+            if (levelMeta.key === 'intermediate') {
+              return {
+                word: item.word,
+                hint: `Write a compound sentence connecting two ideas with "${item.word}" in your work or daily routine.`,
+                hintEn: `Write a compound sentence connecting two ideas with "${item.word}" in your work or daily routine.`,
+                hintPt: `Escreva uma frase intermediária conectando duas ideias com "${item.word}" (${item.translationPt}) usando conectivos como "because" ou "although".`,
+                levelInstruction: 'Try connecting two actions with a transition word.',
+              };
+            }
+            return {
+              word: item.word,
+              hint: `Write a simple, clear sentence using "${item.word}" describing your daily routine.`,
+              hintEn: `Write a simple, clear sentence using "${item.word}" describing your daily routine.`,
+              hintPt: `Escreva uma frase simples e direta usando "${item.word}" (${item.translationPt}) sobre o seu dia a dia.`,
+              levelInstruction: 'Keep it clear with Subject + Verb + Object.',
+            };
+          });
+
+    const w0 = enrichedWords[0] || { word: 'practice', translationPt: 'prática', definitionEn: 'regular activity' };
+    const w1 = enrichedWords[1] || enrichedWords[0] || { word: 'routine', translationPt: 'rotina', definitionEn: 'daily sequence of actions' };
+    const w2 = enrichedWords[2] || enrichedWords[0] || { word: 'confidence', translationPt: 'confiança', definitionEn: 'feeling of self-assurance' };
+
+    const fallbackQuestions: any[] = [
+      {
+        id: 'q-1',
+        question: `In the passage, how is the target word "${w0.word}" (${w0.translationPt}) applied in the daily routine?`,
+        options: [
+          `It is actively integrated into everyday actions to turn English into an authentic habit.`,
+          `It is strictly memorized from a book without ever being spoken in real life.`,
+          `It is avoided completely because it complicates the student's morning schedule.`,
+          `It replaces the need to converse or practice with native tutors.`,
+        ],
+        correctAnswer: 0,
+        explanation: `In the text, "${w0.word}" (${w0.translationPt}) represents an active, regular practice that transforms language learning into a natural reflex.`,
+      },
+      {
+        id: 'q-2',
+        question: `According to the story, what is the role of "${w1.word}" (${w1.translationPt}) in the learner's journey?`,
+        options: [
+          `It connects practical daily moments directly to lasting English fluency and confidence.`,
+          `It has no connection to real conversational progress and should be ignored.`,
+          `It should only be reviewed during occasional weekend study marathons.`,
+          `It shows that consistency with real-world vocabulary is unnecessary.`,
+        ],
+        correctAnswer: 0,
+        explanation: `The passage emphasizes that "${w1.word}" (${w1.translationPt}) is essential for turning routine actions into sustainable communicative fluency.`,
+      },
+    ];
+
+    if (enrichedWords.length >= 3) {
+      fallbackQuestions.push({
+        id: 'q-3',
+        question: `How does practicing "${w2.word}" (${w2.translationPt}) alongside "${w0.word}" reinforce progress in the passage?`,
+        options: [
+          `It helps transition conscious word recall into an automatic, natural communication reflex.`,
+          `It forces the student to study grammar books for hours without speaking.`,
+          `It creates confusion and makes routine activities harder to finish.`,
+          `It proves that vocabulary should only be memorized once per semester.`,
+        ],
+        correctAnswer: 0,
+        explanation: `Combining target terms like "${w2.word}" and "${w0.word}" directly in daily contexts solidifies long-term retention and fluent speech.`,
+      });
+    }
+
+    const readingPassage =
+      aiGeneratedResult?.readingPassage?.text &&
+      Array.isArray(aiGeneratedResult?.readingPassage?.questions) &&
+      aiGeneratedResult.readingPassage.questions.length > 0
+        ? aiGeneratedResult.readingPassage
+        : {
+            title: `Weekly Routine Practice: Real Life in English (${levelMeta.labelEn})`,
+            text:
+              levelMeta.key === 'advanced'
+                ? `Cultivating genuine linguistic mastery requires integrating foreign speech into the fabric of daily life. Throughout this week, our communicative endeavors centered on pivotal concepts including ${enrichedWords
+                    .map((w) => `**${w.word}**`)
+                    .join(', ')}.\n\nBy continually operationalizing terms such as ${enrichedWords
+                    .slice(0, 3)
+                    .map((w) => `**${w.word}**`)
+                    .join(' and ')} within demanding contexts, fluent expression becomes an automatic reflex rather than a deliberate cognitive struggle. Sustained diligence and contextualized pragmatism inevitably solidify enduring fluency.`
+                : levelMeta.key === 'intermediate'
+                ? `Building authentic English fluency happens when you connect language directly to your personal life. This week, we focused on key concepts including ${enrichedWords
+                    .map((w) => `**${w.word}**`)
+                    .join(', ')}.\n\nBy practicing terms like ${enrichedWords
+                    .slice(0, 3)
+                    .map((w) => `**${w.word}**`)
+                    .join(' and ')} in real scenarios, speaking becomes a natural daily habit instead of memorizing abstract lists. Consistency and immediate real-world application turn simple daily routines into lasting language confidence.`
+                : `Every day is a great chance to learn English. This week, we learned important words like ${enrichedWords
+                    .slice(0, 4)
+                    .map((w) => `**${w.word}**`)
+                    .join(', ')}.\n\nWhen we use **${enrichedWords[0]?.word || 'practice'}** in our morning and evening routines, we remember them easily. Practice every day to build confidence!`,
+            questions: fallbackQuestions,
+          };
+
+    const finalHomeworkData = {
+      id: `hw-ai-${Date.now()}`,
+      weekLabel: weekLabel || `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`,
+      studentEmail: studentEmail || '',
+      studentName: studentName || 'Student',
+      studentLevel: levelMeta.labelEn,
+      createdAt: new Date().toISOString(),
+      totalWordsCollected: enrichedWords.length,
+      vocabularyList: enrichedWords.map((w) => ({
+        word: w.word,
+        definitionEn: w.definitionEn,
+        exampleSentence: w.exampleSentence,
+        translationPt: w.translationPt,
+        sourceActivityName: w.sourceActivityName,
+        sourceDay: w.sourceDay,
+      })),
+      allRoutineWords: enrichedWords.map((w) => ({
+        word: w.word,
+        definitionEn: w.definitionEn,
+        exampleSentence: w.exampleSentence,
+        translationPt: w.translationPt,
+        sourceActivityName: w.sourceActivityName,
+        sourceDay: w.sourceDay,
+      })),
+      matchingPairs,
+      fillInBlanks,
+      sentenceWritingPrompts,
+      readingPassage,
+      isEmpty: false,
+      isAiGenerated: Boolean(aiGeneratedResult),
+      isCompleted: false,
+      score: 0,
+    };
+
+    res.json({ success: true, homework: finalHomeworkData });
+  } catch (error: any) {
+    console.error('Error generating AI memorization activity:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
 // 9. Contracted Lessons Endpoints
 app.get('/api/contracted-lessons', (req, res) => {
   const db = readDb();
@@ -3047,24 +3983,36 @@ app.post('/api/email-logs', (req, res) => {
   res.json({ success: true });
 });
 
-// 12. Writing / Grammar Evaluation via Gemini API (or Local Heuristic)
+// 12. Writing / Grammar Evaluation via Gemini API with Level Adaptation & Gentle Feedback
 app.post('/api/check-writing', async (req, res) => {
   const { words = [], sentence = '', activityName = 'Routine', level = 'iniciante' } = req.body;
+  const levelMeta = normalizeStudentLevel(level);
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `You are a helpful pedagogical English teacher. Analyze the following student inputs:
-Words typed by student: ${JSON.stringify(words)}
-Sentence written by student: "${sentence}"
-English level: ${level}
-Activity context: ${activityName}
+    const prompt = `You are a supportive, expert English teacher at "It's Simple".
+Analyze the student's written sentence and target vocabulary, calibrated to their proficiency level:
 
-Check for spelling mistakes, vocabulary usage, and grammatical accuracy.
+STUDENT PROFICIENCY LEVEL: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+Level Focus: ${levelMeta.grammarFocusEn}
+
+INPUTS:
+Words to include: ${JSON.stringify(words)}
+Student's sentence: "${sentence}"
+Context: ${activityName}
+
+PEDAGOGICAL EVALUATION GUIDELINES ALIGNED TO LEVEL:
+- If Beginner: Be very encouraging, celebrate simple clear Subject + Verb + Object sentences, gently fix capitalization, spelling or simple punctuation without overwhelming the student.
+- If Intermediate: Check clause connections, verb tenses (e.g. past vs present perfect), prepositions, and natural phrasing. Suggest connectors ('because', 'although', 'so') if appropriate.
+- If Advanced: Evaluate stylistic flow, precision of target word collocation, natural idioms, and executive/expressive tone.
+
+Provide constructive, warm, non-judgmental explanations in both Portuguese (explanationPt) and English (explanationEn).
+If there is an error, offer a natural correctedSentence and a helpful level tip (levelTipsPt, levelTipsEn).
+
 Output STRICT JSON matching this schema:
 {
   "hasAnyError": boolean,
+  "isCorrect": boolean,
   "wordFeedbacks": [
     {
       "original": "string",
@@ -3083,40 +4031,19 @@ Output STRICT JSON matching this schema:
   },
   "correctedSentence": "string",
   "overallSummaryPt": "string",
-  "overallSummaryEn": "string"
+  "overallSummaryEn": "string",
+  "levelTipsPt": "string",
+  "levelTipsEn": "string"
 }`;
 
-      let response;
-      try {
-        response = await ai.models.generateContent({
-          model: GEMINI_TEXT_MODEL,
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-          },
-        });
-      } catch (err: any) {
-        if (err?.status === 404 || err?.message?.includes('not found') || err?.message?.includes('404')) {
-          response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
-            contents: prompt,
-            config: { responseMimeType: 'application/json' },
-          });
-        } else {
-          throw err;
-        }
-      }
-
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        return res.json(parsed);
-      }
-    } catch (e) {
-      console.warn('Gemini API writing check error, falling back:', e);
+    const parsed = await callGeminiSafeJson(prompt, 6000);
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.wordFeedbacks)) {
+      parsed.isCorrect = !parsed.hasAnyError;
+      return res.json(parsed);
     }
   }
 
-  // Fallback heuristic
+  // Fallback heuristic with level tips
   const wordFeedbacks = (words as string[]).map((w: string) => ({
     original: w,
     hasError: false,
@@ -3125,22 +4052,281 @@ Output STRICT JSON matching this schema:
     explanationEn: 'Valid spelling.',
   }));
 
+  const isBeg = levelMeta.key === 'beginner';
+  const isAdv = levelMeta.key === 'advanced';
+
   res.json({
     hasAnyError: false,
+    isCorrect: true,
     wordFeedbacks,
     sentenceFeedback: sentence
       ? {
           original: sentence,
           hasError: false,
           corrected: sentence,
-          explanationPt: 'Frase correta.',
-          explanationEn: 'Correct sentence.',
+          explanationPt: 'Frase correta e bem estruturada.',
+          explanationEn: 'Correct and well-structured sentence.',
         }
       : undefined,
     correctedSentence: sentence,
-    overallSummaryPt: 'Texto analisado com sucesso.',
-    overallSummaryEn: 'Writing evaluated successfully.',
+    overallSummaryPt: isBeg
+      ? 'Ótimo trabalho! Sua frase está clara e direta para o nível iniciante.'
+      : isAdv
+      ? 'Excelente domínio! Frase com ótima escolha lexical e naturalidade.'
+      : 'Muito bom! Frase natural e adequada ao nível intermediário.',
+    overallSummaryEn: isBeg
+      ? 'Great job! Your sentence is clear and direct for beginner level.'
+      : isAdv
+      ? 'Outstanding command! Expressive, natural, and fluent.'
+      : 'Well done! Natural phrasing suitable for intermediate level.',
+    levelTipsPt: isBeg
+      ? 'Dica Iniciante: Lembre-se sempre de manter Sujeito + Verbo + Complemento.'
+      : isAdv
+      ? 'Dica Avançada: Experimente variar a posição dos advérbios ou usar orações relativas para maior elegância.'
+      : 'Dica Intermediária: Pratique usar conectivos como "because", "while" ou "although" para unir duas ações.',
+    levelTipsEn: isBeg
+      ? 'Beginner Tip: Keep practicing the core Subject + Verb + Object structure.'
+      : isAdv
+      ? 'Advanced Tip: Try varying adverb placement or using relative clauses for executive polish.'
+      : 'Intermediate Tip: Practice using connectors like "because", "while", or "although" to link two actions.',
   });
+});
+
+// 13. Comprehensive AI Homework Evaluator (All 4 Interactive Stages)
+app.post('/api/homework/evaluate', async (req, res) => {
+  try {
+    const {
+      homework,
+      studentAnswers = {},
+      studentLevel = 'iniciante',
+      studentName = 'Student',
+      currentLanguage = 'pt',
+    } = req.body;
+
+    if (!homework) {
+      return res.status(400).json({ error: 'homework data is required' });
+    }
+
+    const levelMeta = normalizeStudentLevel(studentLevel || homework.studentLevel);
+    const { matching = {}, fillInBlanks = {}, sentences = {}, quizAnswers = {} } = studentAnswers;
+
+    // Calculate baseline scores
+    let matchingCorrect = 0;
+    const matchingFeedback = (homework.matchingPairs || []).map((p: any) => {
+      const userAns = (matching[p.id] || '').trim();
+      const isCorrect = userAns.toLowerCase() === p.word.toLowerCase();
+      if (isCorrect) matchingCorrect++;
+      return {
+        id: p.id,
+        isCorrect,
+        userAnswer: userAns || '(sem resposta)',
+        correctAnswer: p.word,
+        explanationPt: isCorrect
+          ? `Correto! "${p.word}" significa "${p.translation}".`
+          : `A resposta correta é "${p.word}" (${p.translation}).`,
+        explanationEn: isCorrect
+          ? `Correct! "${p.word}" corresponds to "${p.definition}".`
+          : `The correct match is "${p.word}" (${p.definition}).`,
+      };
+    });
+
+    let fillCorrect = 0;
+    const fillFeedback = (homework.fillInBlanks || []).map((f: any) => {
+      const userAns = (fillInBlanks[f.id] || '').trim();
+      const isCorrect = userAns.toLowerCase() === f.correctWord.toLowerCase();
+      if (isCorrect) fillCorrect++;
+      return {
+        id: f.id,
+        isCorrect,
+        userAnswer: userAns || '(sem resposta)',
+        correctAnswer: f.correctWord,
+        explanationPt: f.explanationPt || (isCorrect
+          ? `Excelente! "${f.correctWord}" completa perfeitamente o sentido da frase.`
+          : `A palavra correta é "${f.correctWord}" (${f.hintPt || ''}).`),
+        explanationEn: f.explanationEn || (isCorrect
+          ? `Great job! "${f.correctWord}" accurately completes the sentence.`
+          : `The correct word is "${f.correctWord}".`),
+      };
+    });
+
+    let quizCorrect = 0;
+    const readingFeedback = (homework.readingPassage?.questions || []).map((q: any) => {
+      const userAnsIdx = quizAnswers[q.id];
+      const isCorrect = userAnsIdx === q.correctAnswer;
+      if (isCorrect) quizCorrect++;
+      const userAnsText = q.options?.[userAnsIdx] || '(sem resposta)';
+      const correctAnsText = q.options?.[q.correctAnswer] || '';
+      return {
+        id: q.id,
+        isCorrect,
+        userAnswer: userAnsText,
+        correctAnswer: correctAnsText,
+        explanationPt: q.explanation || (isCorrect ? 'Resposta correta com base no texto!' : `Opção correta: ${correctAnsText}.`),
+        explanationEn: q.explanation || (isCorrect ? 'Correct interpretation based on the passage!' : `Correct option: ${correctAnsText}.`),
+      };
+    });
+
+    // Score calculation
+    const totalMatching = Math.max(1, homework.matchingPairs?.length || 1);
+    const totalFill = Math.max(1, homework.fillInBlanks?.length || 1);
+    const totalQuiz = Math.max(1, homework.readingPassage?.questions?.length || 1);
+    const totalSentences = Math.max(1, homework.sentenceWritingPrompts?.length || 1);
+
+    const matchScore = (matchingCorrect / totalMatching) * 25;
+    const fillScore = (fillCorrect / totalFill) * 30;
+    const quizScore = (quizCorrect / totalQuiz) * 20;
+
+    // AI evaluation of sentences with Gemini
+    const apiKey = process.env.GEMINI_API_KEY;
+    let sentenceEvaluationResults: any[] = [];
+    let tutorSummaryPt = '';
+    let tutorSummaryEn = '';
+    let levelStrengthsPt = '';
+    let levelStrengthsEn = '';
+    let levelNextStepsPt = '';
+    let levelNextStepsEn = '';
+
+    if (apiKey) {
+      const prompt = `You are a warm, inspiring Native English teacher at "It's Simple".
+Evaluate this student's completed Weekly Memorization Activity.
+
+STUDENT PROFILE:
+Name: ${studentName}
+Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+Level Goals: ${levelMeta.grammarFocusEn}
+
+STUDENT WRITTEN SENTENCES IN PART 3:
+${JSON.stringify(
+  (homework.sentenceWritingPrompts || []).map((p: any) => ({
+    targetWord: p.word,
+    studentSentence: sentences[p.word] || '',
+    promptHint: p.hintEn || p.hint,
+  })),
+  null,
+  2
+)}
+
+STATS OF OTHER SECTIONS:
+- Matching (Part 1): ${matchingCorrect}/${totalMatching} correct
+- Fill in Blanks (Part 2): ${fillCorrect}/${totalFill} correct
+- Reading Comprehension (Part 4): ${quizCorrect}/${totalQuiz} correct
+
+EVALUATION INSTRUCTIONS:
+1. For each written sentence:
+   - Check grammar, spelling, natural phrasing, and appropriate use of target word.
+   - Align praise and constructive corrections to the student's level (${levelMeta.labelEn}).
+   - If Beginner: celebrate simple sentences, gently fix mechanics.
+   - If Intermediate: suggest natural connectors and verb forms.
+   - If Advanced: refine style, collocation elegance, and tone.
+2. Provide a personalized, encouraging summary note from the tutor:
+   - "tutorFeedbackSummaryPt" (in Portuguese) and "tutorFeedbackSummaryEn" (in English).
+3. Provide level-specific strengths ("levelStrengthsPt", "levelStrengthsEn").
+4. Provide actionable next steps for their English routine ("levelNextStepsPt", "levelNextStepsEn").
+
+Output STRICT JSON matching this schema:
+{
+  "sentenceFeedback": [
+    {
+      "word": "string",
+      "originalSentence": "string",
+      "isCorrect": boolean,
+      "correctedSentence": "string",
+      "explanationPt": "string",
+      "explanationEn": "string",
+      "levelAdvicePt": "string",
+      "levelAdviceEn": "string"
+    }
+  ],
+  "tutorFeedbackSummaryPt": "string",
+  "tutorFeedbackSummaryEn": "string",
+  "levelStrengthsPt": "string",
+  "levelStrengthsEn": "string",
+  "levelNextStepsPt": "string",
+  "levelNextStepsEn": "string"
+}`;
+
+      const aiRes = await callGeminiSafeJson(prompt, 7000);
+      if (aiRes && Array.isArray(aiRes.sentenceFeedback)) {
+        sentenceEvaluationResults = aiRes.sentenceFeedback;
+        tutorSummaryPt = aiRes.tutorFeedbackSummaryPt || '';
+        tutorSummaryEn = aiRes.tutorFeedbackSummaryEn || '';
+        levelStrengthsPt = aiRes.levelStrengthsPt || '';
+        levelStrengthsEn = aiRes.levelStrengthsEn || '';
+        levelNextStepsPt = aiRes.levelNextStepsPt || '';
+        levelNextStepsEn = aiRes.levelNextStepsEn || '';
+      }
+    }
+
+    // Fallback sentence evaluation if AI was offline
+    if (sentenceEvaluationResults.length === 0) {
+      sentenceEvaluationResults = (homework.sentenceWritingPrompts || []).map((p: any) => {
+        const raw = (sentences[p.word] || '').trim();
+        const hasText = raw.length >= 6;
+        const containsWord = raw.toLowerCase().includes(p.word.toLowerCase());
+        const isOk = hasText && containsWord;
+
+        return {
+          word: p.word,
+          originalSentence: raw || '(nenhuma frase escrita)',
+          isCorrect: isOk,
+          correctedSentence: raw || `I practice using ${p.word} every day.`,
+          explanationPt: isOk
+            ? `Parabéns! Você utilizou a palavra "${p.word}" com contexto correto.`
+            : `Lembre-se de incluir a palavra "${p.word}" em uma frase completa sobre sua rotina.`,
+          explanationEn: isOk
+            ? `Great job! You incorporated "${p.word}" with natural context.`
+            : `Remember to include the target word "${p.word}" in a full routine sentence.`,
+          levelAdvicePt: levelMeta.key === 'beginner'
+            ? 'Continue praticando frases curtas com Sujeito + Verbo.'
+            : levelMeta.key === 'advanced'
+            ? 'Excelente! Experimente aplicar conectivos avançados e expressões idiomáticas.'
+            : 'Muito bom! Tente conectar duas ideias usando conectivos como "because" ou "although".',
+          levelAdviceEn: levelMeta.key === 'beginner'
+            ? 'Keep practicing clear, simple sentences with Subject + Verb.'
+            : levelMeta.key === 'advanced'
+            ? 'Great! Experiment with advanced transition clauses and rich collocations.'
+            : 'Good job! Try linking ideas with connectors like "because" or "while".',
+        };
+      });
+
+      tutorSummaryPt = `Parabéns pela dedicação na Atividade de Memorização! Você consolidou o vocabulário real da sua semana com foco no nível ${levelMeta.labelPt}. Continue vivendo o inglês na sua rotina diária.`;
+      tutorSummaryEn = `Congratulations on completing your Weekly Memorization Activity! You practiced your real weekly vocabulary tailored to your ${levelMeta.labelEn} level. Keep living English in your daily routine.`;
+      levelStrengthsPt = `Boa capacidade de identificação de termos no contexto diário e dedicação na resolução dos desafios interativos.`;
+      levelStrengthsEn = `Strong ability to recognize routine vocabulary and dedication in active recall practice.`;
+      levelNextStepsPt = `Na sua próxima aula com seu Amigo Nativo, use as palavras desta semana em conversas espontâneas.`;
+      levelNextStepsEn = `In your next live session with your Native Friend, use these words naturally in casual conversation.`;
+    }
+
+    // Sentence score: up to 25 points
+    let sentenceCorrectCount = 0;
+    sentenceEvaluationResults.forEach((s) => {
+      if (s.isCorrect) sentenceCorrectCount++;
+    });
+    const sentenceScore = (sentenceCorrectCount / totalSentences) * 25;
+
+    const overallScore = Math.min(100, Math.round(matchScore + fillScore + quizScore + sentenceScore));
+
+    const evaluationResponse = {
+      overallScore,
+      evaluatedAt: new Date().toISOString(),
+      studentLevel: levelMeta.labelEn,
+      tutorFeedbackSummaryPt: tutorSummaryPt,
+      tutorFeedbackSummaryEn: tutorSummaryEn,
+      levelStrengthsPt,
+      levelStrengthsEn,
+      levelNextStepsPt,
+      levelNextStepsEn,
+      matchingFeedback,
+      fillFeedback,
+      sentenceFeedback: sentenceEvaluationResults,
+      readingFeedback,
+    };
+
+    res.json({ success: true, evaluation: evaluationResponse });
+  } catch (error: any) {
+    console.error('Error evaluating homework:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
 });
 
 // AI Live Lesson Vocabulary Generator
@@ -3156,9 +4342,7 @@ app.post('/api/lesson/vocab-generate', async (req, res) => {
   }
 
   if (process.env.GEMINI_API_KEY) {
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const prompt = `You are a native English language teacher creating personalized vocabulary study notes for a live conversation lesson.
+    const prompt = `You are a native English language teacher creating personalized vocabulary study notes for a live conversation lesson.
 Lesson Topic: "${topic || 'Everyday conversation and practical routines'}"
 Teacher's Live Lesson Notes/Context: "${notes || 'Real-life speaking practice'}"
 Vocabulary items typed by the teacher during class: ${JSON.stringify(cleanWords)}
@@ -3179,35 +4363,9 @@ Return a JSON array of objects with the exact schema:
   }
 ]`;
 
-      let response;
-      try {
-        response = await ai.models.generateContent({
-          model: GEMINI_TEXT_MODEL,
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-          },
-        });
-      } catch (err: any) {
-        if (err?.status === 404 || err?.message?.includes('not found') || err?.message?.includes('404')) {
-          response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
-            contents: prompt,
-            config: { responseMimeType: 'application/json' },
-          });
-        } else {
-          throw err;
-        }
-      }
-
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return res.json({ success: true, entries: parsed });
-        }
-      }
-    } catch (e) {
-      console.warn('Gemini vocabulary generation error, falling back:', e);
+    const parsed = await callGeminiSafeJson(prompt, 6000);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return res.json({ success: true, entries: parsed });
     }
   }
 

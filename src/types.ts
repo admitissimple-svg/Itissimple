@@ -369,11 +369,17 @@ export interface FillInBlankItem {
   correctWord: string;
   options: string[];
   hintPt: string;
+  hintEn?: string;
+  explanationPt?: string;
+  explanationEn?: string;
 }
 
 export interface SentenceWritingPrompt {
   word: string;
   hint: string;
+  hintEn?: string;
+  hintPt?: string;
+  levelInstruction?: string;
 }
 
 export interface ReadingQuestion {
@@ -390,11 +396,48 @@ export interface ReadingPassage {
   questions: ReadingQuestion[];
 }
 
+export interface HomeworkItemFeedback {
+  id: string;
+  isCorrect: boolean;
+  userAnswer: string;
+  correctAnswer: string;
+  explanationPt: string;
+  explanationEn: string;
+}
+
+export interface SentenceEvaluationItem {
+  word: string;
+  originalSentence: string;
+  isCorrect: boolean;
+  correctedSentence: string;
+  explanationPt: string;
+  explanationEn: string;
+  levelAdvicePt: string;
+  levelAdviceEn: string;
+}
+
+export interface HomeworkAiEvaluation {
+  overallScore: number;
+  evaluatedAt: string;
+  studentLevel: string;
+  tutorFeedbackSummaryPt: string;
+  tutorFeedbackSummaryEn: string;
+  matchingFeedback?: HomeworkItemFeedback[];
+  fillFeedback?: HomeworkItemFeedback[];
+  sentenceFeedback?: SentenceEvaluationItem[];
+  readingFeedback?: HomeworkItemFeedback[];
+  levelStrengthsPt?: string;
+  levelStrengthsEn?: string;
+  levelNextStepsPt?: string;
+  levelNextStepsEn?: string;
+}
+
 export interface WeeklyHomeworkData {
   id: string;
   weekLabel: string;
   studentEmail: string;
   studentName: string;
+  studentLevel?: string;
   createdAt: string;
   totalWordsCollected: number;
   vocabularyList: HomeworkVocabItem[];
@@ -412,6 +455,14 @@ export interface WeeklyHomeworkData {
     sentences?: Record<string, string>;
     quizAnswers?: Record<string, number>;
   };
+  aiEvaluation?: HomeworkAiEvaluation;
+  isEmpty?: boolean;
+  emptyWarning?: string;
+  emptyWarningEn?: string;
+  isAiGenerated?: boolean;
+  isGenerating?: boolean;
+  status?: string;
+  answers?: Record<string, any>;
 }
 
 export interface WordFeedback {
@@ -432,10 +483,13 @@ export interface SentenceFeedback {
 
 export interface WritingEvaluationResult {
   hasAnyError: boolean;
+  isCorrect?: boolean;
   wordFeedbacks: WordFeedback[];
   sentenceFeedback?: SentenceFeedback;
   correctedSentence?: string;
   explanation?: string;
   overallSummaryPt?: string;
   overallSummaryEn?: string;
+  levelTipsPt?: string;
+  levelTipsEn?: string;
 }

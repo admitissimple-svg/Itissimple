@@ -662,7 +662,7 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
                       </span>
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white text-[9px] font-bold text-emerald-700 border border-emerald-200 shrink-0 not-italic">
                         <Globe className="w-2.5 h-2.5" />
-                        <span>Free Dict API</span>
+                        <span>{livePreview.source === 'merriam-webster' ? 'Merriam-Webster' : 'Official Dict'}</span>
                       </span>
                     </div>
                   </>
@@ -729,14 +729,21 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
                                   )}
                                   <span
                                     className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold border ${
-                                      item.source === 'api'
+                                      item.source === 'merriam-webster'
+                                        ? 'bg-blue-50 text-[#1C4C96] border-blue-200'
+                                        : item.source === 'api'
                                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                         : item.source === 'offline_dict'
                                         ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
                                         : 'bg-slate-100 text-slate-600 border-slate-200'
                                     }`}
                                   >
-                                    {item.source === 'api' ? (
+                                    {item.source === 'merriam-webster' ? (
+                                      <>
+                                        <Globe className="w-2.5 h-2.5" />
+                                        <span>Merriam-Webster</span>
+                                      </>
+                                    ) : item.source === 'api' ? (
                                       <>
                                         <Globe className="w-2.5 h-2.5" />
                                         <span>Free Dict API</span>

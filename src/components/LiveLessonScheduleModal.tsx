@@ -251,13 +251,6 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     );
   }, [activeTeacherSettings.availableHours, activeTeacherSettings.workingHoursStart, activeTeacherSettings.workingHoursEnd]);
 
-  // Adjust selectedStartTime if not in timeSlots
-  React.useEffect(() => {
-    if (timeSlots.length > 0 && !timeSlots.includes(selectedStartTime)) {
-      setSelectedStartTime(timeSlots[0]);
-    }
-  }, [timeSlots]);
-
   // Calculate start and end ISO using exact timezone conversion
   const calculateEndDateTime = () => {
     if (!selectedDate || !selectedStartTime) return '';
@@ -333,6 +326,20 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     );
     return Boolean(conflict);
   };
+
+  // Adjust selectedStartTime if not in timeSlots or if booked, auto-selecting the first available slot
+  React.useEffect(() => {
+    if (timeSlots.length === 0) return;
+    const isCurrentBooked = checkSlotIsBooked(selectedStartTime);
+    if (!timeSlots.includes(selectedStartTime) || isCurrentBooked) {
+      const freeSlot = timeSlots.find((slot) => !checkSlotIsBooked(slot));
+      if (freeSlot) {
+        setSelectedStartTime(freeSlot);
+      } else if (!timeSlots.includes(selectedStartTime)) {
+        setSelectedStartTime(timeSlots[0]);
+      }
+    }
+  }, [timeSlots, selectedDate, combinedLessons, selectedTeacherObj.email, effectiveTeacherUid, selectedStudentObj.email, effectiveStudentUid]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -467,6 +474,10 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863]">
                   {cleanTeacherName(currentAccount.name)} ({currentAccount.email})
                 </div>
+              ) : activeStudentTeacherEmail ? (
+                <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863]">
+                  {cleanTeacherName(selectedTeacherObj.name)} ({selectedTeacherObj.email})
+                </div>
               ) : (
                 <select
                   value={selectedTeacherEmail}
@@ -533,8 +544,8 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 {timeSlots.map((slot) => {
                   const isOccupied = checkSlotIsBooked(slot);
                   return (
-                    <option key={slot} value={slot}>
-                      {formatTimeSlot12h(slot)} {isOccupied ? (isEn ? '• ❌ [BUSY / BOOKED]' : '• ❌ [OCUPADO / JÁ AGENDADO]') : ''}
+                    <option key={slot} value={slot} disabled={isOccupied}>
+                      {formatTimeSlot12h(slot)} {isOccupied ? (isEn ? '• ❌ [BUSY / BOOKED]' : '• ❌ [OCUPADO / JÁ AGENDADO]') : (isEn ? '• ✓ [AVAILABLE]' : '• ✓ [DISPONÍVEL]')}
                     </option>
                   );
                 })}

@@ -14,10 +14,11 @@ import { AR_TRANSLATIONS } from './languages/ar';
 import { TR_TRANSLATIONS } from './languages/tr';
 
 export * from './types';
+export * from './memorizationActivity';
 
 export const SUPPORTED_LANGUAGES: LanguageOption[] = [
-  { code: 'pt', name: 'Português', nativeName: 'Português (Brasil)', flag: '🇧🇷', region: 'Brasil' },
   { code: 'en', name: 'English', nativeName: 'English (US/UK)', flag: '🇺🇸', region: 'Global' },
+  { code: 'pt', name: 'Português', nativeName: 'Português (Brasil)', flag: '🇧🇷', region: 'Brasil' },
   { code: 'es', name: 'Español', nativeName: 'Español', flag: '🇪🇸', region: 'Hispanoamérica & España' },
   { code: 'fr', name: 'Français', nativeName: 'Français', flag: '🇫🇷', region: 'France & Canada' },
   { code: 'de', name: 'Deutsch', nativeName: 'Deutsch', flag: '🇩🇪', region: 'Deutschland & Österreich' },
@@ -46,7 +47,7 @@ export const TRANSLATION_MAP: Record<Language, Translations> = {
 };
 
 export const getTranslations = (lang: Language): Translations => {
-  return TRANSLATION_MAP[lang] || PT_TRANSLATIONS;
+  return TRANSLATION_MAP[lang] || EN_TRANSLATIONS;
 };
 
 // Localized activity names

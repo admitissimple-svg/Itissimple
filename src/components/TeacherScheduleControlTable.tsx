@@ -104,12 +104,14 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
   const availableStudentsForFilter = React.useMemo(() => {
     const map = new Map<string, { email: string; name: string }>();
     const teacherEmailClean = (currentAccount?.email || '').toLowerCase().trim();
+    const currentTeacherUid = (currentAccount?.id || (currentAccount as any)?.uid || '').trim();
     const isTeacher = currentAccount?.role === 'teacher';
 
     (students || []).forEach((st) => {
       const email = (st.email || (st as any).studentEmail || '').toLowerCase().trim();
       const name = st.name || (st as any).studentName || email.split('@')[0];
       const stTeacher = ((st as any).teacherEmail || '').toLowerCase().trim();
+      const stTeacherUid = ((st as any).teacherUid || '').trim();
       const stStatus = (st as any).status || (st as any).enrollmentStatus;
 
       if (!email) return;
@@ -117,8 +119,13 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       // Filter out cancelled or unenrolled students
       if (stStatus === 'cancelled' || stStatus === 'not_enrolled') return;
 
-      // If viewing as teacher, must match teacher's email
-      if (isTeacher && stTeacher && stTeacher !== teacherEmailClean) return;
+      // If viewing as teacher, must match teacher's UID or email
+      if (isTeacher) {
+        const matchesTeacher =
+          (currentTeacherUid && stTeacherUid && (currentTeacherUid === stTeacherUid || currentTeacherUid.includes(stTeacher) || stTeacherUid.includes(teacherEmailClean))) ||
+          (teacherEmailClean && stTeacher && teacherEmailClean === stTeacher);
+        if (!matchesTeacher) return;
+      }
 
       map.set(email, { email, name });
     });
@@ -127,19 +134,42 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
     (lessons || []).forEach((l) => {
       const email = (l.studentEmail || '').toLowerCase().trim();
       const name = l.studentName || email.split('@')[0];
+      const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
+      const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
+
+      if (isTeacher) {
+        const isMyLesson =
+          (currentTeacherUid && lTeacherUid && (currentTeacherUid === lTeacherUid || currentTeacherUid.includes(lTeacherEmail) || lTeacherUid.includes(teacherEmailClean))) ||
+          (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
+        if (!isMyLesson) return;
+      }
+
       if (email && !map.has(email) && l.status === 'scheduled') {
         map.set(email, { email, name });
       }
     });
 
     return Array.from(map.values());
-  }, [students, lessons, currentAccount?.role, currentAccount?.email]);
+  }, [students, lessons, currentAccount?.role, currentAccount?.email, currentAccount?.id, (currentAccount as any)?.uid]);
 
   const sortedLessons = [...lessons].sort((a, b) => {
     return new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime();
   });
 
   const filteredLessons = sortedLessons.filter((lesson) => {
+    const isTeacher = currentAccount?.role === 'teacher';
+    const teacherEmailClean = (currentAccount?.email || '').toLowerCase().trim();
+    const currentTeacherUid = (currentAccount?.id || (currentAccount as any)?.uid || '').trim();
+
+    if (isTeacher) {
+      const lTeacherEmail = (lesson.teacherEmail || (lesson as any).tutorEmail || '').toLowerCase().trim();
+      const lTeacherUid = (lesson.teacherUid || (lesson as any).tutorUid || '').trim();
+      const isMyLesson =
+        (currentTeacherUid && lTeacherUid && (currentTeacherUid === lTeacherUid || currentTeacherUid.includes(lTeacherEmail) || lTeacherUid.includes(teacherEmailClean))) ||
+        (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
+      if (!isMyLesson) return false;
+    }
+
     if (selectedStudentFilter !== 'all') {
       const filterEmail = selectedStudentFilter.toLowerCase().trim();
       const lStudentEmail = (lesson.studentEmail || '').toLowerCase().trim();

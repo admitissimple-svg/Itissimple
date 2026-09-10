@@ -9,7 +9,7 @@ export interface DictionaryLookupResult {
   phonetic?: string;
   audio?: string;
   translationPt?: string;
-  source: 'api' | 'not_found' | 'pending' | 'offline_dict' | 'fallback';
+  source: 'merriam-webster' | 'api' | 'not_found' | 'pending' | 'offline_dict' | 'fallback' | string;
   notFound?: boolean;
   errorMessage?: string;
 }
@@ -210,7 +210,7 @@ async function fetchFromBackendApi(
         translationPt: data.translationPt,
         phonetic: data.phonetic,
         audio: data.audio,
-        source: 'api',
+        source: data.source || 'merriam-webster',
         notFound: false,
       };
     }
@@ -221,7 +221,7 @@ async function fetchFromBackendApi(
 }
 
 /**
- * Main function to look up a word with Free Dictionary API and reliable fallback.
+ * Main function to look up a word via official Merriam-Webster API with reliable fallback.
  * Uses session caching to avoid redundant HTTP requests for the same word.
  */
 export async function lookupWord(
@@ -249,21 +249,21 @@ export async function lookupWord(
     return cached;
   }
 
-  // 2. Query external Free Dictionary API directly (client-side)
-  const apiResult = await fetchFromFreeDictionaryApi(cleanWord);
-  if (apiResult && !apiResult.notFound && apiResult.definitionEn) {
-    memoryCache.set(cacheKey, apiResult);
-    return apiResult;
-  }
-
-  // 3. Query backend dictionary proxy endpoint (/api/dictionary/define)
+  // 2. Query official Merriam-Webster dictionary endpoint on backend (/api/dictionary/define)
   const backendResult = await fetchFromBackendApi(cleanWord, context);
   if (backendResult && !backendResult.notFound && backendResult.definitionEn) {
     memoryCache.set(cacheKey, backendResult);
     return backendResult;
   }
 
-  // 4. If not found in Free Dictionary API, return clean notFound
+  // 3. Fallback to Free Dictionary API if backend was unreachable or word not found in MW
+  const apiResult = await fetchFromFreeDictionaryApi(cleanWord);
+  if (apiResult && !apiResult.notFound && apiResult.definitionEn) {
+    memoryCache.set(cacheKey, apiResult);
+    return apiResult;
+  }
+
+  // 4. If word is not found in official dictionary, return clean notFound
   const notFoundResult: DictionaryLookupResult = {
     word: cleanWord,
     partOfSpeech: '',

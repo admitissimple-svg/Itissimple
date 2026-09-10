@@ -715,12 +715,15 @@
       "teacherName": "Charles Lambert",
       "teacherUid": "usr-charles-lambert1939-gmail-com",
       "teacherEmail": "charles.lambert1939@gmail.com",
-      "status": "scheduled",
+      "status": "cancelled",
       "meetLink": "https://meet.google.com/hba-vwok-tsu?pli=1",
       "studentEmail": "reginahelena1980@gmail.com",
       "description": "",
       "endDateTime": "2026-09-12T13:50:00.000Z",
-      "studentUid": "usr-reginahelena1980-gmail-com"
+      "studentUid": "usr-reginahelena1980-gmail-com",
+      "cancelledAt": "2026-09-10T15:55:15.561Z",
+      "cancelledBy": "teacher",
+      "cancellationReason": "Test"
     },
     {
       "studentName": "Regina Ferraz",
@@ -757,11 +760,14 @@
       "id": "lesson-1788892206211",
       "studentUid": "usr-reginahelena1980-gmail-com",
       "meetLink": "https://meet.google.com/hba-vwok-tsu?pli=1",
-      "status": "scheduled",
-      "description": ""
+      "status": "cancelled",
+      "description": "",
+      "cancelledAt": "2026-09-10T15:55:15.561Z",
+      "cancelledBy": "teacher",
+      "cancellationReason": "Test"
     },
     {
-      "status": "scheduled",
+      "status": "cancelled",
       "studentEmail": "reginahelena1980@gmail.com",
       "studentName": "Regina Ferraz",
       "studentUid": "usr-reginahelena1980-gmail-com",
@@ -774,7 +780,10 @@
       "teacherUid": "usr-charles-lambert1939-gmail-com",
       "endDateTime": "2026-09-09T19:25:00.000Z",
       "startDateTime": "2026-09-09T19:00:00.000Z",
-      "id": "lesson-1788890140618"
+      "id": "lesson-1788890140618",
+      "cancelledAt": "2026-09-10T15:54:57.236Z",
+      "cancelledBy": "teacher",
+      "cancellationReason": "Test"
     },
     {
       "teacherEmail": "charles.lambert1939@gmail.com",
@@ -838,7 +847,7 @@
       "cancelledBy": "teacher",
       "meetLink": "https://meet.google.com/hba-vwok-tsu?pli=1",
       "teacherName": "Charles Lambert",
-      "cancellationReason": "Imprevisto do amigo nativo",
+      "cancellationReason": "Test",
       "createdAt": "2026-09-08T14:35:01.690Z",
       "teacherUid": "usr-charles-lambert1939-gmail-com",
       "id": "lesson-1788878101690",
@@ -857,9 +866,9 @@
       "studentName": "Regina Ferraz",
       "teacherName": "Charles Lambert",
       "startDateTime": "2026-09-12T13:00:00.000Z",
-      "cancelledBy": "student",
+      "cancelledBy": "teacher",
       "title": "Test",
-      "cancellationReason": "Cancelled by user",
+      "cancellationReason": "Test",
       "cancelledAt": "2026-09-08T14:34:24.840Z",
       "teacherUid": "usr-charles-lambert1939-gmail-com",
       "studentEmail": "reginahelena1980@gmail.com",
@@ -884,7 +893,7 @@
       "startDateTime": "2026-09-12T13:00:00.000Z",
       "status": "cancelled",
       "studentName": "Regina Ferraz",
-      "cancellationReason": "Imprevisto do amigo nativo",
+      "cancellationReason": "Test",
       "studentUid": "usr-reginahelena1980-gmail-com",
       "teacherName": "Charles Lambert",
       "cancelledBy": "teacher",

@@ -139,10 +139,16 @@ export function generateWeeklyHomework(
   userProfile?: UserProfile,
   studentEmail?: string,
   studentName?: string,
-  customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>
+  customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>,
+  studentLevel?: string
 ): WeeklyHomeworkData {
   const email = studentEmail || userProfile?.email || '';
   const name = studentName || userProfile?.name || (email ? email.split('@')[0] : 'Student');
+  const rawLvl = (studentLevel || userProfile?.level || 'iniciante').toLowerCase();
+
+  const isAdv = rawLvl.includes('avanc') || rawLvl.includes('advan') || rawLvl.includes('c1') || rawLvl.includes('c2');
+  const isInter = !isAdv && (rawLvl.includes('intermed') || rawLvl.includes('b1') || rawLvl.includes('b2'));
+  const levelLabel = isAdv ? 'Advanced' : isInter ? 'Intermediate' : 'Beginner';
 
   // 1. Gather all words typed across the entire week and words saved by native friends
   const rawWords: HomeworkVocabItem[] = [];
@@ -159,7 +165,7 @@ export function generateWeeklyHomework(
           sourceActivityName: cw.sourceActivityName || 'Live Session',
           sourceDay: cw.sourceDay || 'monday',
           definitionEn: cw.definitionEn || `Active vocabulary practiced during your native friend conversation.`,
-          translationPt: cw.translationPt || `Vocabulário anotado pelo Amigo Nativo (${trimmed})`,
+          translationPt: cw.translationPt || '',
           exampleSentence: cw.exampleSentence || `I use "${trimmed}" naturally in my daily conversations.`,
         });
       }
@@ -189,7 +195,7 @@ export function generateWeeklyHomework(
 
             const translationPt = dictMatch
               ? dictMatch.translationPt
-              : `Expressão / Palavra chave (${getActivityDisplayName(item.activityName, 'pt')})`;
+              : '';
 
             const definitionEn = dictMatch
               ? dictMatch.definitionEn
@@ -213,104 +219,185 @@ export function generateWeeklyHomework(
     }
   }
 
-  // If no words typed yet, supply rich baseline words based on standard routine
+  // REGRA DE OURO ANTI-GENÉRICO: Se não houver palavras cadastradas, retorna aviso estruturado
   if (rawWords.length === 0) {
-    const defaultBaseline: Array<{ w: string; tr: string; def: string; ex: string; act: string }> = [
-      { w: 'breakfast', tr: 'Café da manhã', def: 'The first meal of the day, typically eaten in the morning.', ex: 'I enjoy a healthy breakfast every morning.', act: 'Café da manhã' },
-      { w: 'coffee', tr: 'Café quente', def: 'A hot brewed drink made from roasted coffee beans.', ex: 'Brewing fresh coffee gives me great morning energy.', act: 'Café da manhã' },
-      { w: 'commute', tr: 'Deslocamento / Trajeto diário', def: 'Travel some distance regularly between home and place of work.', ex: 'My daily morning commute takes twenty minutes.', act: 'Deslocamento' },
-      { w: 'routine', tr: 'Rotina diária', def: 'A sequence of actions regularly followed.', ex: 'Sticking to a positive routine builds fluency and confidence.', act: 'Rotina' },
-      { w: 'focus', tr: 'Foco / Concentração', def: 'The center of interest, attention, or deep activity.', ex: 'I keep deep focus on my daily English goals.', act: 'Trabalho' },
-      { w: 'schedule', tr: 'Cronograma / Agenda', def: 'A plan that gives a list of tasks and expected times.', ex: 'Checking my schedule keeps my week organized.', act: 'Planejamento' },
-      { w: 'conversation', tr: 'Conversação real', def: 'An informal talk between people in natural English.', ex: 'Live conversation practice improves everyday fluency.', act: 'Live Lesson' },
-      { w: 'progress', tr: 'Progresso / Evolução', def: 'Forward or onward movement toward your goals.', ex: 'Every small routine step brings noticeable progress.', act: 'Estudos' },
-    ];
-
-    defaultBaseline.forEach((item, idx) => {
-      rawWords.push({
-        word: item.w,
-        translationPt: item.tr,
-        definitionEn: item.def,
-        exampleSentence: item.ex,
-        sourceActivityName: item.act,
-        sourceDay: days[idx % days.length],
-      });
-    });
+    return {
+      id: `hw-week-${Date.now()}`,
+      weekLabel: `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`,
+      studentEmail: email,
+      studentName: name,
+      studentLevel: levelLabel,
+      createdAt: new Date().toISOString(),
+      totalWordsCollected: 0,
+      vocabularyList: [],
+      allRoutineWords: [],
+      matchingPairs: [],
+      fillInBlanks: [],
+      sentenceWritingPrompts: [],
+      readingPassage: {
+        title: 'Aguardando Vocabulário da Semana',
+        text: '',
+        questions: [],
+      },
+      isEmpty: true,
+      emptyWarning:
+        'Nenhum vocabulário cadastrado nesta semana ainda. Para gerar sua Atividade de Memorização inteligente, adicione palavras nas suas rotinas diárias ou participe de uma aula ao vivo com seu Amigo Nativo para que ele anote novos termos no seu vocabulário.',
+      emptyWarningEn:
+        'No vocabulary registered for this week yet. To generate your AI Memorization Activity, add words in your daily routines or attend a live lesson with your Native Friend so they can note new terms in your vocabulary.',
+      isCompleted: false,
+      score: 0,
+    };
   }
 
-  // 2. Build Matching Pairs (Part 1)
-  const matchingPairs: MatchingPair[] = rawWords.slice(0, 6).map((item, idx) => ({
-    id: `match-${idx}-${item.word}`,
-    word: item.word,
-    definition: item.definitionEn,
-    translation: item.translationPt,
-  }));
+  // 2. Build Matching Pairs (Part 1 - Associação): Embaralha apenas a ordem para criar o desafio
+  const matchingPairs: MatchingPair[] = [...rawWords]
+    .sort(() => 0.5 - Math.random())
+    .map((item, idx) => ({
+      id: `match-${idx}-${item.word}`,
+      word: item.word,
+      definition: item.definitionEn,
+      translation: item.translationPt,
+    }));
 
-  // 3. Build Fill-in-the-Blanks (Part 2)
-  const fillInBlanks: FillInBlankItem[] = rawWords.slice(0, 5).map((item, idx) => {
-    const distractors = rawWords
+  // 3. Build Fill-in-the-Blanks (Part 2 - Lacunas): Calibrado por nível
+  const fillInBlanks: FillInBlankItem[] = rawWords.slice(0, 6).map((item, idx) => {
+    const wordRegex = new RegExp(`\\b${item.word}\\b`, 'i');
+    let sentenceWithBlank = '';
+
+    if (item.exampleSentence && wordRegex.test(item.exampleSentence)) {
+      sentenceWithBlank = item.exampleSentence.replace(wordRegex, '______');
+    } else if (isAdv) {
+      sentenceWithBlank = `When executing my scheduled responsibilities, prioritizing a clear ______ allows me to navigate complex daily workflows with ease.`;
+    } else if (isInter) {
+      sentenceWithBlank = `During my busy daily routine, I make sure to prioritize my ______ because it helps keep my workflow organized.`;
+    } else {
+      sentenceWithBlank = `In my morning routine, I like to check my ______ before starting my tasks.`;
+    }
+
+    const otherWords = rawWords
       .filter((rw) => rw.word.toLowerCase() !== item.word.toLowerCase())
-      .map((rw) => rw.word)
-      .slice(0, 3);
+      .map((rw) => rw.word);
 
+    const distractors = otherWords.slice(0, 3);
+    const backupTerms = ['schedule', 'routine', 'practice', 'session'];
+    let bIdx = 0;
     while (distractors.length < 3) {
-      distractors.push(['morning', 'water', 'practice', 'reading'][distractors.length]);
+      const candidate = backupTerms[bIdx++ % backupTerms.length];
+      if (!distractors.includes(candidate) && candidate !== item.word.toLowerCase()) {
+        distractors.push(candidate);
+      }
     }
 
     const options = [item.word, ...distractors].sort(() => 0.5 - Math.random());
 
     return {
       id: `fill-${idx}-${item.word}`,
-      sentenceWithBlank: `During my daily routine, I always make time for my ____________ because it helps my English fluency.`,
+      sentenceWithBlank,
       correctWord: item.word,
       options,
       hintPt: `Dica: Refere-se a "${item.translationPt}".`,
+      hintEn: `Hint: Focus on the sentence context to identify "${item.word}".`,
+      explanationPt: `A palavra "${item.word}" (${item.translationPt}) é a única que se encaixa gramatical e contextualmente nesta oração.`,
+      explanationEn: `"${item.word}" is the only option that accurately completes the meaning and grammar of this sentence.`,
     };
   });
 
-  // 4. Build Sentence Writing Prompts (Part 3)
-  const sentenceWritingPrompts: SentenceWritingPrompt[] = rawWords.slice(0, 4).map((item) => ({
-    word: item.word,
-    hint: `Write a natural sentence in English connecting "${item.word}" with your everyday habits.`,
-  }));
+  // 4. Build Sentence Writing Prompts (Part 3 - Construção de Frases Ativas): Calibrado por nível
+  const sentenceWritingPrompts: SentenceWritingPrompt[] = rawWords.slice(0, 5).map((item) => {
+    if (isAdv) {
+      return {
+        word: item.word,
+        hint: `Craft an advanced English sentence with "${item.word}" demonstrating complex sentence structure in your professional or personal life.`,
+        hintEn: `Craft an advanced English sentence with "${item.word}" demonstrating complex sentence structure in your professional or personal life.`,
+        hintPt: `Crie uma frase em inglês avançado usando "${item.word}" (${item.translationPt}) com estrutura elaborada e vocabulário refinado.`,
+        levelInstruction: 'Use complex clauses, conditionals, or executive phrasing.',
+      };
+    }
+    if (isInter) {
+      return {
+        word: item.word,
+        hint: `Write a compound sentence using "${item.word}" connecting two actions or reasons in your routine.`,
+        hintEn: `Write a compound sentence using "${item.word}" connecting two actions or reasons in your routine.`,
+        hintPt: `Escreva uma frase intermediária usando "${item.word}" (${item.translationPt}) conectando duas ações com conectivos como "because" ou "although".`,
+        levelInstruction: 'Connect two ideas using a transition word.',
+      };
+    }
+    return {
+      word: item.word,
+      hint: `Write a simple, clear English sentence using "${item.word}" in your daily routine.`,
+      hintEn: `Write a simple, clear English sentence using "${item.word}" in your daily routine.`,
+      hintPt: `Escreva uma frase simples e direta em inglês usando "${item.word}" (${item.translationPt}) sobre a sua rotina.`,
+      levelInstruction: 'Use a clear Subject + Verb + Object structure.',
+    };
+  });
 
-  // 5. Build Reading Passage & Comprehension (Part 4)
-  const sampleWordsStr = rawWords.slice(0, 4).map((w) => w.word).join(', ');
-  const passageTitle = "Living Your Routine in English";
-  const passageText = `Every morning starts with a fresh mindset. When you wake up, having your breakfast and practicing key words like ${sampleWordsStr} creates a natural bridge to fluency.\n\nBy immersing your actual schedule in English, learning becomes an effortless part of your life rather than a chore. Consistency every single day turns simple actions into permanent progress.`;
+  // 5. Build Reading Passage & Comprehension (Part 4 - Texto Integrado): Calibrado por nível
+  const highlightedWordsStr = rawWords.slice(0, 5).map((w) => `**${w.word}**`).join(', ');
+  const passageTitle = `Living Your Routine in English (${levelLabel})`;
+  const passageText = isAdv
+    ? `Mastering English naturally requires intertwining communication directly with your daily responsibilities. This week, our practical linguistic targets included ${highlightedWordsStr}.\n\nBy consistently operationalizing terms such as ${rawWords
+        .slice(0, 3)
+        .map((w) => `**${w.word}**`)
+        .join(' and ')} across multifaceted situations, fluid speech transitions from a conscious exertion into an automatic reflex. Relentless everyday application transforms routine moments into sustainable communicative excellence.`
+    : isInter
+    ? `Building authentic English fluency happens when you connect language directly to your real life. This week, we focused on key concepts including ${highlightedWordsStr}.\n\nBy practicing terms like ${rawWords
+        .slice(0, 3)
+        .map((w) => `**${w.word}**`)
+        .join(' and ')} in everyday situations, speaking becomes a natural daily habit instead of memorizing abstract lists. Daily consistency and real-world application turn simple routine steps into permanent language progress.`
+    : `Learning English every day makes speaking natural and easy. This week, we focused on words like ${highlightedWordsStr}.\n\nWhen we use **${rawWords[0]?.word || 'practice'}** in our morning and daily routine, we remember it easily. Keep practicing a little bit every day to speak with confidence!`;
+
+  const w0 = rawWords[0] || { word: 'practice', translationPt: 'prática', definitionEn: 'regular activity' };
+  const w1 = rawWords[1] || rawWords[0] || { word: 'routine', translationPt: 'rotina', definitionEn: 'daily schedule' };
+  const w2 = rawWords[2] || rawWords[0] || { word: 'confidence', translationPt: 'confiança', definitionEn: 'feeling of assurance' };
 
   const readingQuestions: ReadingQuestion[] = [
     {
       id: 'q-1',
-      question: 'What is the main advantage of connecting English learning to your daily routine?',
+      question: `In the passage, how is the vocabulary word "${w0.word}" (${w0.translationPt}) applied in the daily routine?`,
       options: [
-        'It makes English practice a natural and consistent habit in your life.',
-        'It requires studying grammar books for 5 hours without sleeping.',
-        'It eliminates the need to speak with native teachers.',
-        'It only works if you travel abroad immediately.',
+        `It is integrated into daily actions to make English practice an authentic and consistent habit.`,
+        `It is strictly memorized in isolation without any connection to real life.`,
+        `It is completely avoided because it takes too much time in the morning.`,
+        `It replaces the need to practice speaking with native tutors.`,
       ],
       correctAnswer: 0,
-      explanation: 'Learning through your daily routine turns practice into a seamless, natural daily habit.',
+      explanation: `In the text, "${w0.word}" (${w0.translationPt}) is actively practiced within daily moments, turning language into an authentic habit.`,
     },
     {
       id: 'q-2',
-      question: 'According to the passage, what leads to permanent progress in English?',
+      question: `According to the story, what does practicing "${w1.word}" (${w1.translationPt}) help the learner achieve?`,
       options: [
-        'Daily consistency with simple actions and vocabulary.',
-        'Memorizing a dictionary in one night.',
-        'Skipping daily practice until the weekend.',
-        'Only watching movies without subtitles.',
+        `Sustainable progress and confidence through consistency with real-world vocabulary.`,
+        `Memorizing entire dictionary pages without understanding their meaning.`,
+        `Stopping all practice until weekend study marathons.`,
+        `Eliminating the need to listen to audio or converse in English.`,
       ],
       correctAnswer: 0,
-      explanation: 'Consistency every day turns simple actions into solid, lasting progress.',
+      explanation: `Using "${w1.word}" (${w1.translationPt}) in real scenarios turns routine actions into lasting English confidence and automatic fluency.`,
     },
   ];
+
+  if (rawWords.length >= 3) {
+    readingQuestions.push({
+      id: 'q-3',
+      question: `How does applying "${w2.word}" (${w2.translationPt}) alongside "${w0.word}" reinforce language retention in the text?`,
+      options: [
+        `It turns conscious vocabulary recall into an automatic communication reflex.`,
+        `It forces the student to study grammar books for five continuous hours.`,
+        `It shows that vocabulary should only be reviewed once every few months.`,
+        `It creates unnecessary stress in the student's daily schedule.`,
+      ],
+      correctAnswer: 0,
+      explanation: `Connecting target words like "${w2.word}" and "${w0.word}" directly in daily contexts solidifies long-term memorization and natural reflex.`,
+    });
+  }
 
   return {
     id: `hw-week-${Date.now()}`,
     weekLabel: `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`,
     studentEmail: email,
     studentName: name,
+    studentLevel: levelLabel,
     createdAt: new Date().toISOString(),
     totalWordsCollected: rawWords.length,
     vocabularyList: rawWords,
@@ -323,6 +410,7 @@ export function generateWeeklyHomework(
       text: passageText,
       questions: readingQuestions,
     },
+    isEmpty: false,
     isCompleted: false,
     score: 0,
   };
@@ -339,7 +427,78 @@ export function generateWeeklyHomeworkFromRoutines(params: {
     undefined,
     undefined,
     params.studentName,
-    params.customWords
+    params.customWords,
+    params.studentLevel
   );
+}
+
+/**
+ * Async generator that triggers the server-side Gemini AI engine
+ * to generate the 4 stages using real weekly vocabulary.
+ */
+export async function generateWeeklyHomeworkWithAi(params: {
+  routinesByDay: Record<DayOfWeek, RoutineItem[]>;
+  studentName?: string;
+  studentLevel?: string;
+  studentEmail?: string;
+  customWords?: Array<{
+    word: string;
+    translationPt?: string;
+    definitionEn?: string;
+    exampleSentence?: string;
+    sourceActivityName?: string;
+    sourceDay?: DayOfWeek;
+  }>;
+}): Promise<WeeklyHomeworkData> {
+  const localBaseline = generateWeeklyHomeworkFromRoutines(params);
+
+  // If there are no words, return the empty structured notice immediately without calling AI
+  if (localBaseline.isEmpty || localBaseline.totalWordsCollected === 0) {
+    return localBaseline;
+  }
+
+  try {
+    const payloadWords = localBaseline.vocabularyList.map((item) => ({
+      word: item.word,
+      definitionEn: item.definitionEn,
+      exampleSentence: item.exampleSentence,
+      translationPt: item.translationPt,
+      sourceActivityName: item.sourceActivityName,
+      sourceDay: item.sourceDay,
+    }));
+
+    const response = await fetch('/api/homework/generate-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        words: payloadWords,
+        studentName: params.studentName || 'Student',
+        studentLevel: params.studentLevel || 'iniciante/intermediário',
+        studentEmail: params.studentEmail || '',
+        weekLabel: localBaseline.weekLabel,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.homework && Array.isArray(data.homework.matchingPairs) && data.homework.matchingPairs.length > 0) {
+        return {
+          ...data.homework,
+          studentLevel: data.homework.studentLevel || localBaseline.studentLevel,
+        };
+      }
+      if (data.isEmpty) {
+        return {
+          ...localBaseline,
+          isEmpty: true,
+          emptyWarning: data.emptyWarning || localBaseline.emptyWarning,
+        };
+      }
+    }
+  } catch {
+    // Non-blocking fallback to high-fidelity structured pedagogical generator
+  }
+
+  return localBaseline;
 }
 

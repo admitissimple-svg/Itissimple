@@ -1,10 +1,10 @@
-import { EnglishLevel, WritingEvaluationResult, WordFeedback, SentenceFeedback } from '../types';
+import { EnglishLevel, WritingEvaluationResult, WordFeedback, SentenceFeedback, WeeklyHomeworkData, HomeworkAiEvaluation } from '../types';
 
 export interface CheckWritingParams {
   words?: string[];
   sentence?: string;
   activityName?: string;
-  level?: EnglishLevel;
+  level?: EnglishLevel | string;
 }
 
 export async function checkStudentWritingApi(
@@ -21,7 +21,10 @@ export async function checkStudentWritingApi(
     if (res.ok) {
       const data = await res.json();
       if (data && typeof data === 'object' && typeof data.hasAnyError === 'boolean') {
-        return data as WritingEvaluationResult;
+        return {
+          ...data,
+          isCorrect: typeof data.isCorrect === 'boolean' ? data.isCorrect : !data.hasAnyError,
+        } as WritingEvaluationResult;
       }
     }
   } catch (err) {
@@ -30,6 +33,140 @@ export async function checkStudentWritingApi(
 
   // 2. Client-side heuristic fallback
   return evaluateLocally(params);
+}
+
+export async function evaluateWeeklyHomeworkApi(params: {
+  homework: WeeklyHomeworkData;
+  studentAnswers: {
+    matching?: Record<string, string>;
+    fillInBlanks?: Record<string, string>;
+    sentences?: Record<string, string>;
+    quizAnswers?: Record<string, number>;
+  };
+  studentLevel?: string;
+  studentName?: string;
+  currentLanguage?: string;
+}): Promise<HomeworkAiEvaluation> {
+  try {
+    const res = await fetch('/api/homework/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.evaluation) {
+        return data.evaluation as HomeworkAiEvaluation;
+      }
+    }
+  } catch (err) {
+    console.warn('Error evaluating homework via API:', err);
+  }
+
+  // Resilient client-side fallback evaluation
+  const { homework, studentAnswers, studentLevel = 'Beginner' } = params;
+  const { matching = {}, fillInBlanks = {}, sentences = {}, quizAnswers = {} } = studentAnswers;
+
+  let matchingCorrect = 0;
+  const matchingFeedback = (homework.matchingPairs || []).map((p) => {
+    const ans = (matching[p.id] || '').trim();
+    const isCorrect = ans.toLowerCase() === p.word.toLowerCase();
+    if (isCorrect) matchingCorrect++;
+    return {
+      id: p.id,
+      isCorrect,
+      userAnswer: ans || '(sem resposta)',
+      correctAnswer: p.word,
+      explanationPt: isCorrect
+        ? `Correto! "${p.word}" corresponde a "${p.translation}".`
+        : `A resposta correta é "${p.word}" (${p.translation}).`,
+      explanationEn: isCorrect
+        ? `Correct! "${p.word}" matches "${p.definition}".`
+        : `The correct answer is "${p.word}" (${p.definition}).`,
+    };
+  });
+
+  let fillCorrect = 0;
+  const fillFeedback = (homework.fillInBlanks || []).map((f) => {
+    const ans = (fillInBlanks[f.id] || '').trim();
+    const isCorrect = ans.toLowerCase() === f.correctWord.toLowerCase();
+    if (isCorrect) fillCorrect++;
+    return {
+      id: f.id,
+      isCorrect,
+      userAnswer: ans || '(sem resposta)',
+      correctAnswer: f.correctWord,
+      explanationPt: f.explanationPt || (isCorrect ? `Excelente! "${f.correctWord}" completa a frase perfeitamente.` : `A palavra correta é "${f.correctWord}".`),
+      explanationEn: f.explanationEn || (isCorrect ? `Great! "${f.correctWord}" completes the sentence.` : `The correct word is "${f.correctWord}".`),
+    };
+  });
+
+  let quizCorrect = 0;
+  const readingFeedback = (homework.readingPassage?.questions || []).map((q) => {
+    const ansIdx = quizAnswers[q.id];
+    const isCorrect = ansIdx === q.correctAnswer;
+    if (isCorrect) quizCorrect++;
+    return {
+      id: q.id,
+      isCorrect,
+      userAnswer: q.options[ansIdx] || '(sem resposta)',
+      correctAnswer: q.options[q.correctAnswer] || '',
+      explanationPt: q.explanation || (isCorrect ? 'Resposta correta!' : 'Opção alinhada com o texto.'),
+      explanationEn: q.explanation || (isCorrect ? 'Correct interpretation!' : 'Option aligned with the passage.'),
+    };
+  });
+
+  const sentenceFeedback = (homework.sentenceWritingPrompts || []).map((p) => {
+    const text = (sentences[p.word] || '').trim();
+    const isCorrect = text.length >= 8 && text.toLowerCase().includes(p.word.toLowerCase());
+    return {
+      word: p.word,
+      originalSentence: text || '(nenhuma frase enviada)',
+      isCorrect,
+      correctedSentence: text || `I use ${p.word} in my daily routine.`,
+      explanationPt: isCorrect
+        ? `Frase bem elaborada incorporando "${p.word}" com naturalidade.`
+        : `Lembre-se de formar uma frase completa em inglês usando a palavra "${p.word}".`,
+      explanationEn: isCorrect
+        ? `Well-crafted sentence incorporating "${p.word}" naturally.`
+        : `Remember to build a full English sentence using "${p.word}".`,
+      levelAdvicePt: 'Continue praticando a formação de frases ativas conectadas à sua rotina.',
+      levelAdviceEn: 'Keep practicing active sentence construction tied to your routine.',
+    };
+  });
+
+  const totalPoints = 100;
+  const totalM = Math.max(1, homework.matchingPairs.length);
+  const totalF = Math.max(1, homework.fillInBlanks.length);
+  const totalQ = Math.max(1, homework.readingPassage.questions.length);
+  const totalS = Math.max(1, homework.sentenceWritingPrompts.length);
+
+  let sentenceCorrect = 0;
+  sentenceFeedback.forEach((s) => { if (s.isCorrect) sentenceCorrect++; });
+
+  const score = Math.round(
+    (matchingCorrect / totalM) * 25 +
+    (fillCorrect / totalF) * 30 +
+    (sentenceCorrect / totalS) * 25 +
+    (quizCorrect / totalQ) * 20
+  );
+
+  return {
+    overallScore: Math.min(100, score),
+    evaluatedAt: new Date().toISOString(),
+    studentLevel: studentLevel || 'Beginner',
+    tutorFeedbackSummaryPt: `Parabéns pela dedicação! Você concluiu as etapas de memorização do vocabulário da sua semana com foco no nível ${studentLevel}. Continue integrando essas palavras na sua rotina diária.`,
+    tutorFeedbackSummaryEn: `Congratulations on your dedication! You completed your weekly memorization activity calibrated for ${studentLevel} level. Keep applying these words in your daily life.`,
+    levelStrengthsPt: 'Demonstrou bom reconhecimento de vocabulário e dedicação na prática ativa.',
+    levelStrengthsEn: 'Demonstrated strong vocabulary recall and dedication in active practice.',
+    levelNextStepsPt: 'Traga esses termos para a sua próxima aula de conversação com seu Amigo Nativo.',
+    levelNextStepsEn: 'Bring these terms into your next live conversation session with your Native Friend.',
+    matchingFeedback,
+    fillFeedback,
+    sentenceFeedback,
+    readingFeedback,
+  };
 }
 
 function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
@@ -106,7 +243,6 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
 
     // Check common verb tense / grammatical slip-ups
     if (/\bi have (\w+) today\b/i.test(sFixed) && !/\bi have had\b/i.test(sFixed)) {
-      // E.g. "I have breakfast today" -> "I had breakfast today"
       if (/\bi have breakfast today\b/i.test(sFixed)) {
         sFixed = sFixed.replace(/\bI have breakfast today\b/i, 'I had breakfast today');
         hasSentenceError = true;
@@ -130,13 +266,28 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
 
   const hasAnyError = wordFeedbacks.some((wf) => wf.hasError) || hasSentenceError;
 
+  const lvlStr = String(level).toLowerCase();
+  const isAdv = lvlStr.includes('avanc') || lvlStr.includes('advan');
+  const isBeg = lvlStr.includes('inic') || lvlStr.includes('begin');
+
   return {
     hasAnyError,
+    isCorrect: !hasAnyError,
     wordFeedbacks,
     sentenceFeedback,
     correctedSentence,
     explanation: sentenceFeedback?.explanationPt || (hasAnyError ? 'Identificamos correções sugeridas.' : 'Tudo correto!'),
     overallSummaryPt: hasAnyError ? 'Revisamos o vocabulário e a estrutura da frase.' : 'Excelente! Vocabulário e frase sem erros.',
     overallSummaryEn: hasAnyError ? 'Reviewed vocabulary and sentence structure.' : 'Outstanding! Everything is accurate.',
+    levelTipsPt: isBeg
+      ? 'Dica Iniciante: Lembre-se de manter Sujeito + Verbo + Complemento.'
+      : isAdv
+      ? 'Dica Avançada: Aplique expressões idiomáticas e estruturas conectivas sofisticadas.'
+      : 'Dica Intermediária: Pratique usar conectivos como "because", "while" ou "although" para unir duas ações.',
+    levelTipsEn: isBeg
+      ? 'Beginner Tip: Keep practicing clear Subject + Verb + Object structures.'
+      : isAdv
+      ? 'Advanced Tip: Incorporate sophisticated transitions and nuanced collocations.'
+      : 'Intermediate Tip: Try linking ideas with connectors like "because" or "while".',
   };
 }

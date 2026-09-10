@@ -93,8 +93,6 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   // 5 Words State
   const [words, setWords] = useState<string[]>(['', '', '', '', '']);
   const [wordsSaveFeedback, setWordsSaveFeedback] = useState<boolean>(false);
-  const [isCheckingSpelling, setIsCheckingSpelling] = useState<boolean>(false);
-  const [spellingEvaluation, setSpellingEvaluation] = useState<WritingEvaluationResult | null>(null);
   const [wordDefinitions, setWordDefinitions] = useState<Record<number, DictionaryLookupResult>>({});
 
   // Synchronize 5 words when active activity changes
@@ -107,7 +105,6 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       setWords(['', '', '', '', '']);
     }
     setWordsSaveFeedback(false);
-    setSpellingEvaluation(null);
   }, [activeActivity?.id]);
 
   // Keep English definitions synchronized from configured dictionary
@@ -209,24 +206,6 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     onSaveLearnedWords(activeActivity.id, cleanWords);
     setWordsSaveFeedback(true);
     setTimeout(() => setWordsSaveFeedback(false), 2500);
-  };
-
-  const handleCheckSpelling = async () => {
-    const cleanWords = words.map((w) => w.trim()).filter((w) => w.length > 0);
-    if (cleanWords.length === 0) return;
-    setIsCheckingSpelling(true);
-    try {
-      const evaluation = await checkStudentWritingApi({
-        sentence: cleanWords.join(', '),
-        words: cleanWords,
-        level: userProfile.level,
-      });
-      setSpellingEvaluation(evaluation);
-    } catch (err) {
-      console.warn('Spelling check error:', err);
-    } finally {
-      setIsCheckingSpelling(false);
-    }
   };
 
   // Handlers for Sentence of the Day
@@ -856,20 +835,6 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCheckSpelling}
-                disabled={isCheckingSpelling}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#000035] rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-300"
-              >
-                <Wand2 className="w-3 h-3 text-[#1C4C96]" />
-                <span>
-                  {isCheckingSpelling
-                    ? isEn ? 'Checking...' : 'Verificando...'
-                    : isEn ? 'Check Spelling' : 'Verificar Ortografia'}
-                </span>
-              </button>
-
               <button
                 type="button"
                 onClick={handleSaveWords}
