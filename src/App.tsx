@@ -317,19 +317,32 @@ export default function App() {
 
   // Generate Weekly Homework automatically whenever routines or dictionary change
   useEffect(() => {
+    const customWordList = studentDictionaryEntries.map((e) => ({
+      word: e.word,
+      definitionEn: e.definitionEn,
+      exampleSentence: e.exampleSentenceEn,
+      translationPt: e.translationPt || '',
+      sourceActivityName: e.sourceActivityName || 'Live Session',
+    }));
+
     const generated = generateWeeklyHomeworkFromRoutines({
       routinesByDay,
       studentName: userProfile.name,
       studentLevel: userProfile.level,
-      customWords: studentDictionaryEntries.map((e) => ({
-        word: e.word,
-        definitionEn: e.definitionEn,
-        exampleSentence: e.exampleSentenceEn,
-        translationPt: e.translationPt || '',
-        sourceActivityName: e.sourceActivityName || 'Live Session',
-      })),
+      customWords: customWordList,
     });
-    setWeeklyHomework(generated);
+
+    // If we already have an AI-generated homework and the collected words haven't changed, preserve it!
+    setWeeklyHomework((prev) => {
+      if (prev?.isAiGenerated && !prev.isEmpty && prev.totalWordsCollected > 0) {
+        const prevWords = prev.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
+        const nextWords = generated.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
+        if (prevWords === nextWords) {
+          return prev;
+        }
+      }
+      return generated;
+    });
   }, [routinesByDay, userProfile.name, userProfile.level, studentDictionaryEntries]);
 
   // AI-powered dynamic regeneration for Memorization Activity (4 stages using real weekly vocabulary)
@@ -358,6 +371,19 @@ export default function App() {
       setIsGeneratingHomeworkAi(false);
     }
   }, [routinesByDay, userProfile.name, userProfile.level, currentAccount?.email, userProfile.email, studentDictionaryEntries]);
+
+  // Proactively generate AI content as soon as vocabulary is present
+  useEffect(() => {
+    if (
+      weeklyHomework &&
+      !weeklyHomework.isAiGenerated &&
+      !weeklyHomework.isEmpty &&
+      weeklyHomework.totalWordsCollected > 0 &&
+      !isGeneratingHomeworkAi
+    ) {
+      handleRegenerateHomeworkWithAi();
+    }
+  }, [weeklyHomework, isGeneratingHomeworkAi, handleRegenerateHomeworkWithAi]);
 
   const handleOpenHomeworkModal = useCallback(() => {
     setIsHomeworkModalOpen(true);

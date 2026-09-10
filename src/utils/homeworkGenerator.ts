@@ -132,6 +132,36 @@ const ROUTINE_VOCAB_DICT: Record<
     definitionEn: 'Forward or onward movement toward a goal or higher proficiency.',
     exampleSentence: 'Every small daily routine action creates immense speaking progress.',
   },
+  today: {
+    translationPt: 'Hoje / No dia de hoje',
+    definitionEn: 'The present day, or this current 24-hour period.',
+    exampleSentence: 'We need to finish our priority client tasks today before leaving.',
+  },
+  tomorrow: {
+    translationPt: 'Amanhã / No dia seguinte',
+    definitionEn: 'The day that comes immediately after today.',
+    exampleSentence: 'Let us reschedule our project review for tomorrow morning.',
+  },
+  project: {
+    translationPt: 'Projeto / Trabalho estruturado',
+    definitionEn: 'A collaborative effort or set of tasks planned to achieve a goal.',
+    exampleSentence: 'Our team completed the software project ahead of the deadline.',
+  },
+  piece: {
+    translationPt: 'Peça / Parte / Documento',
+    definitionEn: 'A distinct portion, document, or element of a larger whole.',
+    exampleSentence: 'Writing the executive summary is the final piece of the proposal.',
+  },
+  task: {
+    translationPt: 'Tarefa / Atividade a cumprir',
+    definitionEn: 'A specific piece of work to be done or undertaken.',
+    exampleSentence: 'I focus on one challenging task at a time to stay productive.',
+  },
+  coffee: {
+    translationPt: 'Café',
+    definitionEn: 'A hot aromatic beverage brewed from roasted coffee beans.',
+    exampleSentence: 'I enjoy a warm cup of coffee while reviewing my morning schedule.',
+  },
 };
 
 export function generateWeeklyHomework(
@@ -264,14 +294,19 @@ export function generateWeeklyHomework(
     const wordRegex = new RegExp(`\\b${item.word}\\b`, 'i');
     let sentenceWithBlank = '';
 
+    const fallbackTemplates = [
+      `During our morning team check-in, we made sure to prioritize the ______ to keep work on track.`,
+      `I dedicated thirty minutes this morning to focus entirely on our new ______.`,
+      `Please send me a quick update regarding the ______ as soon as you have a moment.`,
+      `Having a clear perspective on each ______ makes daily communication much smoother.`,
+      `She shared helpful insights about the ______ during our afternoon discussion.`,
+      `We agreed to review the key details of the ______ before finalizing the decision.`,
+    ];
+
     if (item.exampleSentence && wordRegex.test(item.exampleSentence)) {
       sentenceWithBlank = item.exampleSentence.replace(wordRegex, '______');
-    } else if (isAdv) {
-      sentenceWithBlank = `When executing my scheduled responsibilities, prioritizing a clear ______ allows me to navigate complex daily workflows with ease.`;
-    } else if (isInter) {
-      sentenceWithBlank = `During my busy daily routine, I make sure to prioritize my ______ because it helps keep my workflow organized.`;
     } else {
-      sentenceWithBlank = `In my morning routine, I like to check my ______ before starting my tasks.`;
+      sentenceWithBlank = fallbackTemplates[idx % fallbackTemplates.length];
     }
 
     const otherWords = rawWords
@@ -458,22 +493,22 @@ export async function generateWeeklyHomeworkWithAi(params: {
   }
 
   try {
-    const payloadWords = localBaseline.vocabularyList.map((item) => ({
-      word: item.word,
-      definitionEn: item.definitionEn,
-      exampleSentence: item.exampleSentence,
-      translationPt: item.translationPt,
-      sourceActivityName: item.sourceActivityName,
-      sourceDay: item.sourceDay,
-    }));
+    // Simple direct payload: array of words and student level
+    const cleanWordList = Array.from(
+      new Set(
+        localBaseline.vocabularyList
+          .map((item) => item.word.trim())
+          .filter((w) => Boolean(w))
+      )
+    );
 
     const response = await fetch('/api/homework/generate-ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        words: payloadWords,
+        words: cleanWordList,
+        studentLevel: params.studentLevel || 'Intermediate',
         studentName: params.studentName || 'Student',
-        studentLevel: params.studentLevel || 'iniciante/intermediário',
         studentEmail: params.studentEmail || '',
         weekLabel: localBaseline.weekLabel,
       }),

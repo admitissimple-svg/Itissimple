@@ -4,11 +4,11 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 dotenv.config();
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestore, getFirestoreDb } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 
-const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || 'cea0e43d-1149-404b-ac5d-faa4ad9b4528';
 
 const app = express();
@@ -3437,7 +3437,8 @@ async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Pro
 
   const candidateModels = [
     GEMINI_TEXT_MODEL,
-    'gemini-3.6-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
   ];
   const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
 
@@ -3526,48 +3527,168 @@ function normalizeStudentLevel(lvl?: string): {
   };
 }
 
+// Specialized Native English Teacher & Instructional Designer Generator for Weekly Memorization Activity
+async function generateDirectMemorizationAi(
+  words: string[],
+  studentLevel: string,
+  studentName: string = 'Student'
+): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const levelMeta = normalizeStudentLevel(studentLevel);
+
+  const systemInstruction = `You are an expert Native English Teacher and Instructional Designer for "It's Simple - Learn English by Living Your Life".
+Your mission is to generate native, fluid, authentic, and natural instructional content for the 4-part "Weekly Memorization Activity", strictly based on the student's weekly words and calibrated to their exact proficiency level (${levelMeta.labelEn} - CEFR ${levelMeta.cefr}).
+
+CRITICAL PEDAGOGICAL RULES (STRICTLY ENFORCED):
+1. PROHIBIT ROBOTIC DEFINITIONS: Never write mechanical dictionary descriptions (e.g., do NOT write "The act or state of...", "Denoting an action...", "Relating to..."). Write natural, functional explanations showing how native speakers actually use the word in everyday reality.
+2. PROHIBIT METALANGUAGE: Never use metalinguistic filler or commentary (e.g., do NOT write "The concept of...", "This term refers to...", "In this sentence...", "This word is used to..."). Speak directly and naturally to the learner.
+3. PROHIBIT REPETITIVE OR FORMULAIC PHRASES: Never use repetitive sentence templates (e.g., avoid "When executing my scheduled responsibilities...", "In my busy daily routine..."). Write modern, authentic, natural English sentences as spoken by real native speakers in daily routines, workplace situations, social events, commutes, and home life.
+4. CALIBRATE TO PROFICIENCY LEVEL:
+   - Beginner (A1-A2): Direct everyday vocabulary, concise sentences (8-14 words), clear context clues.
+   - Intermediate (B1-B2): Natural compound and complex sentences with connectors (while, because, although, whenever, so), phrasal verbs, realistic modern workplace and social situations (14-22 words).
+   - Advanced (C1-C2): Rich nuanced vocabulary, varied cadence, idiomatic collocations, professional or reflective depth (18-28 words).
+5. THE 4 MANDATORY PARTS TO GENERATE:
+   - Part 1 (Matching): Create contextual definitions and unique functional clues for each word in natural English, accompanied by a natural Portuguese equivalent. Shuffle the order of pairs in the output array so the learner matches them.
+   - Part 2 (Fill in the Blanks): Generate varied, authentic routine sentences with a single blank "______" for each word where the target word is the only logical and grammatical fit. Provide exactly 4 smart options (the correct word + 3 plausible distractors) plus practical hints and explanations in both English and Portuguese.
+   - Part 3 (Sentence Writing): Propose practical, targeted writing challenges that guide the student to write an original sentence about their real life or work using each word.
+   - Part 4 (Mini-Story): Write a cohesive, enjoyable, natural narrative that weaves in ALL the weekly words organically. Every target word MUST be highlighted in bold markdown (**word**). Include 2 to 3 smart comprehension questions probing the story events, context, and word usage.
+
+Output MUST be a strict, valid JSON object matching the requested schema.`;
+
+  const userPrompt = `Create the 4-part Weekly Memorization Activity:
+- Student Name: "${studentName}"
+- Target Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+- Pedagogical Focus: ${levelMeta.grammarFocusEn}
+- Target Audience: Adult professional learning English through their real daily routine.
+
+Weekly Words to Master:
+${JSON.stringify(words)}
+
+Required JSON Schema:
+{
+  "matchingPairs": [
+    {
+      "id": "match-1",
+      "word": "exact target word",
+      "definition": "Clear, contextual, functional definition or clue in natural English (never robotic)",
+      "translation": "natural Portuguese translation"
+    }
+  ],
+  "fillInBlanks": [
+    {
+      "id": "fill-1",
+      "sentenceWithBlank": "Authentic, varied sentence with ______ as the single blank",
+      "correctWord": "exact target word",
+      "options": ["exact target word", "distractor1", "distractor2", "distractor3"],
+      "hintPt": "Dica funcional em português",
+      "hintEn": "Functional clue in English",
+      "explanationPt": "Explicação amigável em português do porquê desta palavra encaixar",
+      "explanationEn": "Friendly explanation in English why this word fits"
+    }
+  ],
+  "sentenceWritingPrompts": [
+    {
+      "word": "exact target word",
+      "hint": "Engaging prompt directing the student to write an authentic sentence using this word in their life or work",
+      "hintPt": "Desafio prático de escrita em português direcionado para a rotina",
+      "hintEn": "Practical writing challenge in English",
+      "levelInstruction": "Specific tip for ${levelMeta.labelEn} level"
+    }
+  ],
+  "readingPassage": {
+    "title": "Engaging title for the story",
+    "text": "A cohesive, lively, well-crafted mini-story (1-3 paragraphs) that uses all target words naturally. Every target word MUST be enclosed in double asterisks like **word**.",
+    "questions": [
+      {
+        "id": "q-1",
+        "question": "Comprehension question directly testing the story events and word usage",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correctAnswer": 0,
+        "explanation": "Why this answer is correct based on the story"
+      }
+    ]
+  }
+}`;
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  const candidateModels = [
+    GEMINI_TEXT_MODEL,
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+  ];
+  const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: userPrompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+      });
+
+      if (response && response.text) {
+        const parsed = JSON.parse(response.text.trim());
+        if (
+          parsed &&
+          Array.isArray(parsed.matchingPairs) &&
+          parsed.matchingPairs.length > 0 &&
+          Array.isArray(parsed.fillInBlanks) &&
+          parsed.fillInBlanks.length > 0 &&
+          Array.isArray(parsed.sentenceWritingPrompts) &&
+          parsed.sentenceWritingPrompts.length > 0 &&
+          parsed.readingPassage?.text
+        ) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Model might temporarily experience high demand (503 Service Unavailable) or rate limiting.
+      // Continue cleanly to the next candidate model without crashing or logging raw stack traces.
+    }
+  }
+
+  return null;
+}
+
 // AI-Powered 4-Stage Weekly Memorization Activity Generator
 app.post('/api/homework/generate-ai', async (req, res) => {
   try {
     const {
       words = [],
       studentName = 'Student',
-      studentLevel = 'iniciante/intermediário',
+      studentLevel = 'Intermediate',
       studentEmail = '',
       weekLabel = '',
     } = req.body;
 
     const levelMeta = normalizeStudentLevel(studentLevel);
 
+    // 1. Simple direct input: clean array of unique words
     const rawList = Array.isArray(words) ? words : [];
-    const seen = new Set<string>();
-    const cleanInputWords: Array<{
-      word: string;
-      definitionEn?: string;
-      exampleSentence?: string;
-      translationPt?: string;
-      sourceActivityName?: string;
-      sourceDay?: string;
-    }> = [];
+    const cleanWords = Array.from(
+      new Set(
+        rawList
+          .map((item: any) => (typeof item === 'string' ? item : item?.word || '').trim())
+          .filter((w: string) => Boolean(w))
+      )
+    );
 
-    for (const item of rawList) {
-      const w = typeof item === 'string' ? item : item?.word;
-      const trimmed = (w || '').trim();
-      if (trimmed && !seen.has(trimmed.toLowerCase())) {
-        seen.add(trimmed.toLowerCase());
-        cleanInputWords.push({
-          word: trimmed,
-          definitionEn: typeof item === 'object' ? item.definitionEn : undefined,
-          exampleSentence: typeof item === 'object' ? (item.exampleSentence || item.exampleSentenceEn) : undefined,
-          translationPt: typeof item === 'object' ? item.translationPt : undefined,
-          sourceActivityName: typeof item === 'object' ? item.sourceActivityName : undefined,
-          sourceDay: typeof item === 'object' ? item.sourceDay : undefined,
-        });
-      }
-    }
-
-    // REGRA DE OURO ANTI-GENÉRICO: Se a lista de palavras estiver vazia, retorna aviso estruturado
-    if (cleanInputWords.length === 0) {
+    // Anti-generic rule: if no words provided, return clean empty notice immediately
+    if (cleanWords.length === 0) {
       return res.json({
         success: true,
         isEmpty: true,
@@ -3588,331 +3709,183 @@ app.post('/api/homework/generate-ai', async (req, res) => {
       });
     }
 
-    // 1. ENTRADA OBRIGATÓRIA (Payload): Obter definições oficiais e exemplos autênticos do dicionário
-    const enrichedWords = await Promise.all(
-      cleanInputWords.map(async (item) => {
-        let def = item.definitionEn?.trim();
-        let ex = item.exampleSentence?.trim();
-        let trans = item.translationPt?.trim();
+    // 2. Direct Gemini AI generation with Specialized Native Teacher & Instructional Designer System Prompt
+    const aiResult = await generateDirectMemorizationAi(cleanWords, studentLevel, studentName);
 
-        if (!def || !ex || !trans) {
-          const dictData = await lookupServerDictionaryWord(item.word);
-          if (!def) def = dictData.definitionEn;
-          if (!ex) ex = dictData.exampleSentenceEn;
-          if (!trans) trans = dictData.translationPt;
+    // Assemble the 4 parts
+    let matchingPairs: any[] = [];
+    let fillInBlanks: any[] = [];
+    let sentenceWritingPrompts: any[] = [];
+    let readingPassage: any = null;
+
+    if (aiResult) {
+      matchingPairs = aiResult.matchingPairs;
+      fillInBlanks = aiResult.fillInBlanks;
+      sentenceWritingPrompts = aiResult.sentenceWritingPrompts;
+      readingPassage = aiResult.readingPassage;
+    } else {
+      // High-quality contextual fallback with authentic native structures (never repetitive)
+      const VOCAB_CONTEXT_MAP: Record<string, { def: string; trans: string; sentence: string }> = {
+        today: {
+          def: 'The present day that is taking place right now',
+          trans: 'hoje',
+          sentence: 'We need to finish our priority tasks ______ before the team wraps up for the day.',
+        },
+        tomorrow: {
+          def: 'The day that comes immediately after today',
+          trans: 'amanhã',
+          sentence: 'Let us reschedule our strategy review for ______ morning at ten o\'clock.',
+        },
+        project: {
+          def: 'A planned initiative or structured set of tasks to achieve a goal',
+          trans: 'projeto',
+          sentence: 'Our cross-functional team delivered the quarterly ______ ahead of schedule.',
+        },
+        meeting: {
+          def: 'A scheduled gathering of people to discuss work and make decisions',
+          trans: 'reunião',
+          sentence: 'I joined a productive 30-minute ______ with the department heads.',
+        },
+        piece: {
+          def: 'A distinct part, document, or element contributing to a larger whole',
+          trans: 'peça / parte',
+          sentence: 'Writing the opening summary was the crucial ______ of the entire presentation.',
+        },
+        deadline: {
+          def: 'The latest point in time by which a task or goal must be completed',
+          trans: 'prazo final',
+          sentence: 'Everyone stayed focused so we could comfortably meet Friday\'s ______.',
+        },
+        schedule: {
+          def: 'A planned timetable of events, appointments, and daily routines',
+          trans: 'cronograma / agenda',
+          sentence: 'I always review my daily ______ over morning coffee before reading emails.',
+        },
+        coffee: {
+          def: 'A warm energizing drink brewed from roasted beans',
+          trans: 'café',
+          sentence: 'Grabbing a freshly brewed cup of ______ helps me start the morning with focus.',
+        },
+        routine: {
+          def: 'A regular sequence of actions followed consistently each day',
+          trans: 'rotina',
+          sentence: 'Establishing a steady morning ______ brings clarity to my work week.',
+        },
+        practice: {
+          def: 'Repeated application of a skill to develop confidence and mastery',
+          trans: 'prática / praticar',
+          sentence: 'Consistent daily ______ is the key to speaking English with genuine fluency.',
+        },
+      };
+
+      const SENTENCE_TEMPLATES = [
+        (w: string) => `During our team check-in, we made sure to prioritize the ______ to keep work on track.`,
+        (w: string) => `I dedicated thirty minutes this morning to focus entirely on our new ______.`,
+        (w: string) => `Please send me a quick update regarding the ______ as soon as you have a moment.`,
+        (w: string) => `Having a clear perspective on each ______ makes daily communication much smoother.`,
+        (w: string) => `She shared helpful insights about the ______ during our afternoon discussion.`,
+      ];
+
+      matchingPairs = cleanWords.map((w, idx) => {
+        const lower = w.toLowerCase().trim();
+        const ctx = VOCAB_CONTEXT_MAP[lower];
+        return {
+          id: `match-${idx}-${w}`,
+          word: w,
+          definition: ctx?.def || `Practical term applied naturally when speaking about your daily activities and workplace plans.`,
+          translation: ctx?.trans || `termo da rotina`,
+        };
+      }).sort(() => 0.5 - Math.random());
+
+      fillInBlanks = cleanWords.map((w, idx) => {
+        const lower = w.toLowerCase().trim();
+        const ctx = VOCAB_CONTEXT_MAP[lower];
+        const distractors = cleanWords.filter(o => o.toLowerCase() !== w.toLowerCase()).slice(0, 3);
+        const options = [w, ...distractors];
+        const backupDistractors = ['schedule', 'routine', 'practice', 'update', 'meeting', 'project'];
+        let b = 0;
+        while (options.length < 4) {
+          const cand = backupDistractors[b++ % backupDistractors.length];
+          if (!options.includes(cand) && cand !== lower) options.push(cand);
         }
 
+        const sentenceWithBlank = ctx?.sentence || SENTENCE_TEMPLATES[idx % SENTENCE_TEMPLATES.length](w).replace(new RegExp(`\\b${w}\\b`, 'i'), '______');
+
         return {
-          word: item.word,
-          definitionEn: def,
-          exampleSentence: ex,
-          translationPt: trans,
-          sourceActivityName: item.sourceActivityName || 'Rotina Semanal',
-          sourceDay: item.sourceDay || 'monday',
+          id: `fill-${idx}-${w}`,
+          sentenceWithBlank: sentenceWithBlank.includes('______') ? sentenceWithBlank : sentenceWithBlank.replace(w, '______'),
+          correctWord: w,
+          options: options.sort(() => 0.5 - Math.random()),
+          hintPt: ctx?.trans ? `Dica: Refere-se a "${ctx.trans}".` : `Dica: Escolha "${w}" para completar a frase com sentido natural.`,
+          hintEn: `Hint: Focus on the sentence context to identify "${w}".`,
+          explanationPt: `A palavra "${w}"${ctx?.trans ? ` (${ctx.trans})` : ''} encaixa gramaticalmente e dá sentido autêntico à oração.`,
+          explanationEn: `"${w}" is the only choice that logically and grammatically completes this thought.`,
         };
-      })
-    );
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    let aiGeneratedResult: any = null;
-
-    if (apiKey) {
-      const prompt = `You are an elite pedagogical AI engine for "It's Simple - Learn English by Living Your Life".
-Your mission is to construct the 4 stages of the "Weekly Memorization Activity" (Atividade de Memorização) strictly and exclusively using the student's real vocabulary registered this week, dynamically calibrated to their exact proficiency level.
-
-STUDENT PROFILE & PROFICIENCY LEVEL:
-Name: "${studentName}"
-Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
-Level Pedagogical Focus: ${levelMeta.grammarFocusEn}
-
-ACTIVE WEEKLY VOCABULARY PAYLOAD (Official dictionary definitions and real examples):
-${JSON.stringify(
-  enrichedWords.map((w) => ({
-    word: w.word,
-    officialDictionaryDefinition: w.definitionEn,
-    dictionaryExampleSentence: w.exampleSentence,
-    translationInPortuguese: w.translationPt,
-  })),
-  null,
-  2
-)}
-
-STRICT PEDAGOGICAL SPECIFICATIONS FOR THE 4 STAGES:
-
-1. ANTI-GENERIC GOLDEN RULE:
-   - You MUST ONLY use the target words present in the payload above: [${enrichedWords.map((w) => `"${w.word}"`).join(', ')}].
-   - It is strictly forbidden to invent or introduce factory-standard mock words (e.g., breakfast, coffee, commute) unless they were explicitly registered in the payload above.
-
-2. ETAPA 1 (Associação / Matching):
-   - Intelligently cross-reference each exact word from the list with its official definition and concise Portuguese translation.
-   - Include all words from the payload in matchingPairs.
-   - Shuffle only the display order of the pairs in the output array so that the student experiences an engaging matching challenge.
-   - Each item:
-     {
-       "id": "match-{index}-{word}",
-       "word": "{exact target word}",
-       "definition": "{official English definition}",
-       "translation": "{concise Portuguese translation}"
-     }
-
-3. ETAPA 2 (Lacunas / Fill-in-the-blanks) - CALIBRATED TO ${levelMeta.labelEn.toUpperCase()}:
-   - For each word from the list (or up to 6 words if the list is long), generate a BRAND NEW, original, natural English sentence where the target word is the ONLY logically and grammatically correct answer for the blank "______".
-   - LEVEL CALIBRATION REQUIREMENTS:
-     * BEGINNER: 8 to 14 words per sentence. Simple Present/Past/Continuous, clear direct context clues. Everyday routine scenarios.
-     * INTERMEDIATE: 14 to 22 words per sentence. Compound/complex structures with connectors ('although', 'while', 'because', 'since', 'whenever'), modal verbs, present perfect, realistic workplace or social contexts.
-     * ADVANCED: 20 to 30 words per sentence. Sophisticated syntax with relative clauses, passive voice, condition/inversion, nuanced collocations, professional leadership or reflective dilemmas.
-   - Provide "hintPt" with Portuguese translation and contextual nuance.
-   - Provide "hintEn" with English guidance.
-   - Provide "explanationPt" (in Portuguese) and "explanationEn" (in English) with a gentle pedagogical explanation of why this target word is the correct choice in this sentence.
-   - Provide "options": array of exactly 4 strings (the correct target word + 3 distractors, shuffled).
-   - Each item:
-     {
-       "id": "fill-{index}-{word}",
-       "sentenceWithBlank": "{calibrated English sentence with ______ }",
-       "correctWord": "{exact target word}",
-       "options": ["opt1", "opt2", "opt3", "opt4"],
-       "hintPt": "Dica: Refere-se a '{translation}'",
-       "hintEn": "Hint: ...",
-       "explanationPt": "{gentle explanation why this word fits}",
-       "explanationEn": "{gentle explanation in English}"
-     }
-
-4. ETAPA 3 (Construção de Frases / Active Sentence Prompts) - CALIBRATED TO ${levelMeta.labelEn.toUpperCase()}:
-   - For each word in the list (or up to 5 words), create an active prompt command tailored to the student's level.
-   - LEVEL CALIBRATION REQUIREMENTS:
-     * BEGINNER: Friendly, step-by-step guidance. Encourage a clear, simple sentence (Subject + Verb + Object) connecting the word to their daily routine.
-     * INTERMEDIATE: Challenge the student to combine two clauses or explain a reason/routine experience using transition words ('because', 'so', 'although').
-     * ADVANCED: Challenge the student to produce high-level, expressive, or professional sentences with nuanced phrasing or advanced structures.
-   - Each item:
-     {
-       "word": "{exact target word}",
-       "hint": "{English prompt guiding the student to use the term in a realistic context}",
-       "hintEn": "{English prompt}",
-       "hintPt": "{Portuguese prompt instructions}",
-       "levelInstruction": "{Specific guideline for ${levelMeta.labelEn} level}"
-     }
-
-5. ETAPA 4 (Texto Integrado / Integrated Micro-Text) - CALIBRATED TO ${levelMeta.labelEn.toUpperCase()}:
-   - Compose a cohesive, natural, engaging micro-text describing a realistic daily routine, work, or lifestyle scenario.
-   - LEVEL DENSITY CALIBRATION:
-     * BEGINNER: 90-125 words, 1-2 clean paragraphs, accessible chronological flow, direct factual comprehension questions.
-     * INTERMEDIATE: 135-180 words, 2 cohesive paragraphs, varied transitions, realistic routine dilemma, cause/effect comprehension questions.
-     * ADVANCED: 180-250 words, 2-3 dense, articulate paragraphs, sophisticated syntax, nuanced reflections, inferential comprehension questions.
-   - Organically weave in the MAXIMUM POSSIBLE NUMBER of words from the weekly vocabulary list!
-   - Highlight EVERY incorporated weekly word in bold markdown: **word** (or **Word**).
-   - MANDATORY VOCABULARY FOCUS FOR QUESTIONS (CRITICAL):
-     * The reading comprehension questions MUST DIRECTLY AND EXPLICITLY TEST THE STUDENT'S WEEKLY VOCABULARY WORDS from the list: [${enrichedWords.map((w) => `"${w.word}"`).join(', ')}].
-     * DO NOT generate generic questions about general studying or vague concepts (e.g., do NOT ask generic questions like "What is the benefit of studying?" or "What leads to success?").
-     * EVERY question MUST explicitly name and probe how a target word (or pair of words) is used, what it means in context, or what action/outcome it produces in the story.
-       Examples of required question style:
-       - "In the passage, how is '**{target_word}**' applied in the daily routine?"
-       - "According to the story, what does the author achieve by focusing on '**{target_word}**'?"
-       - "What does the text imply about '**{target_word}**' when describing the character's schedule?"
-       - "In paragraph 2, what action is associated with the term '**{target_word}**'?"
-     * The 4 multiple-choice options and the explanation MUST also directly reference the contextual meaning of the student's target words.
-   - Generate 2 to 3 reading comprehension questions about the text, each with 4 options, the 0-based index of the correct answer, and an explanation.
-   - Structure:
-     {
-       "title": "{engaging English title}",
-       "text": "{cohesive micro-text with **highlighted target words**}",
-       "questions": [
-         {
-           "id": "q-{index}",
-           "question": "{comprehension question explicitly testing a target vocabulary word from the weekly list}",
-           "options": ["A", "B", "C", "D"],
-           "correctAnswer": 0,
-           "explanation": "{why this option is correct, referencing the target word's contextual usage}"
-         }
-       ]
-     }
-
-Output MUST be STRICT JSON with this exact top-level schema:
-{
-  "matchingPairs": [ ... ],
-  "fillInBlanks": [ ... ],
-  "sentenceWritingPrompts": [ ... ],
-  "readingPassage": {
-    "title": "string",
-    "text": "string",
-    "questions": [ ... ]
-  }
-}`;
-
-      const rawResult = await callGeminiSafeJson(prompt, 7000);
-      if (
-        rawResult &&
-        Array.isArray(rawResult.matchingPairs) &&
-        Array.isArray(rawResult.fillInBlanks) &&
-        Array.isArray(rawResult.sentenceWritingPrompts) &&
-        rawResult.readingPassage?.text
-      ) {
-        aiGeneratedResult = rawResult;
-      }
-    }
-
-    // Smart algorithmic fallback adhering strictly to the Anti-Generic Rule and Level Calibration
-    const matchingPairs =
-      aiGeneratedResult?.matchingPairs?.length > 0
-        ? aiGeneratedResult.matchingPairs
-        : [...enrichedWords]
-            .sort(() => 0.5 - Math.random())
-            .map((item, idx) => ({
-              id: `match-${idx}-${item.word}`,
-              word: item.word,
-              definition: item.definitionEn,
-              translation: item.translationPt,
-            }));
-
-    const fillInBlanks =
-      aiGeneratedResult?.fillInBlanks?.length > 0
-        ? aiGeneratedResult.fillInBlanks
-        : enrichedWords.slice(0, 6).map((item, idx) => {
-            const wordRegex = new RegExp(`\\b${item.word}\\b`, 'i');
-            let sentenceWithBlank = '';
-
-            if (item.exampleSentence && wordRegex.test(item.exampleSentence)) {
-              sentenceWithBlank = item.exampleSentence.replace(wordRegex, '______');
-            } else if (levelMeta.key === 'advanced') {
-              sentenceWithBlank = `When orchestrating my daily schedule, ensuring a precise ______ proves essential to executing complex tasks seamlessly.`;
-            } else if (levelMeta.key === 'intermediate') {
-              sentenceWithBlank = `During my busy day, I make sure to focus on my ______ because it keeps my routine productive and organized.`;
-            } else {
-              sentenceWithBlank = `In my morning routine, I need to check my ______ before starting my day.`;
-            }
-
-            const otherWords = enrichedWords
-              .filter((w) => w.word.toLowerCase() !== item.word.toLowerCase())
-              .map((w) => w.word);
-
-            const distractors = otherWords.slice(0, 3);
-            const contextBackups = ['schedule', 'routine', 'practice', 'session'];
-            let bIdx = 0;
-            while (distractors.length < 3) {
-              const candidate = contextBackups[bIdx++ % contextBackups.length];
-              if (!distractors.includes(candidate) && candidate !== item.word.toLowerCase()) {
-                distractors.push(candidate);
-              }
-            }
-
-            const options = [item.word, ...distractors].sort(() => 0.5 - Math.random());
-
-            return {
-              id: `fill-${idx}-${item.word}`,
-              sentenceWithBlank,
-              correctWord: item.word,
-              options,
-              hintPt: `Dica: Refere-se a "${item.translationPt}".`,
-              hintEn: `Hint: Focus on the routine context to select "${item.word}".`,
-              explanationPt: `A palavra "${item.word}" (${item.translationPt}) é a única que se encaixa perfeitamente no sentido e na estrutura desta frase.`,
-              explanationEn: `The word "${item.word}" is the only option that accurately completes the meaning and grammar of this sentence.`,
-            };
-          });
-
-    const sentenceWritingPrompts =
-      aiGeneratedResult?.sentenceWritingPrompts?.length > 0
-        ? aiGeneratedResult.sentenceWritingPrompts
-        : enrichedWords.slice(0, 5).map((item) => {
-            if (levelMeta.key === 'advanced') {
-              return {
-                word: item.word,
-                hint: `Craft a sophisticated sentence using "${item.word}" in a professional or reflective context.`,
-                hintEn: `Craft a sophisticated sentence using "${item.word}" in a professional or reflective context.`,
-                hintPt: `Crie uma frase avançada com "${item.word}" (${item.translationPt}) demonstrando vocabulário rico e estrutura refinada.`,
-                levelInstruction: 'Use complex clauses, conditionals, or professional phrasing.',
-              };
-            }
-            if (levelMeta.key === 'intermediate') {
-              return {
-                word: item.word,
-                hint: `Write a compound sentence connecting two ideas with "${item.word}" in your work or daily routine.`,
-                hintEn: `Write a compound sentence connecting two ideas with "${item.word}" in your work or daily routine.`,
-                hintPt: `Escreva uma frase intermediária conectando duas ideias com "${item.word}" (${item.translationPt}) usando conectivos como "because" ou "although".`,
-                levelInstruction: 'Try connecting two actions with a transition word.',
-              };
-            }
-            return {
-              word: item.word,
-              hint: `Write a simple, clear sentence using "${item.word}" describing your daily routine.`,
-              hintEn: `Write a simple, clear sentence using "${item.word}" describing your daily routine.`,
-              hintPt: `Escreva uma frase simples e direta usando "${item.word}" (${item.translationPt}) sobre o seu dia a dia.`,
-              levelInstruction: 'Keep it clear with Subject + Verb + Object.',
-            };
-          });
-
-    const w0 = enrichedWords[0] || { word: 'practice', translationPt: 'prática', definitionEn: 'regular activity' };
-    const w1 = enrichedWords[1] || enrichedWords[0] || { word: 'routine', translationPt: 'rotina', definitionEn: 'daily sequence of actions' };
-    const w2 = enrichedWords[2] || enrichedWords[0] || { word: 'confidence', translationPt: 'confiança', definitionEn: 'feeling of self-assurance' };
-
-    const fallbackQuestions: any[] = [
-      {
-        id: 'q-1',
-        question: `In the passage, how is the target word "${w0.word}" (${w0.translationPt}) applied in the daily routine?`,
-        options: [
-          `It is actively integrated into everyday actions to turn English into an authentic habit.`,
-          `It is strictly memorized from a book without ever being spoken in real life.`,
-          `It is avoided completely because it complicates the student's morning schedule.`,
-          `It replaces the need to converse or practice with native tutors.`,
-        ],
-        correctAnswer: 0,
-        explanation: `In the text, "${w0.word}" (${w0.translationPt}) represents an active, regular practice that transforms language learning into a natural reflex.`,
-      },
-      {
-        id: 'q-2',
-        question: `According to the story, what is the role of "${w1.word}" (${w1.translationPt}) in the learner's journey?`,
-        options: [
-          `It connects practical daily moments directly to lasting English fluency and confidence.`,
-          `It has no connection to real conversational progress and should be ignored.`,
-          `It should only be reviewed during occasional weekend study marathons.`,
-          `It shows that consistency with real-world vocabulary is unnecessary.`,
-        ],
-        correctAnswer: 0,
-        explanation: `The passage emphasizes that "${w1.word}" (${w1.translationPt}) is essential for turning routine actions into sustainable communicative fluency.`,
-      },
-    ];
-
-    if (enrichedWords.length >= 3) {
-      fallbackQuestions.push({
-        id: 'q-3',
-        question: `How does practicing "${w2.word}" (${w2.translationPt}) alongside "${w0.word}" reinforce progress in the passage?`,
-        options: [
-          `It helps transition conscious word recall into an automatic, natural communication reflex.`,
-          `It forces the student to study grammar books for hours without speaking.`,
-          `It creates confusion and makes routine activities harder to finish.`,
-          `It proves that vocabulary should only be memorized once per semester.`,
-        ],
-        correctAnswer: 0,
-        explanation: `Combining target terms like "${w2.word}" and "${w0.word}" directly in daily contexts solidifies long-term retention and fluent speech.`,
       });
+
+      sentenceWritingPrompts = cleanWords.map((w, idx) => {
+        const prompts = [
+          `Describe a specific task, plan, or event in your daily life using "${w}".`,
+          `Write about a conversation with a colleague or friend that involves "${w}".`,
+          `Explain how "${w}" connects to your current weekly goals or routine.`,
+          `Craft a compound sentence with "${w}" using a connector like "because" or "while".`,
+          `Share a real-life observation from your day using "${w}".`,
+        ];
+        return {
+          word: w,
+          hint: prompts[idx % prompts.length],
+          hintPt: `Crie uma frase autêntica sobre a sua rotina ou trabalho usando "${w}".`,
+          hintEn: prompts[idx % prompts.length],
+          levelInstruction: `Keep it natural and contextual (${levelMeta.labelEn} level).`,
+        };
+      });
+
+      const storyWordsHighlight = cleanWords.map(w => `**${w}**`).join(', ');
+      readingPassage = {
+        title: `A Productive Day at Work (${levelMeta.labelEn})`,
+        text: `The morning started with great momentum as we reviewed our key priorities: ${storyWordsHighlight}.\n\nTaking time to address each aspect thoughtfully helped our team avoid misunderstandings and make genuine progress. By using real English in daily workflows, speaking becomes a natural habit rather than memorized theory.`,
+        questions: [
+          {
+            id: 'q-1',
+            question: `What was the team's main outcome from reviewing their priorities in the morning?`,
+            options: [
+              `They made genuine progress and avoided misunderstandings.`,
+              `They decided to cancel all upcoming meetings.`,
+              `They postponed their work until next month.`,
+              `They stopped communicating with each other.`,
+            ],
+            correctAnswer: 0,
+            explanation: `The text emphasizes that reviewing priorities helped the team make genuine progress.`,
+          },
+          {
+            id: 'q-2',
+            question: `How does applying English to daily workflows benefit language learners according to the passage?`,
+            options: [
+              `It turns speaking into a natural habit rather than memorized theory.`,
+              `It makes work much more complicated.`,
+              `It replaces real conversations with grammar tests.`,
+              `It causes delays in daily tasks.`,
+            ],
+            correctAnswer: 0,
+            explanation: `The passage notes that daily real-world use turns speaking into an automatic, natural habit.`,
+          },
+        ],
+      };
     }
 
-    const readingPassage =
-      aiGeneratedResult?.readingPassage?.text &&
-      Array.isArray(aiGeneratedResult?.readingPassage?.questions) &&
-      aiGeneratedResult.readingPassage.questions.length > 0
-        ? aiGeneratedResult.readingPassage
-        : {
-            title: `Weekly Routine Practice: Real Life in English (${levelMeta.labelEn})`,
-            text:
-              levelMeta.key === 'advanced'
-                ? `Cultivating genuine linguistic mastery requires integrating foreign speech into the fabric of daily life. Throughout this week, our communicative endeavors centered on pivotal concepts including ${enrichedWords
-                    .map((w) => `**${w.word}**`)
-                    .join(', ')}.\n\nBy continually operationalizing terms such as ${enrichedWords
-                    .slice(0, 3)
-                    .map((w) => `**${w.word}**`)
-                    .join(' and ')} within demanding contexts, fluent expression becomes an automatic reflex rather than a deliberate cognitive struggle. Sustained diligence and contextualized pragmatism inevitably solidify enduring fluency.`
-                : levelMeta.key === 'intermediate'
-                ? `Building authentic English fluency happens when you connect language directly to your personal life. This week, we focused on key concepts including ${enrichedWords
-                    .map((w) => `**${w.word}**`)
-                    .join(', ')}.\n\nBy practicing terms like ${enrichedWords
-                    .slice(0, 3)
-                    .map((w) => `**${w.word}**`)
-                    .join(' and ')} in real scenarios, speaking becomes a natural daily habit instead of memorizing abstract lists. Consistency and immediate real-world application turn simple daily routines into lasting language confidence.`
-                : `Every day is a great chance to learn English. This week, we learned important words like ${enrichedWords
-                    .slice(0, 4)
-                    .map((w) => `**${w.word}**`)
-                    .join(', ')}.\n\nWhen we use **${enrichedWords[0]?.word || 'practice'}** in our morning and evening routines, we remember them easily. Practice every day to build confidence!`,
-            questions: fallbackQuestions,
-          };
+    // Build unified vocabulary list populated directly with Gemini's contextual definitions
+    const vocabularyList = cleanWords.map((word) => {
+      const matchPair = matchingPairs.find((m: any) => m.word?.toLowerCase() === word.toLowerCase());
+      const fillItem = fillInBlanks.find((f: any) => f.correctWord?.toLowerCase() === word.toLowerCase());
+      return {
+        word,
+        definitionEn: matchPair?.definition || `Active vocabulary applied in your daily routine.`,
+        translationPt: matchPair?.translation || '',
+        exampleSentence: fillItem?.sentenceWithBlank?.replace(/______/g, word) || `I use "${word}" naturally in my daily conversations.`,
+        sourceActivityName: 'Weekly Vocabulary',
+        sourceDay: 'monday' as const,
+      };
+    });
 
     const finalHomeworkData = {
       id: `hw-ai-${Date.now()}`,
@@ -3921,29 +3894,15 @@ Output MUST be STRICT JSON with this exact top-level schema:
       studentName: studentName || 'Student',
       studentLevel: levelMeta.labelEn,
       createdAt: new Date().toISOString(),
-      totalWordsCollected: enrichedWords.length,
-      vocabularyList: enrichedWords.map((w) => ({
-        word: w.word,
-        definitionEn: w.definitionEn,
-        exampleSentence: w.exampleSentence,
-        translationPt: w.translationPt,
-        sourceActivityName: w.sourceActivityName,
-        sourceDay: w.sourceDay,
-      })),
-      allRoutineWords: enrichedWords.map((w) => ({
-        word: w.word,
-        definitionEn: w.definitionEn,
-        exampleSentence: w.exampleSentence,
-        translationPt: w.translationPt,
-        sourceActivityName: w.sourceActivityName,
-        sourceDay: w.sourceDay,
-      })),
+      totalWordsCollected: cleanWords.length,
+      vocabularyList,
+      allRoutineWords: vocabularyList,
       matchingPairs,
       fillInBlanks,
       sentenceWritingPrompts,
       readingPassage,
       isEmpty: false,
-      isAiGenerated: Boolean(aiGeneratedResult),
+      isAiGenerated: Boolean(aiResult),
       isCompleted: false,
       score: 0,
     };

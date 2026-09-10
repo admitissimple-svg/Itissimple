@@ -114,6 +114,14 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   );
   const [isEvaluatingAll, setIsEvaluatingAll] = useState(false);
 
+  React.useEffect(() => {
+    setMatchingAnswers(homework?.studentAnswers?.matching || {});
+    setFillAnswers(homework?.studentAnswers?.fillInBlanks || {});
+    setSentenceAnswers(homework?.studentAnswers?.sentences || {});
+    setQuizAnswers(homework?.studentAnswers?.quizAnswers || {});
+    setAiEvaluation(homework?.aiEvaluation);
+  }, [homework?.id]);
+
   const [sentenceFeedbacks, setSentenceFeedbacks] = useState<Record<string, any>>({});
   const [isCheckingSentence, setIsCheckingSentence] = useState<Record<string, boolean>>({});
   const [submittedFeedbackToast, setSubmittedFeedbackToast] = useState<string | null>(null);
@@ -276,6 +284,12 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#062863] text-emerald-300 border border-emerald-500/40">
                   {studentLevelDisplay}
                 </span>
+                {homework.isAiGenerated && (
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-600/90 text-white border border-indigo-400/50 flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5 text-amber-300" />
+                    Gemini AI
+                  </span>
+                )}
                 {homework.isCompleted && (
                   <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#607EC9] text-white">
                     {memT.scoreBadge(homework.score || 0)}
@@ -322,6 +336,47 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Live AI Generation Banner */}
+        {isGeneratingAi && (
+          <div className="px-6 py-2.5 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white flex items-center justify-between gap-3 text-xs font-semibold shadow-inner animate-pulse print:hidden">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
+              <span>
+                {isEn
+                  ? 'Gemini AI is crafting your authentic native memorization activities (story, smart blanks, writing prompts)...'
+                  : 'A IA Gemini está criando suas atividades autênticas de memorização (história nativa, lacunas inteligentes, desafios)...'}
+              </span>
+            </div>
+            <span className="text-[10px] bg-white/20 px-2.5 py-0.5 rounded-full font-extrabold shrink-0">
+              {isEn ? 'Live Native Generation' : 'Geração Didática Nativa'}
+            </span>
+          </div>
+        )}
+
+        {/* Notice when viewing offline baseline */}
+        {!isGeneratingAi && !homework.isAiGenerated && !homework.isEmpty && (
+          <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-amber-900 flex items-center justify-between text-xs print:hidden">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                {isEn
+                  ? 'Viewing offline baseline vocabulary. Click "AI Generate" to generate custom native story and smart blanks with Gemini!'
+                  : 'Visualizando base offline. Clique em "AI Generate" para gerar narrativa nativa e lacunas inteligentes com Gemini!'}
+              </span>
+            </div>
+            {onRegenerateWithAi && (
+              <button
+                type="button"
+                onClick={onRegenerateWithAi}
+                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer transition shrink-0 ml-3"
+              >
+                <Sparkles className="w-3 h-3" />
+                {isEn ? 'Generate with AI' : 'Gerar com IA'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Empty State Warning if no weekly vocabulary is registered (Anti-Generic Rule) */}
         {homework.isEmpty || homework.totalWordsCollected === 0 ? (
