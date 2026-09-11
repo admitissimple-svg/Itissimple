@@ -21,6 +21,7 @@ import {
   Youtube,
   Radio,
   Music,
+  X,
 } from 'lucide-react';
 import {
   DayOfWeek,
@@ -55,6 +56,7 @@ interface StudentRoutineGuideSectionProps {
   onAddCustomActivity?: (item: Omit<RoutineItem, 'id'>) => void;
   onEditActivity?: (item: RoutineItem) => void;
   onDeleteActivity?: (id: string) => void;
+  onUpdateTimeActivity?: (activityId: string, newTime: string) => void;
   onSaveLearnedWords: (activityId: string, words: string[]) => void;
   userProfile: UserProfile;
   onSaveDailySentence: (sentence: string, wordsUsed: string[]) => void;
@@ -74,6 +76,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   onAddCustomActivity,
   onEditActivity,
   onDeleteActivity,
+  onUpdateTimeActivity,
   onSaveLearnedWords,
   userProfile,
   onSaveDailySentence,
@@ -83,6 +86,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   t,
 }) => {
   const isEn = currentLanguage === 'en';
+
+  // Inline time editing state for individual activity row
+  const [editingTimeActivityId, setEditingTimeActivityId] = useState<string | null>(null);
+  const [editingTimeValue, setEditingTimeValue] = useState<string>('');
   const currentDayList = routinesByDay[selectedDay] || [];
   const sortedActivities = [...currentDayList].sort((a, b) => a.time.localeCompare(b.time));
 
@@ -245,14 +252,16 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       ? activeActivity.teacherVideos[0]
       : null;
 
-  const defaultVideoUrl =
-    assignedVideo?.url || 'https://www.youtube.com/watch?v=yYJ4wK_K8mQ';
+  const rawVideoUrl = assignedVideo?.videoId || assignedVideo?.url || '';
+  const validVidId = extractYouTubeVideoId(rawVideoUrl);
+  // Fallback to verified valid video (OT1YRzt1f8A - BBC Learning English Eating habits) if none assigned
+  const defaultVideoUrl = validVidId ? `https://www.youtube.com/watch?v=${validVidId}` : 'https://www.youtube.com/watch?v=OT1YRzt1f8A';
   const defaultVideoTitle =
     assignedVideo?.title ||
     (activeActivity
       ? `English Routine: ${getActivityDisplayName(activeActivity.activityName, currentLanguage)}`
       : 'Morning Coffee & Routine in English');
-  const embedUrl = getYouTubeEmbedUrl(defaultVideoUrl);
+  const embedUrl = getYouTubeEmbedUrl(validVidId || 'OT1YRzt1f8A');
 
   // Active Spotify suggestion
   const spotifyData: TeacherAssignedSpotify =
@@ -464,23 +473,104 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                         />
                       </button>
 
-                      <span
-                        className={`text-[10px] font-mono font-bold ${
-                          isSelected ? 'text-[#9AB4FF]' : 'text-[#1C4C96]'
-                        }`}
-                      >
-                        {formatToAmPm(act.time)}
-                      </span>
+                      {/* Time display with punctual inline edit */}
+                      {editingTimeActivityId === act.id ? (
+                        <div
+                          className="flex items-center gap-1 bg-white px-1 py-0.5 rounded border border-[#1C4C96] shadow-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="time"
+                            value={editingTimeValue}
+                            onChange={(e) => setEditingTimeValue(e.target.value)}
+                            className="text-[10px] font-mono font-bold text-[#000035] bg-transparent focus:outline-hidden"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (editingTimeValue && onUpdateTimeActivity) {
+                                onUpdateTimeActivity(act.id, editingTimeValue);
+                              }
+                              setEditingTimeActivityId(null);
+                            }}
+                            className="p-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                            title={isEn ? 'Save time' : 'Salvar horário'}
+                          >
+                            <Check className="w-2.5 h-2.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingTimeActivityId(null);
+                            }}
+                            className="p-0.5 rounded bg-slate-200 text-slate-700 hover:bg-slate-300 cursor-pointer"
+                            title={isEn ? 'Cancel' : 'Cancelar'}
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingTimeActivityId(act.id);
+                            setEditingTimeValue(act.time || '08:00');
+                          }}
+                          className={`group/time flex items-center gap-1 px-1.5 py-0.5 rounded transition text-[10px] font-mono font-bold cursor-pointer ${
+                            isSelected
+                              ? 'text-[#9AB4FF] hover:bg-white/10 hover:text-white'
+                              : 'text-[#1C4C96] hover:bg-slate-200/70 hover:text-[#062863]'
+                          }`}
+                          title={isEn ? 'Click to change activity time' : 'Clique para alterar pontualmente o horário desta atividade'}
+                        >
+                          <span>{formatToAmPm(act.time)}</span>
+                          <Edit3 className="w-2.5 h-2.5 opacity-0 group-hover/time:opacity-100 transition shrink-0" />
+                        </button>
+                      )}
 
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
-                          isSelected
+                      {/* Accurate Activity Type Badge */}
+                      {(() => {
+                        const isVideoAct =
+                          (act.teacherVideos && act.teacherVideos.length > 0) ||
+                          act.id.endsWith('1') ||
+                          act.activityName?.toLowerCase().includes('vídeo') ||
+                          act.activityName?.toLowerCase().includes('video');
+
+                        const isAudioAct =
+                          Boolean(act.teacherSpotify) ||
+                          act.id.endsWith('2') ||
+                          act.activityName?.toLowerCase().includes('áudio') ||
+                          act.activityName?.toLowerCase().includes('audio') ||
+                          act.activityName?.toLowerCase().includes('podcast');
+
+                        const badgeLabel = isVideoAct
+                          ? isEn ? 'Video of the Day' : 'Vídeo do Dia'
+                          : isAudioAct
+                          ? isEn ? 'Audio / Podcast' : 'Áudio do Dia'
+                          : isEn ? 'Daily Activity' : 'Atividade Diária';
+
+                        const badgeClasses = isVideoAct
+                          ? isSelected
                             ? 'bg-[#1C4C96] text-[#9AB4FF]'
                             : 'bg-[#9AB4FF]/20 text-[#062863]'
-                        }`}
-                      >
-                        Video Ready
-                      </span>
+                          : isAudioAct
+                          ? isSelected
+                            ? 'bg-emerald-800 text-emerald-200'
+                            : 'bg-emerald-100 text-emerald-800'
+                          : isSelected
+                          ? 'bg-white/10 text-slate-300'
+                          : 'bg-slate-100 text-slate-600';
+
+                        return (
+                          <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded whitespace-nowrap ${badgeClasses}`}>
+                            {badgeLabel}
+                          </span>
+                        );
+                      })()}
 
                       <span
                         className={`text-[9px] font-bold ${

@@ -11,6 +11,10 @@ import {
   ExternalLink,
   User,
   Sparkles,
+  Loader2,
+  AlertCircle,
+  ListVideo,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   RoutineItem,
@@ -124,6 +128,107 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
   // Save feedback state per day
   const [savedDayFeedback, setSavedDayFeedback] = useState<Record<string, boolean>>({});
+
+  // YouTube Playlist & Anti-Repetition Video Assignment State
+  const [playlists, setPlaylists] = useState<any[]>([]);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>('pl-eating-habits');
+  const [studentAssignments, setStudentAssignments] = useState<any[]>([]);
+  const [studentWatched, setStudentWatched] = useState<string[]>([]);
+  const [assignLoadingDay, setAssignLoadingDay] = useState<string | null>(null);
+  const [assignFeedback, setAssignFeedback] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
+
+  const activeStudentEmail = selectedStudentEmail || students[0]?.email;
+
+  // Fetch all playlists
+  React.useEffect(() => {
+    fetch('/api/youtube-playlists')
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setPlaylists(data);
+          if (!selectedPlaylistId) {
+            setSelectedPlaylistId(data[0].id);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch student video assignment & watch history
+  const loadStudentAssignmentHistory = React.useCallback(() => {
+    if (!activeStudentEmail) return;
+    fetch(`/api/student-video-assignments?studentEmail=${encodeURIComponent(activeStudentEmail)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data) {
+          setStudentAssignments(data.assignments || []);
+          setStudentWatched(data.watched || []);
+        }
+      })
+      .catch(() => {});
+  }, [activeStudentEmail]);
+
+  React.useEffect(() => {
+    loadStudentAssignmentHistory();
+  }, [loadStudentAssignmentHistory]);
+
+  // Handler: Assign strict exclusive unseen video from playlist
+  const handleAssignExclusive = async (dayId: DayOfWeek) => {
+    if (!activeStudentEmail) {
+      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para atribuir vídeo exclusivo.' });
+      return;
+    }
+
+    const dayItems = (routinesByDay && routinesByDay[dayId]) || [];
+    const targetActivity = dayItems[0];
+    if (!targetActivity) return;
+
+    setAssignLoadingDay(dayId);
+    setAssignFeedback(null);
+
+    try {
+      const res = await fetch('/api/student-video-assignments/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeStudentEmail,
+          playlistId: selectedPlaylistId,
+          activityId: targetActivity.id,
+          day: dayId,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.allConsumed) {
+        setAssignFeedback({
+          type: 'warning',
+          message: data.message || `Todos os vídeos da playlist selecionada já foram atribuídos ou assistidos por este aluno.`,
+        });
+      } else if (data.success && data.video) {
+        setYoutubeUrls((prev) => ({ ...prev, [dayId]: data.video.url }));
+        if (onTeacherSaveVideos) {
+          onTeacherSaveVideos(targetActivity.id, [data.video], data.video.instructions, false, [dayId]);
+        }
+        setAssignFeedback({
+          type: 'success',
+          message: `✨ Vídeo exclusivo inédito atribuído para ${dayId.toUpperCase()}: "${data.video.title}" (${data.remainingUnseen} restantes)`,
+        });
+        loadStudentAssignmentHistory();
+      } else {
+        setAssignFeedback({
+          type: 'error',
+          message: data.error || 'Erro ao atribuir vídeo exclusivo.',
+        });
+      }
+    } catch {
+      setAssignFeedback({
+        type: 'error',
+        message: 'Erro na conexão ao atribuir vídeo exclusivo.',
+      });
+    } finally {
+      setAssignLoadingDay(null);
+    }
+  };
 
   // Sync if routinesByDay updates
   React.useEffect(() => {
@@ -250,7 +355,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
       {/* TABLE 1: Assign YouTube Videos (Matching attached image 3) */}
       <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-xs overflow-hidden">
-        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
               <Youtube className="w-4 h-4" />
@@ -260,11 +365,98 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 Assign YouTube Videos
               </h3>
               <p className="text-[11px] text-slate-500 font-normal">
-                Paste daily YouTube links for listening practice throughout the week
+                Paste daily YouTube links or assign exclusive unseen videos from curated playlists
               </p>
             </div>
           </div>
+
+          {/* Anti-Repetition Playlist Selector */}
+          {playlists.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-xl border border-slate-300 shadow-2xs">
+                <ListVideo className="w-3.5 h-3.5 text-[#1C4C96]" />
+                <span className="text-[11px] font-bold text-slate-700">Playlist:</span>
+                <select
+                  value={selectedPlaylistId}
+                  onChange={(e) => setSelectedPlaylistId(e.target.value)}
+                  className="text-xs font-bold text-[#000035] bg-transparent focus:outline-hidden cursor-pointer"
+                >
+                  {playlists.map((pl) => (
+                    <option key={pl.id} value={pl.id}>
+                      {pl.title} ({pl.videos?.length || 0} vídeos)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Real-time anti-repetition counter badge */}
+              {(() => {
+                const currentPl = playlists.find((p) => p.id === selectedPlaylistId) || playlists[0];
+                const consumed = new Set<string>();
+                studentWatched.forEach((id) => {
+                  const cid = extractYouTubeVideoId(id);
+                  if (cid) consumed.add(cid);
+                });
+                studentAssignments.forEach((assign) => {
+                  const cid = extractYouTubeVideoId(assign.videoId || assign.videoUrl);
+                  if (cid) consumed.add(cid);
+                });
+
+                const totalVids = currentPl?.videos?.length || 0;
+                const unseenVids = (currentPl?.videos || []).filter((v: any) => {
+                  const vid = extractYouTubeVideoId(v.videoId || v.url || v.id);
+                  return vid && !consumed.has(vid);
+                }).length;
+
+                return (
+                  <span
+                    className={`text-[10px] font-bold px-2 py-1 rounded-lg border flex items-center gap-1 ${
+                      unseenVids > 0
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                        : 'bg-amber-50 text-amber-800 border-amber-300'
+                    }`}
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-500" />
+                    <span>
+                      {unseenVids > 0
+                        ? `${unseenVids} de ${totalVids} vídeos inéditos para este aluno`
+                        : `Todos os ${totalVids} vídeos já atribuídos/assistidos`}
+                    </span>
+                  </span>
+                );
+              })()}
+            </div>
+          )}
         </div>
+
+        {/* Dynamic Assignment Feedback Alert */}
+        {assignFeedback && (
+          <div
+            className={`px-4 py-2.5 text-xs font-semibold flex items-center justify-between border-b ${
+              assignFeedback.type === 'success'
+                ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                : assignFeedback.type === 'warning'
+                ? 'bg-amber-50 text-amber-900 border-amber-200'
+                : 'bg-rose-50 text-rose-900 border-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {assignFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              )}
+              <span>{assignFeedback.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAssignFeedback(null)}
+              className="text-slate-400 hover:text-slate-600 font-bold ml-2 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -279,6 +471,8 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               {WEEK_DAYS.map((day) => {
                 const isSaved = savedDayFeedback[`yt-${day.id}`];
                 const currentUrl = youtubeUrls[day.id] || '';
+                const isAssigningThisDay = assignLoadingDay === day.id;
+
                 return (
                   <tr key={day.id} className="hover:bg-slate-50/70 transition">
                     {/* Day column */}
@@ -293,7 +487,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                       </span>
                     </td>
 
-                    {/* Youtube Video URL input row with Trash and Save button */}
+                    {/* Youtube Video URL input row with Trash, Exclusive Video button, and Save button */}
                     <td className="p-3">
                       <div className="flex items-center gap-2">
                         <div className="relative flex-1">
@@ -307,6 +501,22 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             className="w-full px-3 py-1.5 text-xs text-[#000035] bg-slate-50 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#1C4C96] focus:bg-white transition"
                           />
                         </div>
+
+                        {/* Exclusive Unseen Video Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleAssignExclusive(day.id)}
+                          disabled={isAssigningThisDay}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition flex items-center gap-1 shrink-0 bg-amber-400 hover:bg-amber-300 text-[#000035] border border-amber-500/40 disabled:opacity-50 cursor-pointer shadow-2xs"
+                          title="Atribuir estritamente um vídeo inédito da playlist selecionada (anti-repetição)"
+                        >
+                          {isAssigningThisDay ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5 text-[#000035]" />
+                          )}
+                          <span className="whitespace-nowrap">Vídeo Exclusivo</span>
+                        </button>
 
                         {currentUrl && (
                           <button

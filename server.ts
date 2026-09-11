@@ -43,6 +43,9 @@ interface AppDb {
   studentDictionaryMap?: Record<string, any[]>;
   authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
   transactions?: any[];
+  youtubePlaylists?: any[];
+  studentVideoAssignments?: Record<string, any[]>;
+  studentWatchedVideos?: Record<string, string[]>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -3389,6 +3392,227 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
   });
   writeDb(db);
   res.json({ success: true });
+});
+
+// Helper for server-side clean YouTube ID extraction
+function extractServerYouTubeId(urlOrId: string | null | undefined): string | null {
+  if (!urlOrId) return null;
+  const clean = urlOrId.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
+  const match = clean.match(
+    /(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i
+  );
+  return match && match[1] && match[1].length === 11 ? match[1] : null;
+}
+
+// 7.0 YouTube Playlists & Anti-Repetition Exclusive Video Assignment Endpoints
+app.get('/api/youtube-playlists', (req, res) => {
+  const db = readDb();
+  res.json(db.youtubePlaylists || []);
+});
+
+app.get('/api/student-video-assignments', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const assignments = (studentEmail && db.studentVideoAssignments?.[studentEmail]) || [];
+  const watched = (studentEmail && db.studentWatchedVideos?.[studentEmail]) || [];
+  res.json({ assignments, watched });
+});
+
+app.post('/api/student-video-assignments/assign', (req, res) => {
+  const db = readDb();
+  const { studentEmail, playlistId, activityId, day, teacherNotes } = req.body;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  if (!cleanEmail) {
+    return res.status(400).json({ error: 'studentEmail is required' });
+  }
+
+  const playlists = db.youtubePlaylists || [];
+  const playlist = playlists.find((p: any) => p.id === playlistId) || playlists[0];
+
+  if (!playlist || !playlist.videos || playlist.videos.length === 0) {
+    return res.status(404).json({ error: 'Playlist not found or has no videos' });
+  }
+
+  if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+
+  const userAssignments = db.studentVideoAssignments[cleanEmail] || [];
+  const userWatched = db.studentWatchedVideos[cleanEmail] || [];
+
+  // Consumed video IDs: already watched OR already assigned to this specific student
+  const consumedVideoIds = new Set<string>();
+  userWatched.forEach((id: string) => {
+    const cid = extractServerYouTubeId(id);
+    if (cid) consumedVideoIds.add(cid);
+  });
+  userAssignments.forEach((assign: any) => {
+    const cid = extractServerYouTubeId(assign.videoId || assign.videoUrl);
+    if (cid) consumedVideoIds.add(cid);
+  });
+
+  // Strict anti-repetition: find the next video in this playlist that is NOT in consumedVideoIds
+  const unseenVideo = playlist.videos.find((v: any) => {
+    const vid = extractServerYouTubeId(v.videoId || v.url || v.id);
+    return vid && !consumedVideoIds.has(vid);
+  });
+
+  if (!unseenVideo) {
+    return res.json({
+      success: false,
+      allConsumed: true,
+      playlistTitle: playlist.title,
+      totalVideos: playlist.videos.length,
+      consumedCount: playlist.videos.length,
+      message: `Todos os ${playlist.videos.length} vídeos da playlist "${playlist.title}" já foram atribuídos ou assistidos por este aluno.`,
+    });
+  }
+
+  const validVidId = extractServerYouTubeId(unseenVideo.videoId || unseenVideo.url || unseenVideo.id)!;
+  const cleanVideoUrl = `https://www.youtube.com/watch?v=${validVidId}`;
+
+  const assignedVideoObj = {
+    id: `vid-${day || 'day'}-${Date.now()}`,
+    url: cleanVideoUrl,
+    videoId: validVidId,
+    title: unseenVideo.title,
+    duration: unseenVideo.duration || '5-10 min',
+    instructions:
+      teacherNotes ||
+      unseenVideo.instructions ||
+      `Vídeo exclusivo da playlist "${playlist.title}". Assista com atenção e anote 5 novas palavras.`,
+    addedAt: new Date().toISOString(),
+    playlistId: playlist.id,
+    playlistTitle: playlist.title,
+  };
+
+  // Record assignment in student's history
+  const assignmentRecord = {
+    id: `assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    activityId: activityId || 'act-1',
+    studentEmail: cleanEmail,
+    studentUid: '',
+    day: day || 'monday',
+    playlistId: playlist.id,
+    playlistTitle: playlist.title,
+    videoId: validVidId,
+    videoTitle: unseenVideo.title,
+    videoUrl: cleanVideoUrl,
+    assignedAt: new Date().toISOString(),
+  };
+
+  if (!db.studentVideoAssignments[cleanEmail]) {
+    db.studentVideoAssignments[cleanEmail] = [];
+  }
+  db.studentVideoAssignments[cleanEmail].push(assignmentRecord);
+
+  // Update routine in db.routinesByDay and db.studentRoutinesMap
+  const targetDay = day || 'monday';
+  if (db.routinesByDay && db.routinesByDay[targetDay]) {
+    db.routinesByDay[targetDay] = db.routinesByDay[targetDay].map((act: any) => {
+      const match = activityId ? act.id === activityId : (act.id.endsWith('1') || act.activityName?.toLowerCase().includes('vídeo') || act.activityName?.toLowerCase().includes('video'));
+      if (match) {
+        return {
+          ...act,
+          teacherVideos: [assignedVideoObj],
+          teacherNotes: assignedVideoObj.instructions,
+        };
+      }
+      return act;
+    });
+  }
+
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+  if (!db.studentRoutinesMap[cleanEmail]) {
+    db.studentRoutinesMap[cleanEmail] = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+  }
+  if (db.studentRoutinesMap[cleanEmail]?.[targetDay]) {
+    db.studentRoutinesMap[cleanEmail][targetDay] = db.studentRoutinesMap[cleanEmail][targetDay].map((act: any) => {
+      const match = activityId ? act.id === activityId : (act.id.endsWith('1') || act.activityName?.toLowerCase().includes('vídeo') || act.activityName?.toLowerCase().includes('video'));
+      if (match) {
+        return {
+          ...act,
+          teacherVideos: [assignedVideoObj],
+          teacherNotes: assignedVideoObj.instructions,
+        };
+      }
+      return act;
+    });
+  }
+
+  writeDb(db);
+
+  // Count remaining unseen videos in this playlist for this student
+  const remainingUnseen = playlist.videos.filter((v: any) => {
+    const vid = extractServerYouTubeId(v.videoId || v.url || v.id);
+    return vid && !consumedVideoIds.has(vid) && vid !== validVidId;
+  }).length;
+
+  res.json({
+    success: true,
+    video: assignedVideoObj,
+    playlistTitle: playlist.title,
+    playlistId: playlist.id,
+    remainingUnseen,
+    totalVideos: playlist.videos.length,
+    message: `Vídeo exclusivo "${unseenVideo.title}" atribuído com sucesso!`,
+  });
+});
+
+app.post('/api/student-video-assignments/watch', (req, res) => {
+  const db = readDb();
+  const { studentEmail, videoId } = req.body;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanVidId = extractServerYouTubeId(videoId);
+
+  if (!cleanEmail || !cleanVidId) {
+    return res.status(400).json({ error: 'studentEmail and valid videoId are required' });
+  }
+
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+  if (!db.studentWatchedVideos[cleanEmail]) db.studentWatchedVideos[cleanEmail] = [];
+
+  if (!db.studentWatchedVideos[cleanEmail].includes(cleanVidId)) {
+    db.studentWatchedVideos[cleanEmail].push(cleanVidId);
+    writeDb(db);
+  }
+
+  res.json({
+    success: true,
+    watchedCount: db.studentWatchedVideos[cleanEmail].length,
+    watchedVideos: db.studentWatchedVideos[cleanEmail],
+  });
+});
+
+app.post('/api/routines/update-time', (req, res) => {
+  const db = readDb();
+  const { day, activityId, time, studentEmail } = req.body;
+  if (!day || !activityId || !time) {
+    return res.status(400).json({ error: 'day, activityId, and time are required' });
+  }
+
+  if (db.routinesByDay && db.routinesByDay[day]) {
+    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) =>
+      item.id === activityId ? { ...item, time } : item
+    );
+  }
+
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  if (cleanEmail) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentRoutinesMap[cleanEmail]) {
+      db.studentRoutinesMap[cleanEmail] = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    }
+    if (db.studentRoutinesMap[cleanEmail]?.[day]) {
+      db.studentRoutinesMap[cleanEmail][day] = db.studentRoutinesMap[cleanEmail][day].map((item: any) =>
+        item.id === activityId ? { ...item, time } : item
+      );
+    }
+  }
+
+  writeDb(db);
+  res.json({ success: true, day, activityId, time });
 });
 
 // 7.1 Student Weekly S-Path Progress Endpoints (Multi-device cloud persistence)

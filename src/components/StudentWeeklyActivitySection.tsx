@@ -633,9 +633,19 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                         <Icon className="w-4 h-4" />
                       </div>
                       <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                        <span className="text-[11px] font-mono font-bold text-[#9AB4FF] px-1.5 py-0.5 rounded bg-[#000035]/70 border border-[#9AB4FF]/20 shrink-0">
-                          {row.time}
-                        </span>
+                        {(() => {
+                          const displayTime =
+                            row.id === 'video_day'
+                              ? userProfile?.routineVideoTime || row.time
+                              : row.id === 'audio_day'
+                              ? userProfile?.routineAudioTime || row.time
+                              : row.time;
+                          return (
+                            <span className="text-[11px] font-mono font-bold text-[#9AB4FF] px-1.5 py-0.5 rounded bg-[#000035]/70 border border-[#9AB4FF]/20 shrink-0">
+                              {displayTime}
+                            </span>
+                          );
+                        })()}
                         <h4 className="text-xs sm:text-sm font-black text-white truncate">
                           {isEn ? row.titleEn : row.titlePt}
                         </h4>
