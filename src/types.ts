@@ -126,6 +126,8 @@ export interface TeacherAssignedVideo {
   duration?: string;
   instructions?: string;
   addedAt?: string;
+  playlistId?: string;
+  playlistTitle?: string;
 }
 
 export interface TeacherAssignedSpotify {

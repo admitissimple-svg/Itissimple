@@ -7,6 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestore, getFirestoreDb } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
+import { defaultRoutinesByDay } from './src/data/defaultRoutines';
 
 const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
@@ -93,7 +94,7 @@ const DEFAULT_DB: AppDb = {
   teacherSettings: {},
   liveLessons: [],
   chatMessages: [],
-  routinesByDay: {},
+  routinesByDay: defaultRoutinesByDay,
   studentRoutinesMap: {},
   contractedLessons: {},
   userProfiles: {
@@ -128,6 +129,10 @@ function mergeDbWithDefaults(parsed: any): AppDb {
   return {
     ...DEFAULT_DB,
     ...(parsed || {}),
+    routinesByDay:
+      parsed && parsed.routinesByDay && Object.keys(parsed.routinesByDay).length > 0
+        ? parsed.routinesByDay
+        : defaultRoutinesByDay,
     studentWeeklyChecks: (parsed && parsed.studentWeeklyChecks) || {},
     studentDictionaryMap: (parsed && parsed.studentDictionaryMap) || {},
     authUsers: (parsed && parsed.authUsers) || DEFAULT_DB.authUsers,
@@ -2788,17 +2793,74 @@ app.post('/api/students/cancel', (req, res) => {
   res.json({ success: true, students: db.students });
 });
 
+// Helper to resolve student email and UID bi-directionally
+function resolveStudentIdentifiers(
+  db: AppDb,
+  emailOrUid?: string | null,
+  explicitUid?: string | null
+): { email: string; uid: string } {
+  let email = (emailOrUid && emailOrUid.includes('@') ? emailOrUid : '').toLowerCase().trim();
+  let uid = (explicitUid || (!emailOrUid?.includes('@') ? (emailOrUid || '') : '')).trim();
+
+  // If email is known but uid is not, resolve uid from students, userProfiles, or authUsers
+  if (email && !uid) {
+    const student = (db.students || []).find((s: any) =>
+      ((s.email || s.studentEmail || '').toLowerCase().trim() === email)
+    );
+    if (student?.uid || student?.id) uid = (student.uid || student.id).trim();
+
+    if (!uid) {
+      const authUser = Object.values(db.authUsers || {}).find((u: any) => (u.email || '').toLowerCase().trim() === email);
+      if (authUser?.uid) uid = authUser.uid.trim();
+    }
+    if (!uid && db.userProfiles?.[email]?.uid) {
+      uid = db.userProfiles[email].uid.trim();
+    }
+  }
+
+  // If uid is known but email is not, resolve email from students, userProfiles, or authUsers
+  if (uid && !email) {
+    const student = (db.students || []).find((s: any) => (s.uid === uid || s.id === uid));
+    if (student?.email || student?.studentEmail) {
+      email = (student.email || student.studentEmail).toLowerCase().trim();
+    }
+
+    if (!email) {
+      const authUser = Object.values(db.authUsers || {}).find((u: any) => u.uid === uid);
+      if (authUser?.email) email = authUser.email.toLowerCase().trim();
+    }
+  }
+
+  return { email, uid };
+}
+
+// Helper for server-side clean YouTube ID extraction
+function extractServerYouTubeId(urlOrId: string | null | undefined): string | null {
+  if (!urlOrId) return null;
+  const clean = urlOrId.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
+  const match = clean.match(
+    /(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i
+  );
+  return match && match[1] && match[1].length === 11 ? match[1] : null;
+}
+
 app.get('/api/student-routines', (req, res) => {
   const db = readDb();
   const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
-  const uid = (req.query.uid as string) || '';
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const resolved = resolveStudentIdentifiers(db, studentEmail, uid);
 
-  if (studentEmail || uid) {
-    const routines =
-      (uid && db.studentRoutinesMap?.[uid]) ||
-      (studentEmail && db.studentRoutinesMap?.[studentEmail]) ||
-      {};
-    return res.json(routines);
+  let routines =
+    (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) ||
+    (resolved.email && db.studentRoutinesMap?.[resolved.email]) ||
+    (studentEmail && db.studentRoutinesMap?.[studentEmail]) ||
+    null;
+
+  if (routines && typeof routines === 'object' && Object.keys(routines).length > 0) {
+    const base = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    const merged = { ...base, ...routines };
+    return res.json(merged);
   }
   res.json(db.routinesByDay || {});
 });
@@ -3330,10 +3392,14 @@ app.post('/api/routines', (req, res) => {
   const db = readDb();
   const routinesByDay = req.body.routinesByDay || req.body;
   const studentEmail = req.body.studentEmail;
+  const studentUid = req.body.studentUid || req.body.uid;
   if (routinesByDay && typeof routinesByDay === 'object') {
     db.routinesByDay = routinesByDay;
-    if (studentEmail) {
-      db.studentRoutinesMap[studentEmail.toLowerCase().trim()] = routinesByDay;
+    if (studentEmail || studentUid) {
+      if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+      const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+      if (email) db.studentRoutinesMap[email] = routinesByDay;
+      if (uid) db.studentRoutinesMap[uid] = routinesByDay;
     }
     writeDb(db);
   }
@@ -3366,44 +3432,217 @@ app.post('/api/routines/toggle', (req, res) => {
 
 app.post('/api/routines/teacher-video', (req, res) => {
   const db = readDb();
-  const { activityId, videos, teacherNotes, days } = req.body;
-  const targetDays = Array.isArray(days) && days.length > 0 ? days : Object.keys(db.routinesByDay || {});
+  const {
+    activityId,
+    activityName,
+    playlistTitle,
+    playlistId,
+    videos,
+    teacherNotes,
+    days,
+    day,
+    studentEmail,
+    studentUid,
+    teacherUid,
+    teacherEmail,
+  } = req.body;
+
+  const targetDays: string[] = Array.isArray(days) && days.length > 0
+    ? days
+    : day
+    ? [day]
+    : Object.keys(db.routinesByDay || {});
+
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const resolvedTopicTitle = activityName || playlistTitle || videos?.[0]?.playlistTitle;
+
+  // 1. Update global db.routinesByDay for fallback
   targetDays.forEach((d: string) => {
     if (db.routinesByDay && db.routinesByDay[d]) {
       db.routinesByDay[d] = db.routinesByDay[d].map((item: any) =>
-        item.id === activityId ? { ...item, teacherVideos: videos, teacherNotes: teacherNotes || item.teacherNotes } : item
+        item.id === activityId || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')
+          ? {
+              ...item,
+              activityName: resolvedTopicTitle || item.activityName,
+              teacherVideos: videos,
+              teacherNotes: teacherNotes || item.teacherNotes,
+            }
+          : item
       );
     }
   });
+
+  // 2. If student is identified, persist to studentRoutinesMap and studentVideoAssignments
+  if (email || uid) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+
+    let existingRoutines =
+      (email && db.studentRoutinesMap[email]) ||
+      (uid && db.studentRoutinesMap[uid]) ||
+      null;
+
+    if (!existingRoutines || typeof existingRoutines !== 'object' || Object.keys(existingRoutines).length === 0) {
+      existingRoutines = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    } else {
+      const defaultDays = Object.keys(db.routinesByDay || {});
+      defaultDays.forEach((d) => {
+        if (!existingRoutines[d] || !Array.isArray(existingRoutines[d]) || existingRoutines[d].length === 0) {
+          existingRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay[d] || []));
+        }
+      });
+    }
+
+    targetDays.forEach((d: string) => {
+      if (existingRoutines && existingRoutines[d]) {
+        let matched = false;
+        existingRoutines[d] = existingRoutines[d].map((item: any) => {
+          const match = activityId
+            ? item.id === activityId
+            : item.id?.endsWith('1') || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo');
+          if (match) {
+            matched = true;
+            return {
+              ...item,
+              activityName: resolvedTopicTitle || item.activityName,
+              teacherVideos: videos,
+              teacherNotes: teacherNotes || item.teacherNotes,
+            };
+          }
+          return item;
+        });
+        if (!matched && existingRoutines[d].length > 0) {
+          existingRoutines[d][0] = {
+            ...existingRoutines[d][0],
+            activityName: resolvedTopicTitle || existingRoutines[d][0].activityName,
+            teacherVideos: videos,
+            teacherNotes: teacherNotes || existingRoutines[d][0].teacherNotes,
+          };
+        }
+      }
+
+      // Record in studentVideoAssignments for anti-repetition history
+      const keysToUpdate = [email, uid].filter(Boolean) as string[];
+      keysToUpdate.forEach((key) => {
+        if (!db.studentVideoAssignments[key]) db.studentVideoAssignments[key] = [];
+        db.studentVideoAssignments[key] = db.studentVideoAssignments[key].filter(
+          (a: any) => a.day !== d
+        );
+
+        if (Array.isArray(videos) && videos.length > 0 && videos[0]?.url) {
+          const validVidId = extractServerYouTubeId(videos[0].videoId || videos[0].url) || '';
+          const newAssignment = {
+            id: `assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            activityId: activityId || 'act-1',
+            studentEmail: email,
+            studentUid: uid,
+            teacherUid: (teacherUid || '').trim(),
+            teacherEmail: (teacherEmail || '').trim(),
+            day: d,
+            playlistId: videos[0].playlistId || 'custom-teacher-url',
+            playlistTitle: videos[0].playlistTitle || 'Teacher Assigned Custom Video',
+            videoId: validVidId,
+            videoTitle: videos[0].title || 'Teacher Assigned Video',
+            videoUrl: videos[0].url,
+            assignedAt: new Date().toISOString(),
+          };
+          db.studentVideoAssignments[key].push(newAssignment);
+        }
+      });
+    });
+
+    if (email) db.studentRoutinesMap[email] = existingRoutines;
+    if (uid) db.studentRoutinesMap[uid] = existingRoutines;
+  }
+
   writeDb(db);
-  res.json({ success: true });
+  res.json({ success: true, updatedDays: targetDays, studentEmail: email, studentUid: uid });
 });
 
 app.post('/api/routines/teacher-spotify', (req, res) => {
   const db = readDb();
-  const { activityId, spotify, teacherNotes, days } = req.body;
-  const targetDays = Array.isArray(days) && days.length > 0 ? days : Object.keys(db.routinesByDay || {});
+  const {
+    activityId,
+    spotify,
+    teacherNotes,
+    days,
+    day,
+    studentEmail,
+    studentUid,
+    teacherUid,
+    teacherEmail,
+  } = req.body;
+
+  const targetDays: string[] = Array.isArray(days) && days.length > 0
+    ? days
+    : day
+    ? [day]
+    : Object.keys(db.routinesByDay || {});
+
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
   targetDays.forEach((d: string) => {
     if (db.routinesByDay && db.routinesByDay[d]) {
       db.routinesByDay[d] = db.routinesByDay[d].map((item: any) =>
-        item.id === activityId ? { ...item, teacherSpotify: spotify, teacherNotes: teacherNotes || item.teacherNotes } : item
+        item.id === activityId || item.activityName?.toLowerCase().includes('podcast') || item.activityName?.toLowerCase().includes('áudio')
+          ? { ...item, teacherSpotify: spotify, teacherNotes: teacherNotes || item.teacherNotes }
+          : item
       );
     }
   });
-  writeDb(db);
-  res.json({ success: true });
-});
 
-// Helper for server-side clean YouTube ID extraction
-function extractServerYouTubeId(urlOrId: string | null | undefined): string | null {
-  if (!urlOrId) return null;
-  const clean = urlOrId.trim();
-  if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
-  const match = clean.match(
-    /(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i
-  );
-  return match && match[1] && match[1].length === 11 ? match[1] : null;
-}
+  if (email || uid) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    let existingRoutines =
+      (email && db.studentRoutinesMap[email]) ||
+      (uid && db.studentRoutinesMap[uid]) ||
+      null;
+
+    if (!existingRoutines || typeof existingRoutines !== 'object' || Object.keys(existingRoutines).length === 0) {
+      existingRoutines = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    } else {
+      const defaultDays = Object.keys(db.routinesByDay || {});
+      defaultDays.forEach((d) => {
+        if (!existingRoutines[d] || !Array.isArray(existingRoutines[d]) || existingRoutines[d].length === 0) {
+          existingRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay[d] || []));
+        }
+      });
+    }
+
+    targetDays.forEach((d: string) => {
+      if (existingRoutines && existingRoutines[d]) {
+        let matched = false;
+        existingRoutines[d] = existingRoutines[d].map((item: any) => {
+          const match = activityId
+            ? item.id === activityId
+            : item.id?.endsWith('2') || item.activityName?.toLowerCase().includes('podcast') || item.activityName?.toLowerCase().includes('áudio');
+          if (match) {
+            matched = true;
+            return {
+              ...item,
+              teacherSpotify: spotify,
+              teacherNotes: teacherNotes || item.teacherNotes,
+            };
+          }
+          return item;
+        });
+        if (!matched && existingRoutines[d].length > 0) {
+          existingRoutines[d][0] = {
+            ...existingRoutines[d][0],
+            teacherSpotify: spotify,
+            teacherNotes: teacherNotes || existingRoutines[d][0].teacherNotes,
+          };
+        }
+      }
+    });
+
+    if (email) db.studentRoutinesMap[email] = existingRoutines;
+    if (uid) db.studentRoutinesMap[uid] = existingRoutines;
+  }
+
+  writeDb(db);
+  res.json({ success: true, updatedDays: targetDays, studentEmail: email, studentUid: uid });
+});
 
 // 7.0 YouTube Playlists & Anti-Repetition Exclusive Video Assignment Endpoints
 app.get('/api/youtube-playlists', (req, res) => {
@@ -3414,18 +3653,31 @@ app.get('/api/youtube-playlists', (req, res) => {
 app.get('/api/student-video-assignments', (req, res) => {
   const db = readDb();
   const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
-  const assignments = (studentEmail && db.studentVideoAssignments?.[studentEmail]) || [];
-  const watched = (studentEmail && db.studentWatchedVideos?.[studentEmail]) || [];
-  res.json({ assignments, watched });
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const { email, uid: resolvedUid } = resolveStudentIdentifiers(db, studentEmail, uid);
+
+  const assignments =
+    (resolvedUid && db.studentVideoAssignments?.[resolvedUid]) ||
+    (email && db.studentVideoAssignments?.[email]) ||
+    (studentEmail && db.studentVideoAssignments?.[studentEmail]) ||
+    [];
+
+  const watched =
+    (resolvedUid && db.studentWatchedVideos?.[resolvedUid]) ||
+    (email && db.studentWatchedVideos?.[email]) ||
+    (studentEmail && db.studentWatchedVideos?.[studentEmail]) ||
+    [];
+
+  res.json({ assignments, watched, studentEmail: email, studentUid: resolvedUid });
 });
 
 app.post('/api/student-video-assignments/assign', (req, res) => {
   const db = readDb();
-  const { studentEmail, playlistId, activityId, day, teacherNotes } = req.body;
-  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const { studentEmail, studentUid, teacherUid, teacherEmail, playlistId, activityId, day, teacherNotes } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
 
-  if (!cleanEmail) {
-    return res.status(400).json({ error: 'studentEmail is required' });
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
   }
 
   const playlists = db.youtubePlaylists || [];
@@ -3438,8 +3690,15 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
   if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
   if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
 
-  const userAssignments = db.studentVideoAssignments[cleanEmail] || [];
-  const userWatched = db.studentWatchedVideos[cleanEmail] || [];
+  const userAssignments =
+    (cleanEmail && db.studentVideoAssignments[cleanEmail]) ||
+    (uid && db.studentVideoAssignments[uid]) ||
+    [];
+
+  const userWatched =
+    (cleanEmail && db.studentWatchedVideos[cleanEmail]) ||
+    (uid && db.studentWatchedVideos[uid]) ||
+    [];
 
   // Consumed video IDs: already watched OR already assigned to this specific student
   const consumedVideoIds = new Set<string>();
@@ -3487,12 +3746,14 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
     playlistTitle: playlist.title,
   };
 
-  // Record assignment in student's history
+  // Record assignment in student's history with studentUid and teacherUid
   const assignmentRecord = {
     id: `assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     activityId: activityId || 'act-1',
     studentEmail: cleanEmail,
-    studentUid: '',
+    studentUid: uid || '',
+    teacherUid: (teacherUid || '').trim(),
+    teacherEmail: (teacherEmail || '').trim(),
     day: day || 'monday',
     playlistId: playlist.id,
     playlistTitle: playlist.title,
@@ -3502,19 +3763,34 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
     assignedAt: new Date().toISOString(),
   };
 
-  if (!db.studentVideoAssignments[cleanEmail]) {
-    db.studentVideoAssignments[cleanEmail] = [];
-  }
-  db.studentVideoAssignments[cleanEmail].push(assignmentRecord);
+  const keysToUpdate = [cleanEmail, uid].filter(Boolean) as string[];
+  keysToUpdate.forEach((key) => {
+    if (!db.studentVideoAssignments[key]) {
+      db.studentVideoAssignments[key] = [];
+    }
+    // Remove older assignment for same day to prevent duplicates
+    db.studentVideoAssignments[key] = db.studentVideoAssignments[key].filter(
+      (a: any) => a.day !== (day || 'monday')
+    );
+    db.studentVideoAssignments[key].push(assignmentRecord);
+  });
 
   // Update routine in db.routinesByDay and db.studentRoutinesMap
   const targetDay = day || 'monday';
+  const playlistTopicTitle = playlist.title || 'YouTube Routine';
+
   if (db.routinesByDay && db.routinesByDay[targetDay]) {
     db.routinesByDay[targetDay] = db.routinesByDay[targetDay].map((act: any) => {
-      const match = activityId ? act.id === activityId : (act.id.endsWith('1') || act.activityName?.toLowerCase().includes('vídeo') || act.activityName?.toLowerCase().includes('video'));
+      const match = activityId
+        ? act.id === activityId
+        : act.id.endsWith('1') ||
+          act.activityName?.toLowerCase().includes('vídeo') ||
+          act.activityName?.toLowerCase().includes('video') ||
+          (db.youtubePlaylists || []).some((pl: any) => pl.title?.toLowerCase() === act.activityName?.toLowerCase());
       if (match) {
         return {
           ...act,
+          activityName: playlistTopicTitle,
           teacherVideos: [assignedVideoObj],
           teacherNotes: assignedVideoObj.instructions,
         };
@@ -3524,15 +3800,34 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
   }
 
   if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
-  if (!db.studentRoutinesMap[cleanEmail]) {
-    db.studentRoutinesMap[cleanEmail] = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+  let studentRoutineObj =
+    (cleanEmail && db.studentRoutinesMap[cleanEmail]) ||
+    (uid && db.studentRoutinesMap[uid]) ||
+    null;
+
+  if (!studentRoutineObj || typeof studentRoutineObj !== 'object' || Object.keys(studentRoutineObj).length === 0) {
+    studentRoutineObj = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+  } else {
+    const defaultDays = Object.keys(db.routinesByDay || {});
+    defaultDays.forEach((d) => {
+      if (!studentRoutineObj[d] || !Array.isArray(studentRoutineObj[d]) || studentRoutineObj[d].length === 0) {
+        studentRoutineObj[d] = JSON.parse(JSON.stringify(db.routinesByDay[d] || []));
+      }
+    });
   }
-  if (db.studentRoutinesMap[cleanEmail]?.[targetDay]) {
-    db.studentRoutinesMap[cleanEmail][targetDay] = db.studentRoutinesMap[cleanEmail][targetDay].map((act: any) => {
-      const match = activityId ? act.id === activityId : (act.id.endsWith('1') || act.activityName?.toLowerCase().includes('vídeo') || act.activityName?.toLowerCase().includes('video'));
+
+  if (studentRoutineObj?.[targetDay]) {
+    studentRoutineObj[targetDay] = studentRoutineObj[targetDay].map((act: any) => {
+      const match = activityId
+        ? act.id === activityId
+        : act.id.endsWith('1') ||
+          act.activityName?.toLowerCase().includes('vídeo') ||
+          act.activityName?.toLowerCase().includes('video') ||
+          (db.youtubePlaylists || []).some((pl: any) => pl.title?.toLowerCase() === act.activityName?.toLowerCase());
       if (match) {
         return {
           ...act,
+          activityName: playlistTopicTitle,
           teacherVideos: [assignedVideoObj],
           teacherNotes: assignedVideoObj.instructions,
         };
@@ -3540,6 +3835,11 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
       return act;
     });
   }
+
+  const routineKeysToUpdate = Array.from(new Set([cleanEmail, uid].filter(Boolean) as string[]));
+  routineKeysToUpdate.forEach((key) => {
+    db.studentRoutinesMap[key] = studentRoutineObj;
+  });
 
   writeDb(db);
 
@@ -3556,32 +3856,41 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
     playlistId: playlist.id,
     remainingUnseen,
     totalVideos: playlist.videos.length,
+    studentEmail: cleanEmail,
+    studentUid: uid,
     message: `Vídeo exclusivo "${unseenVideo.title}" atribuído com sucesso!`,
   });
 });
 
 app.post('/api/student-video-assignments/watch', (req, res) => {
   const db = readDb();
-  const { studentEmail, videoId } = req.body;
-  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const { studentEmail, studentUid, videoId } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
   const cleanVidId = extractServerYouTubeId(videoId);
 
-  if (!cleanEmail || !cleanVidId) {
-    return res.status(400).json({ error: 'studentEmail and valid videoId are required' });
+  if ((!cleanEmail && !uid) || !cleanVidId) {
+    return res.status(400).json({ error: 'studentEmail/studentUid and valid videoId are required' });
   }
 
   if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
-  if (!db.studentWatchedVideos[cleanEmail]) db.studentWatchedVideos[cleanEmail] = [];
 
-  if (!db.studentWatchedVideos[cleanEmail].includes(cleanVidId)) {
-    db.studentWatchedVideos[cleanEmail].push(cleanVidId);
-    writeDb(db);
-  }
+  const keysToUpdate = [cleanEmail, uid].filter(Boolean) as string[];
+  keysToUpdate.forEach((key) => {
+    if (!db.studentWatchedVideos[key]) db.studentWatchedVideos[key] = [];
+    if (!db.studentWatchedVideos[key].includes(cleanVidId)) {
+      db.studentWatchedVideos[key].push(cleanVidId);
+    }
+  });
 
+  writeDb(db);
+
+  const watchedList = (cleanEmail && db.studentWatchedVideos[cleanEmail]) || (uid && db.studentWatchedVideos[uid]) || [];
   res.json({
     success: true,
-    watchedCount: db.studentWatchedVideos[cleanEmail].length,
-    watchedVideos: db.studentWatchedVideos[cleanEmail],
+    watchedCount: watchedList.length,
+    watchedVideos: watchedList,
+    studentEmail: cleanEmail,
+    studentUid: uid,
   });
 });
 

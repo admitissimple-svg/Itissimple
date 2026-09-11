@@ -15,6 +15,7 @@ import {
   AlertCircle,
   ListVideo,
   CheckCircle2,
+  ChevronDown,
 } from 'lucide-react';
 import {
   RoutineItem,
@@ -32,6 +33,8 @@ interface TeacherMediaAssignmentPanelProps {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
   students: GoogleAccount[];
   selectedStudentEmail?: string;
+  selectedStudentUid?: string;
+  currentAccount?: GoogleAccount | null;
   onSelectStudentEmail?: (email: string) => void;
   onTeacherSaveVideos?: (
     activityId: string,
@@ -39,7 +42,9 @@ interface TeacherMediaAssignmentPanelProps {
     teacherNotes?: string,
     replicateToAllDays?: boolean,
     targetDays?: DayOfWeek[],
-    spotify?: TeacherAssignedSpotify | null
+    spotify?: TeacherAssignedSpotify | null,
+    targetStudentEmail?: string,
+    targetStudentUid?: string
   ) => void;
   currentLanguage: Language;
   t: Translations;
@@ -59,71 +64,54 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   routinesByDay,
   students,
   selectedStudentEmail,
+  selectedStudentUid,
+  currentAccount,
   onTeacherSaveVideos,
 }) => {
   // Find current active student info
-  const selectedStudent = (students || []).find((s) => s.email === selectedStudentEmail);
+  const selectedStudent = (students || []).find(
+    (s) =>
+      (selectedStudentEmail && (s.email?.toLowerCase() === selectedStudentEmail.toLowerCase() || s.uid === selectedStudentEmail || s.id === selectedStudentEmail)) ||
+      (selectedStudentUid && (s.uid === selectedStudentUid || s.id === selectedStudentUid))
+  );
+
+  const activeStudentEmail = selectedStudent?.email || (selectedStudentEmail && selectedStudentEmail !== 'all' ? selectedStudentEmail : '') || students[0]?.email || '';
+  const activeStudentUid = selectedStudent?.uid || selectedStudent?.id || selectedStudentUid || '';
+
+  // Local state for student-specific routines loaded from backend
+  const [studentRoutines, setStudentRoutines] = useState<Record<DayOfWeek, RoutineItem[]> | null>(null);
+  const [isLoadingStudentRoutines, setIsLoadingStudentRoutines] = useState<boolean>(false);
 
   // Local state for each day's YouTube URL & Activity
-  const [youtubeUrls, setYoutubeUrls] = useState<Record<DayOfWeek, string>>(() => {
-    const initial: Record<DayOfWeek, string> = {
-      monday: '',
-      tuesday: '',
-      wednesday: '',
-      thursday: '',
-      friday: '',
-      saturday: '',
-      sunday: '',
-    };
-    WEEK_DAYS.forEach((d) => {
-      const dayItems = (routinesByDay && routinesByDay[d.id]) || [];
-      const itemWithVid = dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) || dayItems[0];
-      if (itemWithVid?.teacherVideos?.[0]?.url) {
-        initial[d.id] = itemWithVid.teacherVideos[0].url;
-      }
-    });
-    return initial;
+  const [youtubeUrls, setYoutubeUrls] = useState<Record<DayOfWeek, string>>({
+    monday: '',
+    tuesday: '',
+    wednesday: '',
+    thursday: '',
+    friday: '',
+    saturday: '',
+    sunday: '',
   });
 
   // Local state for each day's Spotify URL & Type
-  const [spotifyUrls, setSpotifyUrls] = useState<Record<DayOfWeek, string>>(() => {
-    const initial: Record<DayOfWeek, string> = {
-      monday: '',
-      tuesday: '',
-      wednesday: '',
-      thursday: '',
-      friday: '',
-      saturday: '',
-      sunday: '',
-    };
-    WEEK_DAYS.forEach((d) => {
-      const dayItems = (routinesByDay && routinesByDay[d.id]) || [];
-      const itemWithSpot = dayItems.find((i) => i && i.teacherSpotify?.url) || dayItems[0];
-      if (itemWithSpot?.teacherSpotify?.url) {
-        initial[d.id] = itemWithSpot.teacherSpotify.url;
-      }
-    });
-    return initial;
+  const [spotifyUrls, setSpotifyUrls] = useState<Record<DayOfWeek, string>>({
+    monday: '',
+    tuesday: '',
+    wednesday: '',
+    thursday: '',
+    friday: '',
+    saturday: '',
+    sunday: '',
   });
 
-  const [spotifyTypes, setSpotifyTypes] = useState<Record<DayOfWeek, 'podcast' | 'music'>>(() => {
-    const initial: Record<DayOfWeek, 'podcast' | 'music'> = {
-      monday: 'podcast',
-      tuesday: 'podcast',
-      wednesday: 'podcast',
-      thursday: 'podcast',
-      friday: 'music',
-      saturday: 'podcast',
-      sunday: 'music',
-    };
-    WEEK_DAYS.forEach((d) => {
-      const dayItems = (routinesByDay && routinesByDay[d.id]) || [];
-      const itemWithSpot = dayItems.find((i) => i && i.teacherSpotify?.url) || dayItems[0];
-      if (itemWithSpot?.teacherSpotify?.type) {
-        initial[d.id] = (itemWithSpot.teacherSpotify.type as 'podcast' | 'music') || 'podcast';
-      }
-    });
-    return initial;
+  const [spotifyTypes, setSpotifyTypes] = useState<Record<DayOfWeek, 'podcast' | 'music'>>({
+    monday: 'podcast',
+    tuesday: 'podcast',
+    wednesday: 'podcast',
+    thursday: 'podcast',
+    friday: 'music',
+    saturday: 'podcast',
+    sunday: 'music',
   });
 
   // Save feedback state per day
@@ -132,12 +120,11 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // YouTube Playlist & Anti-Repetition Video Assignment State
   const [playlists, setPlaylists] = useState<any[]>([]);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>('pl-eating-habits');
+  const [dayPlaylistIds, setDayPlaylistIds] = useState<Partial<Record<DayOfWeek, string>>>({});
   const [studentAssignments, setStudentAssignments] = useState<any[]>([]);
   const [studentWatched, setStudentWatched] = useState<string[]>([]);
   const [assignLoadingDay, setAssignLoadingDay] = useState<string | null>(null);
   const [assignFeedback, setAssignFeedback] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
-
-  const activeStudentEmail = selectedStudentEmail || students[0]?.email;
 
   // Fetch all playlists
   React.useEffect(() => {
@@ -154,34 +141,241 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       .catch(() => {});
   }, []);
 
-  // Fetch student video assignment & watch history
-  const loadStudentAssignmentHistory = React.useCallback(() => {
-    if (!activeStudentEmail) return;
-    fetch(`/api/student-video-assignments?studentEmail=${encodeURIComponent(activeStudentEmail)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data) {
-          setStudentAssignments(data.assignments || []);
-          setStudentWatched(data.watched || []);
+  // Fetch student routines & assignment history strictly synchronized with student page
+  const loadStudentMediaData = React.useCallback(async () => {
+    if (!activeStudentEmail && !activeStudentUid) return;
+    setIsLoadingStudentRoutines(true);
+
+    try {
+      const params = new URLSearchParams();
+      if (activeStudentEmail) params.append('studentEmail', activeStudentEmail);
+      if (activeStudentUid) params.append('uid', activeStudentUid);
+
+      const [routinesRes, assignmentsRes] = await Promise.all([
+        fetch(`/api/student-routines?${params.toString()}`),
+        fetch(`/api/student-video-assignments?${params.toString()}`),
+      ]);
+
+      const routinesData = await routinesRes.json();
+      const assignmentsData = await assignmentsRes.json();
+
+      const assignmentsList = assignmentsData?.assignments || [];
+      const watchedList = assignmentsData?.watched || [];
+      setStudentAssignments(assignmentsList);
+      setStudentWatched(watchedList);
+
+      const activeRoutines: Record<DayOfWeek, RoutineItem[]> =
+        routinesData && typeof routinesData === 'object' && Object.keys(routinesData).length > 0
+          ? routinesData
+          : routinesByDay || {};
+
+      setStudentRoutines(activeRoutines);
+
+      const newYt: Record<DayOfWeek, string> = {
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: '',
+      };
+      const newSpot: Record<DayOfWeek, string> = {
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: '',
+      };
+      const newSpotTypes: Record<DayOfWeek, 'podcast' | 'music'> = {
+        monday: 'podcast',
+        tuesday: 'podcast',
+        wednesday: 'podcast',
+        thursday: 'podcast',
+        friday: 'music',
+        saturday: 'podcast',
+        sunday: 'music',
+      };
+
+      WEEK_DAYS.forEach((d) => {
+        const dayItems = (activeRoutines && activeRoutines[d.id]) || (routinesByDay && routinesByDay[d.id]) || [];
+        const itemWithVid = dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) || dayItems[0];
+        if (itemWithVid?.teacherVideos?.[0]?.url) {
+          newYt[d.id] = itemWithVid.teacherVideos[0].url;
+        } else {
+          // Check if there is an assignment in assignmentsList for this day
+          const dayAssign = assignmentsList.find((a: any) => a.day === d.id);
+          if (dayAssign?.videoUrl) {
+            newYt[d.id] = dayAssign.videoUrl;
+          }
         }
-      })
-      .catch(() => {});
-  }, [activeStudentEmail]);
+
+        const itemWithSpot = dayItems.find((i) => i && i.teacherSpotify?.url) || dayItems[0];
+        if (itemWithSpot?.teacherSpotify?.url) {
+          newSpot[d.id] = itemWithSpot.teacherSpotify.url;
+        }
+        if (itemWithSpot?.teacherSpotify?.type) {
+          newSpotTypes[d.id] = (itemWithSpot.teacherSpotify.type as 'podcast' | 'music') || 'podcast';
+        }
+      });
+
+      setYoutubeUrls(newYt);
+      setSpotifyUrls(newSpot);
+      setSpotifyTypes(newSpotTypes);
+    } catch (err) {
+      console.warn('Error loading student media data:', err);
+    } finally {
+      setIsLoadingStudentRoutines(false);
+    }
+  }, [activeStudentEmail, activeStudentUid, routinesByDay]);
 
   React.useEffect(() => {
-    loadStudentAssignmentHistory();
-  }, [loadStudentAssignmentHistory]);
+    loadStudentMediaData();
+  }, [loadStudentMediaData]);
+
+  // Helper: Retrieve active playlist topic ID for a specific day
+  const getDayPlaylistId = (dayId: DayOfWeek): string => {
+    if (dayPlaylistIds[dayId]) return dayPlaylistIds[dayId]!;
+
+    const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+    const itemWithVid =
+      dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+      dayItems.find(
+        (i) =>
+          i &&
+          (i.id.endsWith('1') ||
+            i.activityName?.toLowerCase().includes('vídeo') ||
+            i.activityName?.toLowerCase().includes('video') ||
+            playlists.some((pl) => pl.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+      ) ||
+      dayItems[0];
+
+    const assignedVid = itemWithVid?.teacherVideos?.[0];
+    if ((assignedVid as any)?.playlistId) return (assignedVid as any).playlistId;
+
+    if ((assignedVid as any)?.playlistTitle && playlists.length > 0) {
+      const pl = playlists.find(
+        (p) => p.title?.toLowerCase().trim() === (assignedVid as any).playlistTitle?.toLowerCase().trim()
+      );
+      if (pl) return pl.id;
+    }
+
+    if (itemWithVid?.activityName && playlists.length > 0) {
+      const pl = playlists.find(
+        (p) =>
+          p.title?.toLowerCase().trim() === itemWithVid.activityName?.toLowerCase().trim() ||
+          p.id === itemWithVid.activityName
+      );
+      if (pl) return pl.id;
+    }
+
+    const vidId = extractYouTubeVideoId(assignedVid?.videoId || assignedVid?.url || youtubeUrls[dayId] || '');
+    if (vidId && playlists.length > 0) {
+      const pl = playlists.find((p) =>
+        p.videos?.some((v: any) => extractYouTubeVideoId(v.videoId || v.url || v.id || '') === vidId)
+      );
+      if (pl) return pl.id;
+    }
+
+    if (itemWithVid?.activityName && playlists.length > 0) {
+      const pl = playlists.find((p) => itemWithVid.activityName.toLowerCase().includes(p.title.toLowerCase()));
+      if (pl) return pl.id;
+    }
+
+    return selectedPlaylistId || playlists[0]?.id || '';
+  };
+
+  // Handler: Change playlist topic for a specific day from teacher view
+  const handleDayPlaylistChange = (dayId: DayOfWeek, newPlId: string) => {
+    setDayPlaylistIds((prev) => ({ ...prev, [dayId]: newPlId }));
+    const pl = playlists.find((p) => p.id === newPlId);
+    if (!pl) return;
+
+    const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+    const targetActivity =
+      dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+      dayItems.find(
+        (i) =>
+          i &&
+          (i.id.endsWith('1') ||
+            i.activityName?.toLowerCase().includes('vídeo') ||
+            i.activityName?.toLowerCase().includes('video') ||
+            playlists.some((p) => p.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+      ) ||
+      dayItems[0];
+
+    if (targetActivity) {
+      setStudentRoutines((prev) => {
+        if (!prev) return prev;
+        const updated = { ...prev };
+        if (updated[dayId]) {
+          updated[dayId] = updated[dayId].map((item) =>
+            item.id === targetActivity.id ? { ...item, activityName: pl.title } : item
+          );
+        }
+        return updated;
+      });
+
+      if (activeStudentEmail || activeStudentUid) {
+        fetch('/api/routines/teacher-video', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentEmail: activeStudentEmail,
+            studentUid: activeStudentUid,
+            teacherUid: currentAccount?.uid,
+            teacherEmail: currentAccount?.email,
+            activityId: targetActivity.id,
+            activityName: pl.title,
+            playlistTitle: pl.title,
+            playlistId: pl.id,
+            videos: targetActivity.teacherVideos || [],
+            days: [dayId],
+            day: dayId,
+          }),
+        }).catch(() => {});
+      }
+
+      if (onTeacherSaveVideos) {
+        onTeacherSaveVideos(
+          targetActivity.id,
+          targetActivity.teacherVideos || [],
+          targetActivity.teacherNotes,
+          false,
+          [dayId],
+          undefined,
+          activeStudentEmail,
+          activeStudentUid,
+          pl.title
+        );
+      }
+    }
+  };
 
   // Handler: Assign strict exclusive unseen video from playlist
   const handleAssignExclusive = async (dayId: DayOfWeek) => {
-    if (!activeStudentEmail) {
+    if (!activeStudentEmail && !activeStudentUid) {
       setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para atribuir vídeo exclusivo.' });
       return;
     }
 
-    const dayItems = (routinesByDay && routinesByDay[dayId]) || [];
-    const targetActivity = dayItems[0];
+    const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+    const targetActivity =
+      dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+      dayItems.find(
+        (i) =>
+          i &&
+          (i.id.endsWith('1') ||
+            i.activityName?.toLowerCase().includes('vídeo') ||
+            i.activityName?.toLowerCase().includes('video') ||
+            playlists.some((p) => p.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+      ) ||
+      dayItems[0];
     if (!targetActivity) return;
+
+    const playlistIdToUse = getDayPlaylistId(dayId) || selectedPlaylistId;
 
     setAssignLoadingDay(dayId);
     setAssignFeedback(null);
@@ -192,7 +386,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           studentEmail: activeStudentEmail,
-          playlistId: selectedPlaylistId,
+          studentUid: activeStudentUid,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
+          playlistId: playlistIdToUse,
           activityId: targetActivity.id,
           day: dayId,
         }),
@@ -206,14 +403,45 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         });
       } else if (data.success && data.video) {
         setYoutubeUrls((prev) => ({ ...prev, [dayId]: data.video.url }));
+        const assignedTopicTitle = data.playlistTitle || data.video.playlistTitle;
+
+        // Optimistically update studentRoutines with unified activityName
+        setStudentRoutines((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev };
+          if (updated[dayId]) {
+            updated[dayId] = updated[dayId].map((item) =>
+              item.id === targetActivity.id
+                ? {
+                    ...item,
+                    activityName: assignedTopicTitle || item.activityName,
+                    teacherVideos: [data.video],
+                    teacherNotes: data.video.instructions,
+                  }
+                : item
+            );
+          }
+          return updated;
+        });
+
         if (onTeacherSaveVideos) {
-          onTeacherSaveVideos(targetActivity.id, [data.video], data.video.instructions, false, [dayId]);
+          onTeacherSaveVideos(
+            targetActivity.id,
+            [data.video],
+            data.video.instructions,
+            false,
+            [dayId],
+            undefined,
+            activeStudentEmail,
+            activeStudentUid,
+            assignedTopicTitle
+          );
         }
         setAssignFeedback({
           type: 'success',
-          message: `✨ Vídeo exclusivo inédito atribuído para ${dayId.toUpperCase()}: "${data.video.title}" (${data.remainingUnseen} restantes)`,
+          message: `✨ Vídeo exclusivo inédito atribuído para ${dayId.toUpperCase()} (${assignedTopicTitle}): "${data.video.title}" (${data.remainingUnseen} restantes)`,
         });
-        loadStudentAssignmentHistory();
+        loadStudentMediaData();
       } else {
         setAssignFeedback({
           type: 'error',
@@ -230,33 +458,25 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     }
   };
 
-  // Sync if routinesByDay updates
-  React.useEffect(() => {
-    WEEK_DAYS.forEach((d) => {
-      const dayItems = (routinesByDay && routinesByDay[d.id]) || [];
-      const itemWithVid = dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) || dayItems[0];
-      if (itemWithVid?.teacherVideos?.[0]?.url) {
-        setYoutubeUrls((prev) => ({ ...prev, [d.id]: itemWithVid.teacherVideos![0].url }));
-      }
-      const itemWithSpot = dayItems.find((i) => i && i.teacherSpotify?.url) || dayItems[0];
-      if (itemWithSpot?.teacherSpotify?.url) {
-        setSpotifyUrls((prev) => ({ ...prev, [d.id]: itemWithSpot.teacherSpotify!.url }));
-        if (itemWithSpot.teacherSpotify.type) {
-          setSpotifyTypes((prev) => ({
-            ...prev,
-            [d.id]: (itemWithSpot.teacherSpotify!.type as 'podcast' | 'music') || 'podcast',
-          }));
-        }
-      }
-    });
-  }, [routinesByDay]);
-
   // Handler: Save individual YouTube Video for a day
-  const handleSaveYouTubeDay = (dayId: DayOfWeek) => {
-    if (!onTeacherSaveVideos) return;
-    const dayItems = (routinesByDay && routinesByDay[dayId]) || [];
-    const targetActivity = dayItems[0];
+  const handleSaveYouTubeDay = async (dayId: DayOfWeek) => {
+    const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+    const targetActivity =
+      dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+      dayItems.find(
+        (i) =>
+          i &&
+          (i.id.endsWith('1') ||
+            i.activityName?.toLowerCase().includes('vídeo') ||
+            i.activityName?.toLowerCase().includes('video') ||
+            playlists.some((p) => p.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+      ) ||
+      dayItems[0];
     if (!targetActivity) return;
+
+    const playlistIdToUse = getDayPlaylistId(dayId);
+    const matchedPlaylist = playlists.find((p) => p.id === playlistIdToUse);
+    const topicTitle = matchedPlaylist?.title || targetActivity.activityName;
 
     const url = (youtubeUrls[dayId] || '').trim();
     let finalVideos: TeacherAssignedVideo[] = [];
@@ -268,13 +488,60 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           id: `vid-${dayId}-${Date.now()}`,
           url,
           videoId: vidId || '',
-          title: `${getActivityDisplayName(targetActivity.activityName, 'en')} Practice Video`,
+          title: `${topicTitle} Practice Video`,
           addedAt: new Date().toISOString(),
+          playlistId: playlistIdToUse,
+          playlistTitle: topicTitle,
         },
       ];
     }
 
-    onTeacherSaveVideos(targetActivity.id, finalVideos, undefined, false, [dayId]);
+    try {
+      await fetch('/api/routines/teacher-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeStudentEmail,
+          studentUid: activeStudentUid,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
+          activityId: targetActivity.id,
+          activityName: topicTitle,
+          playlistTitle: topicTitle,
+          playlistId: playlistIdToUse,
+          videos: finalVideos,
+          days: [dayId],
+          day: dayId,
+        }),
+      });
+    } catch (err) {
+      console.warn('Error saving teacher video:', err);
+    }
+
+    setStudentRoutines((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev };
+      if (updated[dayId]) {
+        updated[dayId] = updated[dayId].map((item) =>
+          item.id === targetActivity.id ? { ...item, activityName: topicTitle, teacherVideos: finalVideos } : item
+        );
+      }
+      return updated;
+    });
+
+    if (onTeacherSaveVideos) {
+      onTeacherSaveVideos(
+        targetActivity.id,
+        finalVideos,
+        undefined,
+        false,
+        [dayId],
+        undefined,
+        activeStudentEmail,
+        activeStudentUid,
+        topicTitle
+      );
+    }
 
     setSavedDayFeedback((prev) => ({ ...prev, [`yt-${dayId}`]: true }));
     setTimeout(() => {
@@ -283,10 +550,11 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   };
 
   // Handler: Save individual Spotify Audio for a day
-  const handleSaveSpotifyDay = (dayId: DayOfWeek) => {
-    if (!onTeacherSaveVideos) return;
-    const dayItems = (routinesByDay && routinesByDay[dayId]) || [];
-    const targetActivity = dayItems[0];
+  const handleSaveSpotifyDay = async (dayId: DayOfWeek) => {
+    const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+    const targetActivity =
+      dayItems.find((i) => i && (i.id.endsWith('2') || i.activityName?.toLowerCase().includes('podcast') || i.activityName?.toLowerCase().includes('áudio'))) ||
+      dayItems[0];
     if (!targetActivity) return;
 
     const url = (spotifyUrls[dayId] || '').trim();
@@ -303,7 +571,48 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       };
     }
 
-    onTeacherSaveVideos(targetActivity.id, targetActivity.teacherVideos || [], undefined, false, [dayId], finalSpotify);
+    try {
+      await fetch('/api/routines/teacher-spotify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeStudentEmail,
+          studentUid: activeStudentUid,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
+          activityId: targetActivity.id,
+          spotify: finalSpotify,
+          days: [dayId],
+          day: dayId,
+        }),
+      });
+    } catch (err) {
+      console.warn('Error saving teacher spotify:', err);
+    }
+
+    setStudentRoutines((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev };
+      if (updated[dayId]) {
+        updated[dayId] = updated[dayId].map((item) =>
+          item.id === targetActivity.id ? { ...item, teacherSpotify: finalSpotify || undefined } : item
+        );
+      }
+      return updated;
+    });
+
+    if (onTeacherSaveVideos) {
+      onTeacherSaveVideos(
+        targetActivity.id,
+        targetActivity.teacherVideos || [],
+        undefined,
+        false,
+        [dayId],
+        finalSpotify,
+        activeStudentEmail,
+        activeStudentUid
+      );
+    }
 
     setSavedDayFeedback((prev) => ({ ...prev, [`spot-${dayId}`]: true }));
     setTimeout(() => {
@@ -313,21 +622,24 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
   // Helper to get first routine item display text (always in English for teacher)
   const getActivityLabel = (dayId: DayOfWeek) => {
-    const dayItems = routinesByDay[dayId] || [];
-    const first = dayItems[0];
-    if (!first) return 'Morning routine';
-    const englishName = getActivityDisplayName(first.activityName, 'en');
-    return `${first.time} ${englishName}`;
+    const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+    const itemWithVid =
+      dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+      dayItems.find((i) => i.id.endsWith('1') || i.activityName?.toLowerCase().includes('vídeo') || i.activityName?.toLowerCase().includes('video')) ||
+      dayItems[0];
+    if (!itemWithVid) return 'Morning routine';
+    const englishName = getActivityDisplayName(itemWithVid.activityName, 'en');
+    return `${itemWithVid.time || '09:00'} ${englishName}`;
   };
 
   return (
     <div className="space-y-6">
       {/* Student context banner if selected */}
-      {selectedStudent && (
+      {(selectedStudent || activeStudentEmail) && (
         <div className="bg-[#000035] text-white p-4 rounded-2xl border border-[#1C4C96] flex items-center justify-between flex-wrap gap-3 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-[#1C4C96] flex items-center justify-center font-bold text-white border border-[#607EC9] shrink-0 overflow-hidden">
-              {selectedStudent.picture && selectedStudent.picture.trim() !== '' ? (
+              {selectedStudent?.picture && selectedStudent.picture.trim() !== '' ? (
                 <img
                   src={selectedStudent.picture}
                   alt={selectedStudent.name}
@@ -338,17 +650,31 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               )}
             </div>
             <div>
-              <div className="text-[10px] font-bold text-[#9AB4FF] uppercase tracking-wider">
-                INDIVIDUAL STUDENT MEDIA RECOMMENDATIONS
+              <div className="text-[10px] font-bold text-[#9AB4FF] uppercase tracking-wider flex items-center gap-2">
+                <span>ATRIBUIÇÃO INDIVIDUAL DE MÍDIA DO ALUNO</span>
+                {activeStudentUid && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#1C4C96] text-white font-mono">
+                    UID: {activeStudentUid.slice(0, 10)}...
+                  </span>
+                )}
               </div>
               <div className="text-sm font-black text-white">
-                {selectedStudent.name} ({selectedStudent.email})
+                {selectedStudent ? `${selectedStudent.name} (${selectedStudent.email})` : activeStudentEmail}
               </div>
             </div>
           </div>
-          <div className="text-xs text-[#9AB4FF] flex items-center gap-1.5 font-medium">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>Videos and music below are assigned specifically to this student</span>
+          <div className="text-xs text-[#9AB4FF] flex items-center gap-2 font-medium">
+            {isLoadingStudentRoutines ? (
+              <span className="flex items-center gap-1.5 text-amber-300">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Sincronizando com a rotina do aluno...</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-emerald-300">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Espelhado em tempo real com a página do aluno</span>
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -462,8 +788,8 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-[#000035] text-white uppercase text-[10px] font-black tracking-wider">
-                <th className="p-3 w-32 border-b border-[#062863]">Week day</th>
-                <th className="p-3 w-72 border-b border-[#062863]">Activity Moment</th>
+                <th className="p-3 w-28 border-b border-[#062863]">Week day</th>
+                <th className="p-3 w-80 border-b border-[#062863]">Activity Moment & Playlist Topic</th>
                 <th className="p-3 border-b border-[#062863]">Youtube video url</th>
               </tr>
             </thead>
@@ -472,6 +798,19 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 const isSaved = savedDayFeedback[`yt-${day.id}`];
                 const currentUrl = youtubeUrls[day.id] || '';
                 const isAssigningThisDay = assignLoadingDay === day.id;
+                const currentDayPlId = getDayPlaylistId(day.id);
+                const dayItems = (studentRoutines && studentRoutines[day.id]) || (routinesByDay && routinesByDay[day.id]) || [];
+                const targetActivity =
+                  dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+                  dayItems.find(
+                    (i) =>
+                      i &&
+                      (i.id.endsWith('1') ||
+                        i.activityName?.toLowerCase().includes('vídeo') ||
+                        i.activityName?.toLowerCase().includes('video') ||
+                        playlists.some((p) => p.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+                  ) ||
+                  dayItems[0];
 
                 return (
                   <tr key={day.id} className="hover:bg-slate-50/70 transition">
@@ -480,11 +819,29 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                       {day.name}
                     </td>
 
-                    {/* Activity Moment column */}
-                    <td className="p-3 text-slate-600 font-medium whitespace-nowrap">
-                      <span className="truncate block max-w-xs" title={getActivityLabel(day.id)}>
-                        {getActivityLabel(day.id)}
-                      </span>
+                    {/* Activity Moment & Playlist Topic column */}
+                    <td className="p-3 text-slate-700 font-medium whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold text-[#1C4C96] bg-[#9AB4FF]/15 px-2 py-0.5 rounded-lg shrink-0">
+                          {targetActivity?.time || '09:00'}
+                        </span>
+                        <div className="relative inline-flex items-center min-w-0">
+                          <select
+                            value={currentDayPlId}
+                            onChange={(e) => handleDayPlaylistChange(day.id, e.target.value)}
+                            aria-label="Playlist Topic"
+                            className="text-xs font-bold py-1 pl-2.5 pr-7 bg-slate-50 hover:bg-white text-[#000035] border border-slate-300 hover:border-[#1C4C96] rounded-xl appearance-none cursor-pointer transition focus:outline-hidden max-w-[210px] truncate shadow-2xs"
+                            title="Tópico da Playlist do YouTube unificado com a rotina do aluno"
+                          >
+                            {playlists.map((pl) => (
+                              <option key={pl.id} value={pl.id}>
+                                {pl.title}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 pointer-events-none absolute right-2 text-[#1C4C96]" />
+                        </div>
+                      </div>
                     </td>
 
                     {/* Youtube Video URL input row with Trash, Exclusive Video button, and Save button */}

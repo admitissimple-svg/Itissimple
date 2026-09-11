@@ -900,13 +900,30 @@ export default function App() {
     teacherNotes?: string,
     replicateToAllDays = false,
     targetDays?: DayOfWeek[],
-    spotify?: TeacherAssignedSpotify | null
+    spotify?: TeacherAssignedSpotify | null,
+    targetStudentEmail?: string,
+    targetStudentUid?: string,
+    activityName?: string
   ) => {
     const daysToUpdate: DayOfWeek[] = replicateToAllDays
       ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
       : targetDays && targetDays.length > 0
       ? targetDays
       : [selectedDay];
+
+    const studentEmailToUse =
+      targetStudentEmail ||
+      (selectedStudentFilter !== 'all' ? selectedStudentFilter : '') ||
+      (currentAccount?.role === 'student' ? currentAccount.email : '');
+
+    const selectedSt = studentsList.find(
+      (s) =>
+        (studentEmailToUse && s.email?.toLowerCase() === studentEmailToUse.toLowerCase()) ||
+        s.uid === studentEmailToUse ||
+        s.id === studentEmailToUse
+    );
+    const studentUidToUse = targetStudentUid || selectedSt?.uid || selectedSt?.id || '';
+    const resolvedTopic = activityName || videos?.[0]?.playlistTitle;
 
     setRoutinesByDay((prev) => {
       const updated = { ...prev };
@@ -915,6 +932,7 @@ export default function App() {
           if (item.id === activityId || item.activityName === currentActivity?.activityName) {
             return {
               ...item,
+              activityName: resolvedTopic || item.activityName,
               teacherVideos: videos,
               teacherNotes: teacherNotes || item.teacherNotes,
               ...(spotify !== undefined ? { teacherSpotify: spotify || undefined } : {}),
@@ -931,7 +949,13 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          studentEmail: studentEmailToUse,
+          studentUid: studentUidToUse,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
           activityId,
+          activityName: resolvedTopic,
+          playlistTitle: resolvedTopic,
           videos,
           teacherNotes,
           days: daysToUpdate,
@@ -943,6 +967,10 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            studentEmail: studentEmailToUse,
+            studentUid: studentUidToUse,
+            teacherUid: currentAccount?.uid,
+            teacherEmail: currentAccount?.email,
             activityId,
             spotify,
             teacherNotes,
@@ -971,12 +999,14 @@ export default function App() {
 
   // Handler: Assign video from playlist topic to activity
   const handleAssignVideoToActivity = (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => {
+    const playlistTopic = (video as any).playlistTitle;
     setRoutinesByDay((prev) => {
       const updated = { ...prev };
       updated[day] = (updated[day] || []).map((item) => {
         if (item.id === activityId) {
           return {
             ...item,
+            activityName: playlistTopic || item.activityName,
             teacherVideos: [video],
             teacherNotes: video.instructions || item.teacherNotes,
           };
@@ -987,16 +1017,21 @@ export default function App() {
     });
 
     const activeEmail = currentAccount?.email || userProfile?.email;
-    if (activeEmail) {
+    const activeUid = currentAccount?.uid || (currentAccount as any)?.id || userProfile?.id;
+    if (activeEmail || activeUid) {
       fetch('/api/routines/teacher-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           activityId,
+          activityName: playlistTopic,
+          playlistTitle: playlistTopic,
           videos: [video],
           teacherNotes: video.instructions,
           days: [day],
+          day,
           studentEmail: activeEmail,
+          studentUid: activeUid,
         }),
       }).catch(() => {});
     }
@@ -2400,6 +2435,15 @@ export default function App() {
                       routinesByDay={routinesByDay}
                       students={studentsList}
                       selectedStudentEmail={selectedStudentFilter}
+                      selectedStudentUid={
+                        studentsList.find(
+                          (s) =>
+                            s.email?.toLowerCase() === selectedStudentFilter.toLowerCase() ||
+                            s.uid === selectedStudentFilter ||
+                            s.id === selectedStudentFilter
+                        )?.uid
+                      }
+                      currentAccount={currentAccount}
                       onTeacherSaveVideos={handleTeacherSaveVideos}
                       currentLanguage="en"
                       t={getTranslations('en')}

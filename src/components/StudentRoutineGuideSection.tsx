@@ -597,7 +597,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   (act.teacherVideos && act.teacherVideos.length > 0) ||
                   act.id.endsWith('1') ||
                   act.activityName?.toLowerCase().includes('vídeo') ||
-                  act.activityName?.toLowerCase().includes('video');
+                  act.activityName?.toLowerCase().includes('video') ||
+                  playlists.some((pl) => pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim());
 
                 const isAudioAct =
                   Boolean(act.teacherSpotify) ||
@@ -627,6 +628,23 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 // Find currently active playlist ID for this activity
                 const assignedVid = act.teacherVideos?.[0];
                 let currentPlaylistId = (assignedVid as any)?.playlistId || '';
+
+                if (!currentPlaylistId && (assignedVid as any)?.playlistTitle && playlists.length > 0) {
+                  const foundPl = playlists.find(
+                    (pl) => pl.title?.toLowerCase().trim() === (assignedVid as any).playlistTitle?.toLowerCase().trim()
+                  );
+                  if (foundPl) currentPlaylistId = foundPl.id;
+                }
+
+                if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
+                  const foundPl = playlists.find(
+                    (pl) =>
+                      pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim() ||
+                      pl.id === act.activityName
+                  );
+                  if (foundPl) currentPlaylistId = foundPl.id;
+                }
+
                 if (!currentPlaylistId && assignedVid && playlists.length > 0) {
                   const vidId = extractYouTubeVideoId(assignedVid.videoId || assignedVid.url || '');
                   if (vidId) {
@@ -635,6 +653,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                     );
                     if (foundPl) currentPlaylistId = foundPl.id;
                   }
+                }
+
+                if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
+                  const lowerName = act.activityName.toLowerCase();
+                  const foundPl = playlists.find((pl) => lowerName.includes(pl.title.toLowerCase()));
+                  if (foundPl) currentPlaylistId = foundPl.id;
                 }
 
                 return (
@@ -743,42 +767,53 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                         {wordsCount}/5 Words
                       </span>
 
-                      <span className="text-xs font-bold truncate max-w-[150px] sm:max-w-[200px]" title={act.activityName}>
-                        {getActivityDisplayName(act.activityName, currentLanguage)}
-                      </span>
+                      {isVideoAct ? (
+                        <div
+                          className="relative inline-flex items-center min-w-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <select
+                            value={currentPlaylistId || ''}
+                            onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
+                            disabled={loadingPlaylistAssignId === act.id}
+                            aria-label={isEn ? 'Playlist Topic / Routine name' : 'Tópico da Playlist / Nome da Rotina'}
+                            className={`text-xs font-bold py-1 pl-2.5 pr-7 rounded-xl border appearance-none cursor-pointer transition focus:outline-hidden max-w-[190px] sm:max-w-[270px] truncate shadow-2xs ${
+                              isSelected
+                                ? 'bg-[#062863] text-white border-[#607EC9] hover:bg-[#1C4C96] hover:border-[#9AB4FF]'
+                                : 'bg-white text-[#000035] border-slate-300 hover:border-[#1C4C96]'
+                            }`}
+                            title={
+                              isEn
+                                ? 'Topic: Choose playlist to unify routine name & inject exclusive video'
+                                : 'Tópico: Escolha a playlist para unificar o nome da rotina e injetar o vídeo exclusivo'
+                            }
+                          >
+                            <option value="" disabled>
+                              {loadingPlaylistAssignId === act.id
+                                ? (isEn ? '⏳ Assigning Topic...' : '⏳ Injetando Tópico...')
+                                : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...')}
+                            </option>
+                            {playlists.map((pl) => (
+                              <option key={pl.id} value={pl.id} className="text-[#000035] bg-white">
+                                {pl.title}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown
+                            className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${
+                              isSelected ? 'text-[#9AB4FF]' : 'text-[#1C4C96]'
+                            }`}
+                          />
+                        </div>
+                      ) : (
+                        <span className="text-xs font-bold truncate max-w-[160px] sm:max-w-[220px]" title={act.activityName}>
+                          {getActivityDisplayName(act.activityName, currentLanguage)}
+                        </span>
+                      )}
                     </div>
 
-                    {/* Right: Integrated Topic / Playlist Selector (for Video) + Action Buttons */}
+                    {/* Right: Feedback message pill & Action Buttons */}
                     <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
-                      {isVideoAct && (
-                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                          <div className="relative inline-flex items-center">
-                            <select
-                              value={currentPlaylistId || ''}
-                              onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
-                              disabled={loadingPlaylistAssignId === act.id}
-                              className={`text-[11px] font-bold py-1 pl-2.5 pr-7 rounded-lg border appearance-none cursor-pointer transition focus:outline-hidden ${
-                                isSelected
-                                  ? 'bg-[#062863] text-white border-[#607EC9] hover:bg-[#1C4C96]'
-                                  : 'bg-white text-[#000035] border-[#9AB4FF]/60 hover:border-[#1C4C96]'
-                              }`}
-                              title={isEn ? 'Select topic to automatically inject exclusive video' : 'Selecione o tema para injetar automaticamente o vídeo exclusivo'}
-                            >
-                              <option value="" disabled>
-                                {loadingPlaylistAssignId === act.id
-                                  ? (isEn ? '⏳ Assigning...' : '⏳ Injetando...')
-                                  : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tema...')}
-                              </option>
-                              {playlists.map((pl) => (
-                                <option key={pl.id} value={pl.id} className="text-[#000035] bg-white">
-                                  {pl.title} ({pl.videos?.length || 0} {isEn ? 'videos' : 'vídeos'})
-                                </option>
-                              ))}
-                            </select>
-                            <ChevronDown className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${isSelected ? 'text-[#9AB4FF]' : 'text-slate-400'}`} />
-                          </div>
-                        </div>
-                      )}
 
                       {/* Feedback message pill */}
                       {playlistFeedback?.activityId === act.id && (
