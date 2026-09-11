@@ -91,6 +91,7 @@ const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfil
   routineVideoTime: '',
   routineAudioTime: '',
   dailyPhraseTime: '',
+  weeklyNativeLessonsTarget: 1,
 });
 
 const applyProfileTimesToRoutines = (
@@ -101,26 +102,42 @@ const applyProfileTimesToRoutines = (
   const source = baseRoutines && Object.keys(baseRoutines).length > 0 ? baseRoutines : defaultRoutinesByDay;
   const cloned: Record<DayOfWeek, RoutineItem[]> = {} as any;
   (Object.keys(source) as DayOfWeek[]).forEach((day) => {
-    cloned[day] = (source[day] || []).map((act) => {
-      const isVideo =
-        (act.teacherVideos && act.teacherVideos.length > 0) ||
-        act.activityName?.toLowerCase().includes('vídeo') ||
-        act.activityName?.toLowerCase().includes('video') ||
-        act.category === 'morning';
-      const isAudio =
-        (!act.teacherVideos || act.teacherVideos.length === 0) &&
-        (Boolean(act.teacherSpotify) ||
+    let videoTimeApplied = false;
+    let audioTimeApplied = false;
+
+    cloned[day] = (source[day] || []).map((act, index) => {
+      // Strictly target exclusively the ONE primary Video of the Day activity for this day
+      const isVideoOfTheDay =
+        !videoTimeApplied &&
+        Boolean(videoTime) &&
+        (act.id.endsWith('1') ||
+          (act.teacherVideos && act.teacherVideos.length > 0) ||
+          act.activityName?.toLowerCase().includes('vídeo') ||
+          act.activityName?.toLowerCase().includes('video') ||
+          index === 0);
+
+      if (isVideoOfTheDay && videoTime) {
+        videoTimeApplied = true;
+        return { ...act, time: videoTime };
+      }
+
+      // Strictly target exclusively the ONE primary Audio / Podcast of the Day activity for this day
+      const isAudioOfTheDay =
+        !audioTimeApplied &&
+        Boolean(audioTime) &&
+        (act.id.endsWith('2') ||
+          Boolean(act.teacherSpotify) ||
           act.activityName?.toLowerCase().includes('áudio') ||
           act.activityName?.toLowerCase().includes('audio') ||
           act.activityName?.toLowerCase().includes('podcast') ||
-          act.category === 'afternoon');
+          index === 1);
 
-      if (isVideo && videoTime) {
-        return { ...act, time: videoTime };
-      }
-      if (isAudio && audioTime) {
+      if (isAudioOfTheDay && audioTime) {
+        audioTimeApplied = true;
         return { ...act, time: audioTime };
       }
+
+      // All other activities in the day strictly keep their own original / customized times
       return { ...act };
     });
   });
@@ -883,7 +900,10 @@ export default function App() {
     teacherNotes?: string,
     replicateToAllDays = false,
     targetDays?: DayOfWeek[],
-    spotify?: TeacherAssignedSpotify | null
+    spotify?: TeacherAssignedSpotify | null,
+    targetStudentEmail?: string,
+    targetStudentUid?: string,
+    activityName?: string
   ) => {
     const daysToUpdate: DayOfWeek[] = replicateToAllDays
       ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -891,13 +911,37 @@ export default function App() {
       ? targetDays
       : [selectedDay];
 
+    const studentEmailToUse =
+      targetStudentEmail ||
+      (selectedStudentFilter !== 'all' ? selectedStudentFilter : '') ||
+      (currentAccount?.role === 'student' ? currentAccount.email : '');
+
+    const selectedSt = studentsList.find(
+      (s) =>
+        (studentEmailToUse && s.email?.toLowerCase() === studentEmailToUse.toLowerCase()) ||
+        s.uid === studentEmailToUse ||
+        s.id === studentEmailToUse
+    );
+    const studentUidToUse = targetStudentUid || selectedSt?.uid || selectedSt?.id || '';
+    const resolvedTopic = activityName || videos?.[0]?.playlistTitle;
+
     setRoutinesByDay((prev) => {
       const updated = { ...prev };
       daysToUpdate.forEach((d) => {
+        let matched = false;
         updated[d] = (updated[d] || []).map((item) => {
-          if (item.id === activityId || item.activityName === currentActivity?.activityName) {
+          const isTarget =
+            item.id === activityId ||
+            (item.teacherVideos && item.teacherVideos.length > 0) ||
+            item.id.endsWith('1') ||
+            item.activityName?.toLowerCase().includes('vídeo') ||
+            item.activityName?.toLowerCase().includes('video') ||
+            item.activityName === currentActivity?.activityName;
+          if (isTarget && !matched) {
+            matched = true;
             return {
               ...item,
+              activityName: resolvedTopic || item.activityName,
               teacherVideos: videos,
               teacherNotes: teacherNotes || item.teacherNotes,
               ...(spotify !== undefined ? { teacherSpotify: spotify || undefined } : {}),
@@ -905,6 +949,15 @@ export default function App() {
           }
           return item;
         });
+        if (!matched && updated[d] && updated[d].length > 0) {
+          updated[d][0] = {
+            ...updated[d][0],
+            activityName: resolvedTopic || updated[d][0].activityName,
+            teacherVideos: videos,
+            teacherNotes: teacherNotes || updated[d][0].teacherNotes,
+            ...(spotify !== undefined ? { teacherSpotify: spotify || undefined } : {}),
+          };
+        }
       });
       return updated;
     });
@@ -914,7 +967,13 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          studentEmail: studentEmailToUse,
+          studentUid: studentUidToUse,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
           activityId,
+          activityName: resolvedTopic,
+          playlistTitle: resolvedTopic,
           videos,
           teacherNotes,
           days: daysToUpdate,
@@ -926,6 +985,10 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            studentEmail: studentEmailToUse,
+            studentUid: studentUidToUse,
+            teacherUid: currentAccount?.uid,
+            teacherEmail: currentAccount?.email,
             activityId,
             spotify,
             teacherNotes,
@@ -950,6 +1013,46 @@ export default function App() {
       [selectedDay]: [...(prev[selectedDay] || []), newItem],
     }));
     setSelectedActivityId(newItem.id);
+  };
+
+  // Handler: Assign video from playlist topic to activity
+  const handleAssignVideoToActivity = (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => {
+    const playlistTopic = (video as any).playlistTitle;
+    setRoutinesByDay((prev) => {
+      const updated = { ...prev };
+      updated[day] = (updated[day] || []).map((item) => {
+        if (item.id === activityId) {
+          return {
+            ...item,
+            activityName: playlistTopic || item.activityName,
+            teacherVideos: [video],
+            teacherNotes: video.instructions || item.teacherNotes,
+          };
+        }
+        return item;
+      });
+      return updated;
+    });
+
+    const activeEmail = currentAccount?.email || userProfile?.email;
+    const activeUid = currentAccount?.uid || (currentAccount as any)?.id || userProfile?.id;
+    if (activeEmail || activeUid) {
+      fetch('/api/routines/teacher-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          activityId,
+          activityName: playlistTopic,
+          playlistTitle: playlistTopic,
+          videos: [video],
+          teacherNotes: video.instructions,
+          days: [day],
+          day,
+          studentEmail: activeEmail,
+          studentUid: activeUid,
+        }),
+      }).catch(() => {});
+    }
   };
 
   // Handler: Schedule new Live Lesson
@@ -1766,6 +1869,32 @@ export default function App() {
     } catch {}
   };
 
+  // Punctual time update for any activity in the timeline
+  const handleUpdateActivityTime = (activityId: string, newTime: string, dayToUpdate?: DayOfWeek) => {
+    const targetDay = dayToUpdate || selectedDay;
+    setRoutinesByDay((prev) => {
+      const updated = { ...prev };
+      updated[targetDay] = (updated[targetDay] || []).map((item) =>
+        item.id === activityId ? { ...item, time: newTime } : item
+      );
+      return updated;
+    });
+
+    const activeEmail = currentAccount?.email || userProfile?.email;
+    if (activeEmail) {
+      fetch('/api/routines/update-time', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeEmail,
+          day: targetDay,
+          activityId,
+          time: newTime,
+        }),
+      }).catch(() => {});
+    }
+  };
+
   // Compute current tutor profile for Edit Profile Modal
   const currentTutorProfile: NativeFriendTutor = useMemo(() => {
     if (currentAccount && (currentAccount.role === 'teacher' || currentAccount.role === 'admin')) {
@@ -2324,6 +2453,15 @@ export default function App() {
                       routinesByDay={routinesByDay}
                       students={studentsList}
                       selectedStudentEmail={selectedStudentFilter}
+                      selectedStudentUid={
+                        studentsList.find(
+                          (s) =>
+                            s.email?.toLowerCase() === selectedStudentFilter.toLowerCase() ||
+                            s.uid === selectedStudentFilter ||
+                            s.id === selectedStudentFilter
+                        )?.uid
+                      }
+                      currentAccount={currentAccount}
                       onTeacherSaveVideos={handleTeacherSaveVideos}
                       currentLanguage="en"
                       t={getTranslations('en')}
@@ -2396,6 +2534,7 @@ export default function App() {
                     });
                   }}
                   onSaveLearnedWords={handleSaveLearnedWords}
+                  onUpdateTimeActivity={handleUpdateActivityTime}
                   userProfile={userProfile}
                   onSaveDailySentence={handleSaveDailySentence}
                   onOpenEmailModal={() => setIsEmailModalOpen(true)}
@@ -2416,6 +2555,7 @@ export default function App() {
                   }}
                   currentLanguage={currentLanguage}
                   t={t}
+                  onAssignVideoToActivity={handleAssignVideoToActivity}
                 />
 
                 {/* Section 3: Weekly Activity (Image 3) */}
@@ -2428,6 +2568,9 @@ export default function App() {
                   currentLanguage={currentLanguage}
                   dictionaryEntries={studentDictionaryEntries}
                   wordsFromRoutines={wordsFromRoutines}
+                  onUpdateUserProfile={(partial) => {
+                    handleSaveStudentProfile({ ...userProfile, ...partial });
+                  }}
                 />
               </div>
             )}
