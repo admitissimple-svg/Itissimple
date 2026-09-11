@@ -91,6 +91,7 @@ const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfil
   routineVideoTime: '',
   routineAudioTime: '',
   dailyPhraseTime: '',
+  weeklyNativeLessonsTarget: 1,
 });
 
 const applyProfileTimesToRoutines = (
@@ -2428,6 +2429,9 @@ export default function App() {
                   currentLanguage={currentLanguage}
                   dictionaryEntries={studentDictionaryEntries}
                   wordsFromRoutines={wordsFromRoutines}
+                  onUpdateUserProfile={(partial) => {
+                    handleSaveStudentProfile({ ...userProfile, ...partial });
+                  }}
                 />
               </div>
             )}

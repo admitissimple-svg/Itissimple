@@ -9,7 +9,7 @@ import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestor
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 
 const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
-const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || 'cea0e43d-1149-404b-ac5d-faa4ad9b4528';
+const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
 const PORT = 3000;
@@ -39,6 +39,7 @@ interface AppDb {
   landingContent: any;
   dictionary: Record<string, any>;
   studentWeeklyChecks: Record<string, Record<string, boolean>>;
+  weeklyNativeTargets?: Record<string, number>;
   studentDictionaryMap?: Record<string, any[]>;
   authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
   transactions?: any[];
@@ -1840,6 +1841,7 @@ let activeMwReference = process.env.MERRIAM_WEBSTER_REF || 'learners';
 const mwCache = new Map<string, any>();
 
 async function queryMerriamWebsterApi(wordToLookup: string): Promise<any> {
+  if (!MERRIAM_WEBSTER_API_KEY) return null;
   const referencesToTry = [
     activeMwReference,
     activeMwReference === 'learners' ? 'collegiate' : 'learners',
@@ -3394,24 +3396,45 @@ app.get('/api/routines/weekly-checks', (req, res) => {
   const db = readDb();
   const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
   if (!studentEmail) {
-    return res.json({ checks: {} });
+    return res.json({ checks: {}, weeklyNativeLessonsTarget: 1 });
   }
   const checks = (db.studentWeeklyChecks && db.studentWeeklyChecks[studentEmail]) || {};
-  res.json({ checks });
+  const userProf = (db.userProfiles && db.userProfiles[studentEmail]) || {};
+  const weeklyNativeLessonsTarget =
+    (db.weeklyNativeTargets && db.weeklyNativeTargets[studentEmail]) ||
+    userProf.weeklyNativeLessonsTarget ||
+    1;
+  res.json({ checks, weeklyNativeLessonsTarget });
 });
 
 app.post('/api/routines/weekly-checks', (req, res) => {
   const db = readDb();
-  const { studentEmail, checks } = req.body;
+  const { studentEmail, checks, weeklyNativeLessonsTarget } = req.body;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
-  if (cleanEmail && checks && typeof checks === 'object') {
-    if (!db.studentWeeklyChecks) {
-      db.studentWeeklyChecks = {};
+  if (cleanEmail) {
+    if (checks && typeof checks === 'object') {
+      if (!db.studentWeeklyChecks) {
+        db.studentWeeklyChecks = {};
+      }
+      db.studentWeeklyChecks[cleanEmail] = checks;
     }
-    db.studentWeeklyChecks[cleanEmail] = checks;
+    if (typeof weeklyNativeLessonsTarget === 'number' && weeklyNativeLessonsTarget > 0) {
+      if (!db.weeklyNativeTargets) {
+        db.weeklyNativeTargets = {};
+      }
+      db.weeklyNativeTargets[cleanEmail] = weeklyNativeLessonsTarget;
+      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail].weeklyNativeLessonsTarget = weeklyNativeLessonsTarget;
+      }
+    }
     writeDb(db);
   }
-  res.json({ success: true, checks: (db.studentWeeklyChecks && db.studentWeeklyChecks[cleanEmail]) || {} });
+  const savedChecks = (db.studentWeeklyChecks && db.studentWeeklyChecks[cleanEmail]) || {};
+  const savedTarget =
+    (db.weeklyNativeTargets && db.weeklyNativeTargets[cleanEmail]) ||
+    (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyNativeLessonsTarget) ||
+    1;
+  res.json({ success: true, checks: savedChecks, weeklyNativeLessonsTarget: savedTarget });
 });
 
 // 8. Homework Endpoints
