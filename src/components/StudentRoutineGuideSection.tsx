@@ -7,7 +7,6 @@ import {
   Edit3,
   Trash2,
   CheckCircle2,
-  Mail,
   Volume2,
   Save,
   Check,
@@ -22,6 +21,9 @@ import {
   Radio,
   Music,
   X,
+  ChevronDown,
+  Layers,
+  Video,
 } from 'lucide-react';
 import {
   DayOfWeek,
@@ -46,6 +48,17 @@ import {
   getEndOfDayReminderTime,
 } from '../utils/notifications';
 
+interface YouTubePlaylistItem {
+  id: string;
+  title: string;
+  videos?: Array<{
+    id?: string;
+    videoId?: string;
+    title: string;
+    url?: string;
+  }>;
+}
+
 interface StudentRoutineGuideSectionProps {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
   selectedDay: DayOfWeek;
@@ -60,10 +73,11 @@ interface StudentRoutineGuideSectionProps {
   onSaveLearnedWords: (activityId: string, words: string[]) => void;
   userProfile: UserProfile;
   onSaveDailySentence: (sentence: string, wordsUsed: string[]) => void;
-  onOpenEmailModal: () => void;
+  onOpenEmailModal?: () => void;
   onTest30MinReminder?: () => void;
   currentLanguage: Language;
   t: Translations;
+  onAssignVideoToActivity?: (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => void;
 }
 
 export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProps> = ({
@@ -84,8 +98,36 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   onTest30MinReminder,
   currentLanguage,
   t,
+  onAssignVideoToActivity,
 }) => {
   const isEn = currentLanguage === 'en';
+
+  // Playlists from active admin YouTube channel
+  const [playlists, setPlaylists] = useState<YouTubePlaylistItem[]>([]);
+  const [loadingPlaylistAssignId, setLoadingPlaylistAssignId] = useState<string | null>(null);
+  const [playlistFeedback, setPlaylistFeedback] = useState<{
+    activityId: string;
+    message: string;
+    type: 'success' | 'warning' | 'error';
+  } | null>(null);
+
+  // Fetch active playlists dynamically
+  useEffect(() => {
+    let isMounted = true;
+    fetch('/api/youtube-playlists')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (isMounted && Array.isArray(data) && data.length > 0) {
+          setPlaylists(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Error fetching playlists for timeline selector:', err);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Inline time editing state for individual activity row
   const [editingTimeActivityId, setEditingTimeActivityId] = useState<string | null>(null);
@@ -279,6 +321,96 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const lastActivity = getLastActivityOfTheDay(sortedActivities);
   const reminderTime = lastActivity ? getEndOfDayReminderTime(lastActivity.time) : '07:00';
 
+  // Topic / Playlist selection & auto video injection handler
+  const handleSelectPlaylistForActivity = async (activityId: string, playlistId: string) => {
+    if (!playlistId) return;
+    setLoadingPlaylistAssignId(activityId);
+    setPlaylistFeedback(null);
+
+    const studentEmail = userProfile?.email || 'aluno@itssimple.com';
+
+    try {
+      const res = await fetch('/api/student-video-assignments/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail,
+          playlistId,
+          activityId,
+          day: selectedDay,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.allConsumed) {
+        setPlaylistFeedback({
+          activityId,
+          type: 'warning',
+          message: data.message || (isEn ? 'All videos in this playlist were already assigned.' : 'Todos os vídeos desta playlist já foram assistidos.'),
+        });
+      } else if (data.success && data.video) {
+        setPlaylistFeedback({
+          activityId,
+          type: 'success',
+          message: `✨ ${data.video.title}`,
+        });
+        setTimeout(() => setPlaylistFeedback(null), 4500);
+
+        if (onAssignVideoToActivity) {
+          onAssignVideoToActivity(activityId, data.video, selectedDay);
+        }
+        onSelectActivity(activityId);
+      } else {
+        setPlaylistFeedback({
+          activityId,
+          type: 'error',
+          message: data.error || (isEn ? 'Error assigning video.' : 'Erro ao injetar vídeo.'),
+        });
+      }
+    } catch (err) {
+      console.warn('Error assigning video from playlist:', err);
+      setPlaylistFeedback({
+        activityId,
+        type: 'error',
+        message: isEn ? 'Connection error assigning video.' : 'Erro na conexão ao injetar vídeo.',
+      });
+    } finally {
+      setLoadingPlaylistAssignId(null);
+    }
+  };
+
+  // Add default activity pre-filled with profile routine video time
+  const handleAddDefaultActivity = () => {
+    if (!onAddCustomActivity) return;
+    const hasVideoAct = sortedActivities.some(
+      (act) =>
+        (act.teacherVideos && act.teacherVideos.length > 0) ||
+        act.id.endsWith('1') ||
+        act.activityName?.toLowerCase().includes('vídeo') ||
+        act.activityName?.toLowerCase().includes('video')
+    );
+
+    if (!hasVideoAct) {
+      onAddCustomActivity({
+        time: userProfile?.routineVideoTime || '09:00',
+        activityName: isEn ? 'Morning Coffee & Routine (Video)' : 'Rotina Matinal e Café da Manhã (Vídeo)',
+        dayOfWeek: selectedDay,
+        completed: false,
+        learnedWords: [],
+        category: 'morning',
+      });
+    } else {
+      onAddCustomActivity({
+        time: userProfile?.routineAudioTime || '14:00',
+        activityName: isEn ? 'Active Listening & Daily Podcast (Audio)' : 'Escuta Ativa & Podcast Diário (Áudio)',
+        dayOfWeek: selectedDay,
+        completed: false,
+        learnedWords: [],
+        category: 'afternoon',
+      });
+    }
+  };
+
   return (
     <div className="space-y-4" id="daily-routine-guide-section">
       {/* 1. Pedagogical Header Banner with 2 Steps */}
@@ -323,24 +455,24 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 2
               </span>
               <span className="text-xs font-bold text-[#9AB4FF]">
-                {isEn ? '2. Email your routine to your native friend' : '2. Envie ao seu Amigo Nativo'}
+                {isEn ? '2. Choose daily topic & practice' : '2. Escolha o tema & pratique diariamente'}
               </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 2. Top Controls Row: Day Selector + Activities Timeline + Email Routine */}
+      {/* 2. Top Controls Row: Day Selector + Activities Timeline (Definitive 2-Column Layout) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
         {/* Left: Day Selector */}
-        <div className="lg:col-span-5 bg-white rounded-3xl p-4 border border-[#607EC9]/30 shadow-xs flex flex-col justify-between space-y-2.5">
+        <div className="lg:col-span-4 bg-white rounded-3xl p-4 border border-[#607EC9]/30 shadow-xs flex flex-col justify-between space-y-2.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-wider text-[#607EC9] flex items-center gap-1">
               <Calendar className="w-3.5 h-3.5 text-[#1C4C96]" />
               <span>
                 {isEn
-                  ? `Select Day of the Week (${getDayLabel(selectedDay, currentLanguage)})`
-                  : `Selecione o Dia da Semana (${getDayLabel(selectedDay, currentLanguage)})`}
+                  ? `Select Day (${getDayLabel(selectedDay, currentLanguage)})`
+                  : `Selecione o Dia (${getDayLabel(selectedDay, currentLanguage)})`}
               </span>
             </span>
           </div>
@@ -355,7 +487,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   key={day}
                   type="button"
                   onClick={() => onSelectDay(day)}
-                  className={`py-1.5 px-1 rounded-xl text-center transition flex flex-col items-center justify-center cursor-pointer ${
+                  className={`py-2 px-1 rounded-xl text-center transition flex flex-col items-center justify-center cursor-pointer ${
                     isSelected
                       ? 'bg-[#000035] text-white shadow-sm border border-[#1C4C96]'
                       : 'bg-slate-50 hover:bg-[#9AB4FF]/20 text-[#000035] border border-slate-200'
@@ -377,13 +509,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           </div>
 
           {/* Quick jump */}
-          <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-100">
+          <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-slate-100">
             <button
               type="button"
               onClick={handleJumpWeekdays}
               className="text-[#1C4C96] hover:underline font-bold cursor-pointer"
             >
-              {isEn ? 'Mon to Fri (Weekdays)' : 'Seg a Sex (Dias de semana)'}
+              {isEn ? 'Mon to Fri (Weekdays)' : 'Seg a Sex (Dias úteis)'}
             </button>
             <button
               type="button"
@@ -395,10 +527,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           </div>
         </div>
 
-        {/* Center: Activities Timeline */}
-        <div className="lg:col-span-5 bg-white rounded-3xl p-4 border border-[#607EC9]/30 shadow-xs flex flex-col justify-between space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-black uppercase tracking-wider text-[#607EC9] flex items-center gap-1">
+        {/* Right: Activities Timeline with Integrated Topic/Playlist Selector */}
+        <div className="lg:col-span-8 bg-white rounded-3xl p-4 border border-[#607EC9]/30 shadow-xs flex flex-col justify-between space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-[#607EC9] flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-[#1C4C96]" />
               <span>
                 {isEn
@@ -414,44 +546,109 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             {onAddCustomActivity && (
               <button
                 type="button"
-                onClick={() =>
-                  onAddCustomActivity({
-                    time: '12:30',
-                    activityName: isEn ? 'Lunch English Moment' : 'Almoço em Inglês',
-                    dayOfWeek: selectedDay,
-                    completed: false,
-                    learnedWords: [],
-                  })
-                }
-                className="text-[10px] font-bold text-[#1C4C96] hover:text-[#062863] flex items-center gap-1 cursor-pointer"
+                onClick={handleAddDefaultActivity}
+                className="text-[11px] font-bold text-[#1C4C96] hover:text-[#062863] bg-[#9AB4FF]/15 hover:bg-[#9AB4FF]/30 px-2.5 py-1 rounded-xl flex items-center gap-1 cursor-pointer transition"
+                title={isEn ? 'Add activity to today\'s timeline' : 'Adicionar atividade à rotina de hoje'}
               >
-                <Plus className="w-3 h-3" />
-                <span>{isEn ? '+ Add Activity' : '+ Adicionar'}</span>
+                <Plus className="w-3 h-3 text-[#1C4C96]" />
+                <span>{isEn ? '+ Add Activity' : '+ Adicionar Atividade'}</span>
               </button>
             )}
           </div>
 
           {/* Activities list/timeline */}
-          <div className="space-y-1.5 overflow-y-auto max-h-[80px] pr-1">
+          <div className="space-y-2 overflow-y-auto max-h-[190px] pr-1">
             {sortedActivities.length === 0 ? (
-              <div className="py-2 text-center text-xs text-slate-400">
-                {isEn ? 'No activities for this day yet.' : 'Nenhuma atividade para este dia.'}
+              <div className="py-5 px-4 bg-[#9AB4FF]/5 rounded-2xl border border-dashed border-[#607EC9]/40 text-center space-y-2">
+                <div className="flex items-center justify-center gap-2 text-xs font-bold text-[#000035]">
+                  <Clock className="w-4 h-4 text-[#1C4C96]" />
+                  <span>
+                    {isEn
+                      ? `No routine configured for ${getDayLabel(selectedDay, currentLanguage)} yet.`
+                      : `Nenhuma rotina configurada para ${getDayLabel(selectedDay, currentLanguage)} ainda.`}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#607EC9] max-w-md mx-auto">
+                  {isEn
+                    ? `Set up your daily video activity with your profile's preferred study time (${formatToAmPm(userProfile?.routineVideoTime || '09:00')}). You can edit the time anytime.`
+                    : `Configure sua atividade diária de vídeo com o horário preferencial do seu perfil (${formatToAmPm(userProfile?.routineVideoTime || '09:00')}). O horário permanece totalmente editável.`}
+                </p>
+                {onAddCustomActivity && (
+                  <button
+                    type="button"
+                    onClick={handleAddDefaultActivity}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-black transition cursor-pointer shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-[#9AB4FF]" />
+                    <span>
+                      {isEn
+                        ? `+ Configure Daily Video (${formatToAmPm(userProfile?.routineVideoTime || '09:00')})`
+                        : `+ Configurar Vídeo do Dia (${formatToAmPm(userProfile?.routineVideoTime || '09:00')})`}
+                    </span>
+                  </button>
+                )}
               </div>
             ) : (
               sortedActivities.map((act) => {
                 const isSelected = act.id === activeActivity?.id;
                 const wordsCount = act.learnedWords ? act.learnedWords.length : 0;
+
+                const isVideoAct =
+                  (act.teacherVideos && act.teacherVideos.length > 0) ||
+                  act.id.endsWith('1') ||
+                  act.activityName?.toLowerCase().includes('vídeo') ||
+                  act.activityName?.toLowerCase().includes('video');
+
+                const isAudioAct =
+                  Boolean(act.teacherSpotify) ||
+                  act.id.endsWith('2') ||
+                  act.activityName?.toLowerCase().includes('áudio') ||
+                  act.activityName?.toLowerCase().includes('audio') ||
+                  act.activityName?.toLowerCase().includes('podcast');
+
+                const badgeLabel = isVideoAct
+                  ? isEn ? 'Video of the Day' : 'Vídeo do Dia'
+                  : isAudioAct
+                  ? isEn ? 'Audio / Podcast' : 'Áudio do Dia'
+                  : isEn ? 'Daily Activity' : 'Atividade Diária';
+
+                const badgeClasses = isVideoAct
+                  ? isSelected
+                    ? 'bg-[#1C4C96] text-[#9AB4FF]'
+                    : 'bg-[#9AB4FF]/20 text-[#062863]'
+                  : isAudioAct
+                  ? isSelected
+                    ? 'bg-emerald-800 text-emerald-200'
+                    : 'bg-emerald-100 text-emerald-800'
+                  : isSelected
+                  ? 'bg-white/10 text-slate-300'
+                  : 'bg-slate-100 text-slate-600';
+
+                // Find currently active playlist ID for this activity
+                const assignedVid = act.teacherVideos?.[0];
+                let currentPlaylistId = (assignedVid as any)?.playlistId || '';
+                if (!currentPlaylistId && assignedVid && playlists.length > 0) {
+                  const vidId = extractYouTubeVideoId(assignedVid.videoId || assignedVid.url || '');
+                  if (vidId) {
+                    const foundPl = playlists.find((pl) =>
+                      pl.videos?.some((v) => extractYouTubeVideoId(v.videoId || v.url || v.id || '') === vidId)
+                    );
+                    if (foundPl) currentPlaylistId = foundPl.id;
+                  }
+                }
+
                 return (
                   <div
                     key={act.id}
                     onClick={() => onSelectActivity(act.id)}
-                    className={`p-2 rounded-xl border text-left transition flex items-center justify-between gap-2 cursor-pointer ${
+                    className={`p-2.5 rounded-2xl border text-left transition flex flex-col md:flex-row md:items-center justify-between gap-2 cursor-pointer ${
                       isSelected
                         ? 'bg-[#000035] text-white border-[#1C4C96] shadow-2xs'
                         : 'bg-slate-50 hover:bg-slate-100 text-[#000035] border-slate-200'
                     }`}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    {/* Left: Checkbox + Time + Badges + Name */}
+                    <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -459,6 +656,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                           onToggleActivityComplete(act.id);
                         }}
                         className="cursor-pointer shrink-0"
+                        title={act.completed ? (isEn ? 'Completed' : 'Concluído') : (isEn ? 'Mark completed' : 'Marcar concluído')}
                       >
                         <CheckCircle2
                           className={`w-4 h-4 ${
@@ -476,14 +674,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                       {/* Time display with punctual inline edit */}
                       {editingTimeActivityId === act.id ? (
                         <div
-                          className="flex items-center gap-1 bg-white px-1 py-0.5 rounded border border-[#1C4C96] shadow-xs"
+                          className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-lg border border-[#1C4C96] shadow-xs shrink-0"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <input
                             type="time"
                             value={editingTimeValue}
                             onChange={(e) => setEditingTimeValue(e.target.value)}
-                            className="text-[10px] font-mono font-bold text-[#000035] bg-transparent focus:outline-hidden"
+                            className="text-[11px] font-mono font-bold text-[#000035] bg-transparent focus:outline-hidden"
                             autoFocus
                           />
                           <button
@@ -495,10 +693,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                               }
                               setEditingTimeActivityId(null);
                             }}
-                            className="p-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                            className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
                             title={isEn ? 'Save time' : 'Salvar horário'}
                           >
-                            <Check className="w-2.5 h-2.5" />
+                            <Check className="w-3 h-3" />
                           </button>
                           <button
                             type="button"
@@ -506,10 +704,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                               e.stopPropagation();
                               setEditingTimeActivityId(null);
                             }}
-                            className="p-0.5 rounded bg-slate-200 text-slate-700 hover:bg-slate-300 cursor-pointer"
+                            className="p-1 rounded bg-slate-200 text-slate-700 hover:bg-slate-300 cursor-pointer"
                             title={isEn ? 'Cancel' : 'Cancelar'}
                           >
-                            <X className="w-2.5 h-2.5" />
+                            <X className="w-3 h-3" />
                           </button>
                         </div>
                       ) : (
@@ -518,123 +716,124 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                           onClick={(e) => {
                             e.stopPropagation();
                             setEditingTimeActivityId(act.id);
-                            setEditingTimeValue(act.time || '08:00');
+                            setEditingTimeValue(act.time || '09:00');
                           }}
-                          className={`group/time flex items-center gap-1 px-1.5 py-0.5 rounded transition text-[10px] font-mono font-bold cursor-pointer ${
+                          className={`group/time flex items-center gap-1 px-2 py-0.5 rounded-lg transition text-[11px] font-mono font-bold shrink-0 cursor-pointer ${
                             isSelected
-                              ? 'text-[#9AB4FF] hover:bg-white/10 hover:text-white'
-                              : 'text-[#1C4C96] hover:bg-slate-200/70 hover:text-[#062863]'
+                              ? 'text-[#9AB4FF] bg-white/10 hover:bg-white/20 hover:text-white'
+                              : 'text-[#1C4C96] bg-[#9AB4FF]/15 hover:bg-[#9AB4FF]/30 hover:text-[#062863]'
                           }`}
-                          title={isEn ? 'Click to change activity time' : 'Clique para alterar pontualmente o horário desta atividade'}
+                          title={isEn ? 'Click to change activity time' : 'Clique para alterar pontualmente o horário'}
                         >
                           <span>{formatToAmPm(act.time)}</span>
-                          <Edit3 className="w-2.5 h-2.5 opacity-0 group-hover/time:opacity-100 transition shrink-0" />
+                          <Edit3 className="w-2.5 h-2.5 opacity-60 group-hover/time:opacity-100 transition shrink-0" />
                         </button>
                       )}
 
                       {/* Accurate Activity Type Badge */}
-                      {(() => {
-                        const isVideoAct =
-                          (act.teacherVideos && act.teacherVideos.length > 0) ||
-                          act.id.endsWith('1') ||
-                          act.activityName?.toLowerCase().includes('vídeo') ||
-                          act.activityName?.toLowerCase().includes('video');
-
-                        const isAudioAct =
-                          Boolean(act.teacherSpotify) ||
-                          act.id.endsWith('2') ||
-                          act.activityName?.toLowerCase().includes('áudio') ||
-                          act.activityName?.toLowerCase().includes('audio') ||
-                          act.activityName?.toLowerCase().includes('podcast');
-
-                        const badgeLabel = isVideoAct
-                          ? isEn ? 'Video of the Day' : 'Vídeo do Dia'
-                          : isAudioAct
-                          ? isEn ? 'Audio / Podcast' : 'Áudio do Dia'
-                          : isEn ? 'Daily Activity' : 'Atividade Diária';
-
-                        const badgeClasses = isVideoAct
-                          ? isSelected
-                            ? 'bg-[#1C4C96] text-[#9AB4FF]'
-                            : 'bg-[#9AB4FF]/20 text-[#062863]'
-                          : isAudioAct
-                          ? isSelected
-                            ? 'bg-emerald-800 text-emerald-200'
-                            : 'bg-emerald-100 text-emerald-800'
-                          : isSelected
-                          ? 'bg-white/10 text-slate-300'
-                          : 'bg-slate-100 text-slate-600';
-
-                        return (
-                          <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded whitespace-nowrap ${badgeClasses}`}>
-                            {badgeLabel}
-                          </span>
-                        );
-                      })()}
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 ${badgeClasses}`}>
+                        {badgeLabel}
+                      </span>
 
                       <span
-                        className={`text-[9px] font-bold ${
+                        className={`text-[9px] font-bold shrink-0 ${
                           isSelected ? 'text-[#F4CA54]' : 'text-slate-500'
                         }`}
                       >
                         {wordsCount}/5 Words
                       </span>
 
-                      <span className="text-xs font-bold truncate">
+                      <span className="text-xs font-bold truncate max-w-[150px] sm:max-w-[200px]" title={act.activityName}>
                         {getActivityDisplayName(act.activityName, currentLanguage)}
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      {onEditActivity && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onEditActivity(act);
-                          }}
-                          className={`p-1 rounded hover:bg-white/10 ${
-                            isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-600'
-                          }`}
-                        >
-                          <Edit3 className="w-3 h-3" />
-                        </button>
+                    {/* Right: Integrated Topic / Playlist Selector (for Video) + Action Buttons */}
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+                      {isVideoAct && (
+                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <div className="relative inline-flex items-center">
+                            <select
+                              value={currentPlaylistId || ''}
+                              onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
+                              disabled={loadingPlaylistAssignId === act.id}
+                              className={`text-[11px] font-bold py-1 pl-2.5 pr-7 rounded-lg border appearance-none cursor-pointer transition focus:outline-hidden ${
+                                isSelected
+                                  ? 'bg-[#062863] text-white border-[#607EC9] hover:bg-[#1C4C96]'
+                                  : 'bg-white text-[#000035] border-[#9AB4FF]/60 hover:border-[#1C4C96]'
+                              }`}
+                              title={isEn ? 'Select topic to automatically inject exclusive video' : 'Selecione o tema para injetar automaticamente o vídeo exclusivo'}
+                            >
+                              <option value="" disabled>
+                                {loadingPlaylistAssignId === act.id
+                                  ? (isEn ? '⏳ Assigning...' : '⏳ Injetando...')
+                                  : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tema...')}
+                              </option>
+                              {playlists.map((pl) => (
+                                <option key={pl.id} value={pl.id} className="text-[#000035] bg-white">
+                                  {pl.title} ({pl.videos?.length || 0} {isEn ? 'videos' : 'vídeos'})
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${isSelected ? 'text-[#9AB4FF]' : 'text-slate-400'}`} />
+                          </div>
+                        </div>
                       )}
-                      {onDeleteActivity && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteActivity(act.id);
-                          }}
-                          className={`p-1 rounded hover:bg-rose-500/20 ${
-                            isSelected ? 'text-rose-300' : 'text-slate-400 hover:text-rose-600'
+
+                      {/* Feedback message pill */}
+                      {playlistFeedback?.activityId === act.id && (
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md truncate max-w-[140px] ${
+                            playlistFeedback.type === 'success'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : playlistFeedback.type === 'warning'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-rose-100 text-rose-800'
                           }`}
+                          title={playlistFeedback.message}
                         >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                          {playlistFeedback.message}
+                        </span>
                       )}
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {onEditActivity && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEditActivity(act);
+                            }}
+                            className={`p-1 rounded hover:bg-white/10 cursor-pointer ${
+                              isSelected ? 'text-white' : 'text-slate-400 hover:text-slate-600'
+                            }`}
+                            title={isEn ? 'Edit activity' : 'Editar atividade'}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        )}
+                        {onDeleteActivity && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteActivity(act.id);
+                            }}
+                            className={`p-1 rounded hover:bg-rose-500/20 cursor-pointer ${
+                              isSelected ? 'text-rose-300' : 'text-slate-400 hover:text-rose-600'
+                            }`}
+                            title={isEn ? 'Delete activity' : 'Excluir atividade'}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
               })
             )}
           </div>
-        </div>
-
-        {/* Right: Email Routine Action Button */}
-        <div className="lg:col-span-2 bg-white rounded-3xl p-4 border border-[#607EC9]/30 shadow-xs flex items-center justify-center">
-          <button
-            type="button"
-            onClick={onOpenEmailModal}
-            className="w-full h-full min-h-[50px] px-4 py-3 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-2xl font-black text-xs transition flex flex-col items-center justify-center gap-1.5 cursor-pointer shadow-md border border-[#9AB4FF]/40 active:scale-98"
-            title={isEn ? 'Email routine to your Native Friend' : 'Enviar rotina por e-mail para seu Amigo Nativo'}
-          >
-            <div className="flex items-center gap-2">
-              <Mail className="w-4 h-4 text-[#9AB4FF]" />
-              <span>{isEn ? '✉ Email Routine' : '✉ Enviar Rotina'}</span>
-            </div>
-          </button>
         </div>
       </div>
 

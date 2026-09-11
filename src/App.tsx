@@ -969,6 +969,39 @@ export default function App() {
     setSelectedActivityId(newItem.id);
   };
 
+  // Handler: Assign video from playlist topic to activity
+  const handleAssignVideoToActivity = (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => {
+    setRoutinesByDay((prev) => {
+      const updated = { ...prev };
+      updated[day] = (updated[day] || []).map((item) => {
+        if (item.id === activityId) {
+          return {
+            ...item,
+            teacherVideos: [video],
+            teacherNotes: video.instructions || item.teacherNotes,
+          };
+        }
+        return item;
+      });
+      return updated;
+    });
+
+    const activeEmail = currentAccount?.email || userProfile?.email;
+    if (activeEmail) {
+      fetch('/api/routines/teacher-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          activityId,
+          videos: [video],
+          teacherNotes: video.instructions,
+          days: [day],
+          studentEmail: activeEmail,
+        }),
+      }).catch(() => {});
+    }
+  };
+
   // Handler: Schedule new Live Lesson
   const handleScheduleLesson = async (lessonData: {
     title: string;
@@ -2460,6 +2493,7 @@ export default function App() {
                   }}
                   currentLanguage={currentLanguage}
                   t={t}
+                  onAssignVideoToActivity={handleAssignVideoToActivity}
                 />
 
                 {/* Section 3: Weekly Activity (Image 3) */}
