@@ -1,6 +1,10 @@
 {
-  "name": "It's Simple - Learn English by Living Your Life",
-  "description": "Aprenda inglês vivendo a sua rotina com vídeos personalizados do YouTube, vocabulário prático e lembretes inteligentes 5 minutos antes de cada atividade.",
-  "requestFramePermissions": ["microphone"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "name": "Remix Itissimple",
+  "description": "Imported from GitHub: admitissimple-svg/Itissimple",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
