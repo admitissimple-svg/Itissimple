@@ -32,7 +32,6 @@ interface StudentWeeklyActivitySectionProps {
   currentLanguage: Language;
   dictionaryEntries?: StudentDictionaryEntry[];
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
-  onUpdateUserProfile?: (updated: Partial<UserProfile>) => void;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
@@ -93,7 +92,6 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   currentLanguage,
   dictionaryEntries,
   wordsFromRoutines,
-  onUpdateUserProfile,
 }) => {
   const isEn = currentLanguage === 'en';
   const t = getTranslations(currentLanguage);
@@ -181,33 +179,18 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     return uniqueWords.size;
   }, [dictionaryEntries, loadedDictEntries, wordsFromRoutines, routinesByDay]);
 
-  // Target weekly chat sessions with native friend (default: 1 or from user profile)
-  const initialTarget = userProfile?.weeklyNativeLessonsTarget || 1;
-  const [weeklyNativeTarget, setWeeklyNativeTarget] = useState<number>(initialTarget);
-
-  useEffect(() => {
-    if (userProfile?.weeklyNativeLessonsTarget && userProfile.weeklyNativeLessonsTarget > 0) {
-      setWeeklyNativeTarget(userProfile.weeklyNativeLessonsTarget);
-    }
-  }, [userProfile?.weeklyNativeLessonsTarget]);
-
   // 7-day checklist grid state: map of "stepId_dayKey" -> boolean
   // Starts with no markings (0%) and persists in backend server database for multi-device sync
   const [weeklyChecks, setWeeklyChecks] = useState<Record<string, boolean>>({});
 
-  // Fetch weekly checks and weekly native target from server API for multi-device sync
+  // Fetch weekly checks from server API for multi-device sync
   useEffect(() => {
     let isMounted = true;
     fetch(`/api/routines/weekly-checks?studentEmail=${encodeURIComponent(studentEmail)}`)
       .then((res) => res.json())
       .then((data) => {
-        if (isMounted && data) {
-          if (data.checks) {
-            setWeeklyChecks(data.checks);
-          }
-          if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
-            setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
-          }
+        if (isMounted && data && data.checks) {
+          setWeeklyChecks(data.checks);
         }
       })
       .catch((err) => {
@@ -217,25 +200,6 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
       isMounted = false;
     };
   }, [studentEmail]);
-
-  const handleTargetChange = (newTarget: number) => {
-    const safeTarget = Math.max(1, Math.min(7, newTarget));
-    setWeeklyNativeTarget(safeTarget);
-    if (onUpdateUserProfile) {
-      onUpdateUserProfile({ weeklyNativeLessonsTarget: safeTarget });
-    }
-    fetch('/api/routines/weekly-checks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        studentEmail,
-        checks: weeklyChecks,
-        weeklyNativeLessonsTarget: safeTarget,
-      }),
-    }).catch((err) => {
-      console.warn('Error saving weeklyNativeLessonsTarget to server:', err);
-    });
-  };
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
     const key = `${stepId}_${dayKey}`;
@@ -251,7 +215,6 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         body: JSON.stringify({
           studentEmail,
           checks: updated,
-          weeklyNativeLessonsTarget: weeklyNativeTarget,
         }),
       }).catch((err) => {
         console.warn('Error saving weekly checks to server:', err);
@@ -260,39 +223,10 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     });
   };
 
-  // Count completed days per routine row
-  const checkedCounts = useMemo(() => {
-    const counts: Record<string, number> = {
-      video_day: 0,
-      audio_day: 0,
-      tutor_live: 0,
-      memorization: 0,
-    };
-    WEEK_DAYS.forEach((d) => {
-      ROUTINE_ROWS.forEach((row) => {
-        if (weeklyChecks[`${row.id}_${d.key}`]) {
-          counts[row.id] = (counts[row.id] || 0) + 1;
-        }
-      });
-    });
-    return counts;
-  }, [weeklyChecks]);
-
-  // Pillar completion ratios (0.0 to 1.0 capped)
-  // Daily habits (Video, Audio, Memorization) have a 7-day weekly base.
-  // Chat with Native Friend uses the student's dynamic weekly target (e.g. 1 or 2 sessions/week).
-  const videoRatio = Math.min(1, (checkedCounts.video_day || 0) / 7);
-  const audioRatio = Math.min(1, (checkedCounts.audio_day || 0) / 7);
-  const nativeRatio = Math.min(1, (checkedCounts.tutor_live || 0) / Math.max(1, weeklyNativeTarget));
-  const memoRatio = Math.min(1, (checkedCounts.memorization || 0) / 7);
-
-  // Evolution of the Week progress percentage
-  // Each of the 4 routine pillars has equal weight (25%).
-  // Reaching the configured weekly goal of native chats awards 100% of that pillar (25% toward the total).
-  const progressPercent = Math.min(
-    100,
-    Math.round(((videoRatio + audioRatio + nativeRatio + memoRatio) / 4) * 100)
-  );
+  // Compute progress percent from grid (100% = 4 activities * 7 days = 28 checks)
+  const totalPossible = WEEK_DAYS.length * ROUTINE_ROWS.length;
+  const totalChecked = Object.values(weeklyChecks).filter(Boolean).length;
+  const progressPercent = totalPossible > 0 ? Math.min(100, Math.round((totalChecked / totalPossible) * 100)) : 0;
 
   // S Path SVG calculation
   const pathTotalLength = 220;
@@ -632,53 +566,13 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                       <div className="w-8 h-8 rounded-lg bg-[#000035] text-[#9AB4FF] flex items-center justify-center shrink-0 border border-[#9AB4FF]/30 shadow-xs">
                         <Icon className="w-4 h-4" />
                       </div>
-                      <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                        {(() => {
-                          const displayTime =
-                            row.id === 'video_day'
-                              ? userProfile?.routineVideoTime || row.time
-                              : row.id === 'audio_day'
-                              ? userProfile?.routineAudioTime || row.time
-                              : row.time;
-                          return (
-                            <span className="text-[11px] font-mono font-bold text-[#9AB4FF] px-1.5 py-0.5 rounded bg-[#000035]/70 border border-[#9AB4FF]/20 shrink-0">
-                              {displayTime}
-                            </span>
-                          );
-                        })()}
+                      <div className="min-w-0 flex items-center gap-2">
+                        <span className="text-[11px] font-mono font-bold text-[#9AB4FF] px-1.5 py-0.5 rounded bg-[#000035]/70 border border-[#9AB4FF]/20 shrink-0">
+                          {row.time}
+                        </span>
                         <h4 className="text-xs sm:text-sm font-black text-white truncate">
                           {isEn ? row.titleEn : row.titlePt}
                         </h4>
-                        {row.id === 'tutor_live' && (
-                          <div className="inline-flex items-center gap-1.5 flex-wrap">
-                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#000035]/80 border border-[#9AB4FF]/30 text-[10px] text-[#9AB4FF] shadow-xs">
-                              <span className="text-[#9AB4FF]/70 text-[9px] font-semibold uppercase">{isEn ? 'Goal:' : 'Meta:'}</span>
-                              <select
-                                value={weeklyNativeTarget}
-                                onChange={(e) => handleTargetChange(Number(e.target.value))}
-                                className="bg-transparent text-[#F4CA54] font-black cursor-pointer focus:outline-hidden text-[10px]"
-                                title={isEn ? 'Weekly native chat frequency goal' : 'Frequência de aulas semanais com o nativo'}
-                              >
-                                <option value={1} className="bg-[#000035] text-white">1x {isEn ? '/ week' : '/ semana'}</option>
-                                <option value={2} className="bg-[#000035] text-white">2x {isEn ? '/ week' : '/ semana'}</option>
-                                <option value={3} className="bg-[#000035] text-white">3x {isEn ? '/ week' : '/ semana'}</option>
-                                <option value={4} className="bg-[#000035] text-white">4x {isEn ? '/ week' : '/ semana'}</option>
-                                <option value={5} className="bg-[#000035] text-white">5x {isEn ? '/ week' : '/ semana'}</option>
-                                <option value={7} className="bg-[#000035] text-white">7x {isEn ? '/ week' : '/ semana'}</option>
-                              </select>
-                            </div>
-                            {(checkedCounts.tutor_live || 0) >= weeklyNativeTarget ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[9px] font-extrabold uppercase tracking-wide">
-                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-                                <span>{isEn ? 'Goal met' : 'Meta atingida'} ({(checkedCounts.tutor_live || 0)}/{weeklyNativeTarget})</span>
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-[#9AB4FF]/75 font-bold">
-                                ({(checkedCounts.tutor_live || 0)}/{weeklyNativeTarget} {isEn ? 'completed' : 'concluída' + (weeklyNativeTarget > 1 ? 's' : '')})
-                              </span>
-                            )}
-                          </div>
-                        )}
                       </div>
                     </div>
 

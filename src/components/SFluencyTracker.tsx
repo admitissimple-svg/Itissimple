@@ -339,11 +339,9 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
         title: isEn ? 'Live Native Friend Chat' : 'Conversa com Amigo Nativo',
         subtitle: hasLiveLessonsScheduled
           ? isEn
-            ? `${lessons.length}/${userProfile?.weeklyNativeLessonsTarget || 1} session(s) booked / completed`
-            : `${lessons.length}/${userProfile?.weeklyNativeLessonsTarget || 1} aula(s) agendada(s) no Google Meet`
-          : isEn
-          ? `Schedule your session (Goal: ${userProfile?.weeklyNativeLessonsTarget || 1}x/wk)`
-          : `Agende sua sessão (Meta: ${userProfile?.weeklyNativeLessonsTarget || 1}x/sem)`,
+            ? `${lessons.length} session(s) booked / completed`
+            : `${lessons.length} aula(s) agendada(s) no Google Meet`
+          : isEn ? 'Schedule a 25 or 50-min conversation' : 'Agende sua sessão de 25 ou 50 min',
         isCompleted: hasLiveLessonsScheduled,
         percentContribution: 15,
         actionLabel: isEn ? 'Schedule meet' : 'Agendar aula',

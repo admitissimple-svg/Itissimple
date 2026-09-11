@@ -839,8 +839,8 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
             {/* Embedded Player */}
             <div className="relative aspect-video rounded-3xl overflow-hidden bg-[#000035] shadow-md border border-[#1C4C96]">
               <iframe
-                src={getYouTubeEmbedUrl(assignedVideo.videoId || assignedVideo.url)}
-                title={assignedVideo.title || 'YouTube Video'}
+                src={getYouTubeEmbedUrl(assignedVideo.videoId)}
+                title={assignedVideo.title}
                 className="w-full h-full border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
@@ -860,7 +860,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
                 </div>
 
                 <a
-                  href={getYouTubeWatchUrl(assignedVideo.videoId || assignedVideo.url)}
+                  href={getYouTubeWatchUrl(assignedVideo.videoId)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs font-bold text-[#1C4C96] hover:text-[#062863] flex items-center gap-1 shrink-0"

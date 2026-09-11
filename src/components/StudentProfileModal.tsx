@@ -9,7 +9,6 @@ import {
   Target,
   Clock,
   Globe,
-  Users,
 } from 'lucide-react';
 import { UserProfile, EnglishLevel, Language, GoogleAccount } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
@@ -61,9 +60,6 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
   const [dailyGoalMinutes, setDailyGoalMinutes] = useState(
     activeProfile?.dailyGoalMinutes || 30
   );
-  const [weeklyNativeLessonsTarget, setWeeklyNativeLessonsTarget] = useState<number>(
-    activeProfile?.weeklyNativeLessonsTarget || 1
-  );
   const [routineVideoTime, setRoutineVideoTime] = useState(
     activeProfile?.routineVideoTime || ''
   );
@@ -95,7 +91,6 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
       setLevel(safeProfile?.level || EnglishLevel.BEGINNER);
       setGoal(safeProfile?.learningGoal || '');
       setDailyGoalMinutes(safeProfile?.dailyGoalMinutes || 30);
-      setWeeklyNativeLessonsTarget(safeProfile?.weeklyNativeLessonsTarget || 1);
       setRoutineVideoTime(safeProfile?.routineVideoTime || '');
       setRoutineAudioTime(safeProfile?.routineAudioTime || '');
       setDailyPhraseTime(safeProfile?.dailyPhraseTime || '');
@@ -135,7 +130,6 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
       level,
       learningGoal: goal.trim(),
       dailyGoalMinutes: Number(dailyGoalMinutes) || 30,
-      weeklyNativeLessonsTarget: Number(weeklyNativeLessonsTarget) || 1,
       routineVideoTime,
       routineAudioTime,
       dailyPhraseTime,
@@ -274,32 +268,6 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
                     className="w-full pl-9 pr-3 py-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] font-semibold"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {isEn ? 'Weekly Native Friend Lessons' : 'Aulas Semanais com Amigo Nativo'}
-                </label>
-                <div className="relative">
-                  <Users className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <select
-                    value={weeklyNativeLessonsTarget}
-                    onChange={(e) => setWeeklyNativeLessonsTarget(Number(e.target.value))}
-                    className="w-full pl-9 pr-3 py-3 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] font-semibold focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
-                  >
-                    <option value={1}>1x {isEn ? 'session / week (Standard)' : 'aula por semana (Padrão)'}</option>
-                    <option value={2}>2x {isEn ? 'sessions / week' : 'aulas por semana'}</option>
-                    <option value={3}>3x {isEn ? 'sessions / week' : 'aulas por semana'}</option>
-                    <option value={4}>4x {isEn ? 'sessions / week' : 'aulas por semana'}</option>
-                    <option value={5}>5x {isEn ? 'sessions / week' : 'aulas por semana'}</option>
-                    <option value={7}>7x {isEn ? 'sessions / week (Daily)' : 'aulas por semana (Todos os dias)'}</option>
-                  </select>
-                </div>
-                <span className="text-[10px] text-slate-500 mt-1 block">
-                  {isEn
-                    ? 'Target used to calculate your weekly S-Fluency evolution.'
-                    : 'Meta usada no cálculo de evolução do gráfico em S da sua semana.'}
-                </span>
               </div>
             </div>
 

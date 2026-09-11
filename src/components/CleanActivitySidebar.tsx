@@ -7,6 +7,7 @@ import {
   Trash2,
   Edit3,
   Calendar,
+  Mail,
   Sparkles,
   Youtube,
   AlertCircle,
@@ -289,6 +290,26 @@ export const CleanActivitySidebar: React.FC<CleanActivitySidebarProps> = ({
               <Plus className="w-4 h-4 text-[#9AB4FF]" />
               <span>{currentLanguage === 'en' ? 'Add Activity' : 'Adicionar Atividade'}</span>
             </button>
+
+            {onOpenEmailNotificationModal && (
+              <button
+                type="button"
+                onClick={onOpenEmailNotificationModal}
+                className="px-3.5 py-2 bg-[#9AB4FF]/15 hover:bg-[#9AB4FF]/25 text-[#062863] rounded-xl text-xs font-black transition flex items-center gap-1.5 border border-[#607EC9]/40 cursor-pointer shadow-2xs"
+                title={
+                  isTeacher
+                    ? (currentLanguage === 'en' ? 'Return Routine by Email to Student' : 'Retornar Rotina por E-mail ao Aluno')
+                    : (currentLanguage === 'en' ? 'Send Routine to Teacher via Email' : 'Enviar Rotina por E-mail ao Professor')
+                }
+              >
+                <Mail className="w-3.5 h-3.5 text-[#1C4C96]" />
+                <span>
+                  {isTeacher
+                    ? (currentLanguage === 'en' ? 'Return to Student' : 'Retornar ao Aluno')
+                    : (currentLanguage === 'en' ? 'Email Routine' : 'Enviar ao Professor')}
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -330,24 +351,36 @@ export const CleanActivitySidebar: React.FC<CleanActivitySidebarProps> = ({
             </button>
           </div>
         ) : hasPendingVideos ? (
-          <div className="p-4 bg-[#9AB4FF]/10 rounded-2xl border border-[#607EC9]/30 space-y-2 text-xs text-[#062863]">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#1C4C96] shrink-0" />
-              <span className="font-extrabold text-sm text-[#000035]">
-                {isTeacher
-                  ? (currentLanguage === 'en' ? 'Assign Videos to Routine' : 'Indicar Vídeos para a Rotina')
-                  : (currentLanguage === 'en' ? 'Select Daily Topics' : 'Selecione os Temas do Dia')}
-              </span>
+          <div className="p-4 bg-[#FEF7E0] rounded-2xl border border-[#F8E6AB] space-y-2.5 text-xs text-[#8D6909]">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-[#D97706] shrink-0" />
+                <span className="font-extrabold text-sm text-[#785404]">
+                  {isTeacher
+                    ? (currentLanguage === 'en' ? 'Assign Videos to Routine' : 'Indicar Vídeos para a Rotina')
+                    : (currentLanguage === 'en' ? 'Next Step: Email Routine to Teacher' : 'Próximo Passo: Enviar Rotina ao Professor')}
+                </span>
+              </div>
+              {onOpenEmailNotificationModal && !isTeacher && (
+                <button
+                  type="button"
+                  onClick={onOpenEmailNotificationModal}
+                  className="px-3 py-1.5 bg-[#8D6909] hover:bg-[#715407] text-white font-bold rounded-xl text-[11px] transition flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+                >
+                  <Send className="w-3 h-3 text-[#F4CA54]" />
+                  <span>{currentLanguage === 'en' ? 'Send via Email' : 'Enviar por E-mail'}</span>
+                </button>
+              )}
             </div>
 
-            <p className="text-[11px] leading-relaxed text-[#607EC9]">
+            <p className="text-[11px] leading-relaxed">
               {isTeacher
                 ? (currentLanguage === 'en'
                     ? `${sortedItems.length - itemsWithVideos} activity(ies) need YouTube video recommendations.`
                     : `${sortedItems.length - itemsWithVideos} atividade(s) de ${dayName} aguardam indicação de vídeos no YouTube.`)
                 : (currentLanguage === 'en'
-                    ? `Choose topics from the timeline below to automatically assign curated YouTube videos for ${dayName}.`
-                    : `Escolha os temas na linha do tempo abaixo para vincular automaticamente os vídeos do YouTube para ${dayName}.`)}
+                    ? `Your routine for ${dayName} is recorded! Send it by email so your English teacher can curate and assign tailored YouTube video lessons.`
+                    : `Sua rotina de ${dayName} está preenchida! Envie o e-mail ao professor para que ele selecione e vincule os vídeos ideais do YouTube.`)}
             </p>
           </div>
         ) : (
