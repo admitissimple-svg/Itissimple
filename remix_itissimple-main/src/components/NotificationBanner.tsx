@@ -1,0 +1,112 @@
+import React from 'react';
+import { X, Play, Bell, GraduationCap, PenTool } from 'lucide-react';
+import { RoutineItem } from '../types';
+
+export interface ActiveNotificationData {
+  type: 'activity' | 'end_of_day';
+  item?: RoutineItem;
+  title: string;
+  message: string;
+  leadTimeBadge: string;
+}
+
+interface NotificationBannerProps {
+  activeNotification: ActiveNotificationData | null;
+  onClose: () => void;
+  onOpenLesson: (item: RoutineItem) => void;
+  onOpenEndOfDay: () => void;
+}
+
+export const NotificationBanner: React.FC<NotificationBannerProps> = ({
+  activeNotification,
+  onClose,
+  onOpenLesson,
+  onOpenEndOfDay,
+}) => {
+  if (!activeNotification) return null;
+
+  const { type, item, title, message, leadTimeBadge } = activeNotification;
+  const isEndOfDay = type === 'end_of_day';
+
+  return (
+    <div className="fixed bottom-4 right-4 z-50 max-w-md w-full animate-in slide-in-from-bottom-5 duration-300 p-2 sm:p-0">
+      <div className="bg-[#000035] text-white rounded-3xl p-4 sm:p-5 shadow-2xl border-2 border-[#1C4C96] flex flex-col gap-3">
+        {/* Top Header */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-[#1C4C96] text-white flex items-center justify-center font-bold animate-pulse shrink-0 border border-[#607EC9]">
+              {isEndOfDay ? <PenTool className="w-4 h-4 text-[#9AB4FF]" /> : <Bell className="w-4 h-4 text-[#9AB4FF]" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#9AB4FF]">
+                  {isEndOfDay ? 'Revisão do Dia' : 'Lembrete de Rotina'}
+                </span>
+                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#1C4C96] text-white">
+                  {leadTimeBadge}
+                </span>
+              </div>
+              <h4 className="text-sm font-bold text-white line-clamp-1">{title}</h4>
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="p-1 text-[#9AB4FF] hover:text-white rounded-lg transition cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Message */}
+        <p className="text-xs text-[#9AB4FF]/90 leading-relaxed">{message}</p>
+
+        {/* Teacher video info if standard activity */}
+        {item && item.teacherVideos && item.teacherVideos.length > 0 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-[#9AB4FF] bg-[#062863] px-2.5 py-1 rounded-xl border border-[#1C4C96]">
+            <GraduationCap className="w-3.5 h-3.5 text-[#9AB4FF]" />
+            <span>
+              {item.teacherVideos.length} vídeo(s) do YouTube indicado(s) pelo professor para este momento
+            </span>
+          </div>
+        )}
+
+        {/* CTA Buttons */}
+        <div className="flex items-center gap-2 pt-1">
+          {isEndOfDay ? (
+            <button
+              onClick={() => {
+                onOpenEndOfDay();
+                onClose();
+              }}
+              className="flex-1 py-2.5 bg-[#1C4C96] hover:bg-[#607EC9] text-white text-xs font-bold rounded-xl transition shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <PenTool className="w-3.5 h-3.5 text-[#9AB4FF]" />
+              Escrever Frase do Dia
+            </button>
+          ) : (
+            item && (
+              <button
+                onClick={() => {
+                  onOpenLesson(item);
+                  onClose();
+                }}
+                className="flex-1 py-2.5 bg-[#1C4C96] hover:bg-[#607EC9] text-white text-xs font-bold rounded-xl transition shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-current text-[#9AB4FF]" />
+                Assistir Vídeo Agora
+              </button>
+            )
+          )}
+
+          <button
+            onClick={onClose}
+            className="px-3.5 py-2.5 bg-[#062863] hover:bg-[#000035] text-[#9AB4FF] text-xs font-semibold rounded-xl transition cursor-pointer border border-[#1C4C96]"
+          >
+            Dispensar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
