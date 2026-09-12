@@ -94,18 +94,34 @@ const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfil
   weeklyNativeLessonsTarget: 1,
 });
 
+const isOldAudioActivity = (act: RoutineItem) => {
+  const id = String(act?.id || '');
+  const name = (act?.activityName || '').toLowerCase();
+  return (
+    id.endsWith('2') ||
+    name.includes('escuta ativa') ||
+    name.includes('podcast diário') ||
+    name.includes('podcast diario') ||
+    name.includes('(áudio)') ||
+    name.includes('(audio)')
+  );
+};
+
 const applyProfileTimesToRoutines = (
   baseRoutines: Record<DayOfWeek, RoutineItem[]>,
   videoTime?: string,
-  audioTime?: string
+  _audioTime?: string
 ): Record<DayOfWeek, RoutineItem[]> => {
   const source = baseRoutines && Object.keys(baseRoutines).length > 0 ? baseRoutines : defaultRoutinesByDay;
   const cloned: Record<DayOfWeek, RoutineItem[]> = {} as any;
   (Object.keys(source) as DayOfWeek[]).forEach((day) => {
     let videoTimeApplied = false;
-    let audioTimeApplied = false;
 
-    cloned[day] = (source[day] || []).map((act, index) => {
+    // Completely remove old audio activity from routine timeline
+    const rawList = (source[day] || []).filter((act) => !isOldAudioActivity(act));
+    const dayList = rawList.length > 0 ? rawList : defaultRoutinesByDay[day] || [];
+
+    cloned[day] = dayList.map((act, index) => {
       // Strictly target exclusively the ONE primary Video of the Day activity for this day
       const isVideoOfTheDay =
         !videoTimeApplied &&
@@ -121,23 +137,6 @@ const applyProfileTimesToRoutines = (
         return { ...act, time: videoTime };
       }
 
-      // Strictly target exclusively the ONE primary Audio / Podcast of the Day activity for this day
-      const isAudioOfTheDay =
-        !audioTimeApplied &&
-        Boolean(audioTime) &&
-        (act.id.endsWith('2') ||
-          Boolean(act.teacherSpotify) ||
-          act.activityName?.toLowerCase().includes('áudio') ||
-          act.activityName?.toLowerCase().includes('audio') ||
-          act.activityName?.toLowerCase().includes('podcast') ||
-          index === 1);
-
-      if (isAudioOfTheDay && audioTime) {
-        audioTimeApplied = true;
-        return { ...act, time: audioTime };
-      }
-
-      // All other activities in the day strictly keep their own original / customized times
       return { ...act };
     });
   });

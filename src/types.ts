@@ -126,6 +126,8 @@ export interface TeacherAssignedVideo {
   duration?: string;
   instructions?: string;
   addedAt?: string;
+  playlistId?: string;
+  playlistTitle?: string;
 }
 
 export interface TeacherAssignedSpotify {
@@ -194,6 +196,7 @@ export interface UserProfile {
   totalWordsLearned?: number;
   lastActiveDate?: string;
   languagePreference?: Language;
+  weeklyNativeLessonsTarget?: number;
   dailyJournalEntries?: DailyJournalEntry[];
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
 }

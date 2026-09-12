@@ -36,7 +36,14 @@ import {
 } from '../types';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { extractYouTubeVideoId, getYouTubeEmbedUrl } from '../utils/youtube';
-import { getSpotifyEmbedUrl, getSpotifyDirectUrl } from '../utils/spotify';
+import {
+  getSpotifyEmbedUrl,
+  getSpotifyDirectUrl,
+  normalizeStudentLevel,
+  getSpotifyPlaylistForLevel,
+  getDailySpotifyTrackForStudent,
+  DAYS_SEQUENCE,
+} from '../utils/spotify';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
 import { getInstantOrCachedWord, lookupWord, DictionaryLookupResult } from '../utils/dictionaryService';
@@ -132,10 +139,27 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   // Inline time editing state for individual activity row
   const [editingTimeActivityId, setEditingTimeActivityId] = useState<string | null>(null);
   const [editingTimeValue, setEditingTimeValue] = useState<string>('');
-  const currentDayList = routinesByDay[selectedDay] || [];
-  const sortedActivities = [...currentDayList].sort((a, b) => a.time.localeCompare(b.time));
 
-  // Current active activity
+  // Filter out any legacy audio activity from the timeline to keep the interface focused and simplified
+  const isOldAudioActivity = (act: RoutineItem) => {
+    const id = String(act?.id || '');
+    const name = (act?.activityName || '').toLowerCase();
+    return (
+      id.endsWith('2') ||
+      name.includes('escuta ativa') ||
+      name.includes('podcast diário') ||
+      name.includes('podcast diario') ||
+      name.includes('(áudio)') ||
+      name.includes('(audio)')
+    );
+  };
+
+  const currentDayList = routinesByDay[selectedDay] || [];
+  const sortedActivities = [...currentDayList]
+    .filter((act) => !isOldAudioActivity(act))
+    .sort((a, b) => a.time.localeCompare(b.time));
+
+  // Current active activity (guaranteed not to be an old audio activity)
   const activeActivity =
     sortedActivities.find((a) => a.id === selectedActivityId) || sortedActivities[0] || null;
 
@@ -191,8 +215,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     return () => clearTimeout(timer);
   }, [words]);
 
-  // Spotify view toggle: App Player or Spotify Web
+  // Spotify view toggle: App Player or Spotify Web, and Track vs Full Playlist view
   const [spotifyPlayerMode, setSpotifyPlayerMode] = useState<'app' | 'web'>('app');
+  const [spotifyEmbedView, setSpotifyEmbedView] = useState<'track' | 'playlist'>('track');
 
   // Sentence of the day State
   const [sentenceInput, setSentenceInput] = useState<string>('');
@@ -305,17 +330,17 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       : 'Morning Coffee & Routine in English');
   const embedUrl = getYouTubeEmbedUrl(validVidId || 'OT1YRzt1f8A');
 
-  // Active Spotify suggestion
-  const spotifyData: TeacherAssignedSpotify =
-    activeActivity?.teacherSpotify || {
-      id: 'default-spot',
-      url: 'https://open.spotify.com/episode/5kY9Qe3x0k6y9q0k6y9q0k',
-      title: '6 Minute English: The Power of Coffee (BBC Learning English)',
-      type: 'podcast',
-      artistOrHost: 'BBC Learning English',
-    };
-  const spotifyEmbedUrl = getSpotifyEmbedUrl(spotifyData.url);
-  const spotifyDirectUrl = getSpotifyDirectUrl(spotifyData.url);
+  // Automated level-based Spotify playlist & sequential daily track distribution
+  const normalizedLevel = normalizeStudentLevel(userProfile?.level);
+  const levelPlaylistConfig = getSpotifyPlaylistForLevel(normalizedLevel);
+  const dailySpotifyTrack = getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
+
+  const effectiveTrackTitle = dailySpotifyTrack.title;
+  const effectiveArtist = dailySpotifyTrack.artist;
+  const effectiveEmbedUrl = dailySpotifyTrack.embedUrl;
+  const effectiveDirectUrl = dailySpotifyTrack.url;
+  const effectiveTeacherTip = isEn ? dailySpotifyTrack.teacherTipEn : dailySpotifyTrack.teacherTipPt;
+  const currentDaySeqIndex = DAYS_SEQUENCE.indexOf(selectedDay) + 1;
 
   // End of day reminder calculation
   const lastActivity = getLastActivityOfTheDay(sortedActivities);
@@ -401,8 +426,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       });
     } else {
       onAddCustomActivity({
-        time: userProfile?.routineAudioTime || '14:00',
-        activityName: isEn ? 'Active Listening & Daily Podcast (Audio)' : 'Escuta Ativa & Podcast Diário (Áudio)',
+        time: '14:00',
+        activityName: isEn ? 'Afternoon English Routine' : 'Rotina da Tarde em Inglês',
         dayOfWeek: selectedDay,
         completed: false,
         learnedWords: [],
@@ -912,22 +937,33 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         </div>
 
         {/* Right: Teacher's Daily Listening Suggestion • Spotify */}
-        <div className="lg:col-span-5 bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-3.5 flex flex-col justify-between">
+        <div className="lg:col-span-5 bg-white rounded-3xl p-5 border border-[#1DB954]/30 shadow-xs space-y-3 flex flex-col justify-between">
           {/* Card Header */}
-          <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2.5">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5 gap-2 flex-wrap">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-[#1DB954] text-[#000035] flex items-center justify-center font-black shrink-0 shadow-xs">
                 <Headphones className="w-4 h-4" />
               </div>
               <div>
-                <h3 className="font-black text-xs text-[#000035] tracking-tight">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <h3 className="font-black text-xs text-[#000035] tracking-tight">
+                    {isEn
+                      ? "Teacher's Daily Listening • Spotify"
+                      : 'Sugestão Diária do Teacher • Spotify'}
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30">
+                    {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 font-medium">
                   {isEn
-                    ? "Teacher's Daily Listening Suggestion • Spotify"
-                    : 'Sugestão Diária do Teacher • Spotify'}
-                </h3>
+                    ? `${dailySpotifyTrack.dayLabelEn} • Track ${currentDaySeqIndex} of 7 • Adm Itissimple`
+                    : `${dailySpotifyTrack.dayLabelPt} • Faixa ${currentDaySeqIndex} de 7 • Adm Itissimple`}
+                </p>
               </div>
             </div>
 
+            {/* Mode switch */}
             <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px]">
               <button
                 type="button"
@@ -938,7 +974,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                     : 'text-slate-500 hover:text-[#000035]'
                 }`}
               >
-                {isEn ? 'App Player' : 'Player no App'}
+                {isEn ? 'App Player' : 'No App'}
               </button>
               <button
                 type="button"
@@ -949,69 +985,177 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                     : 'text-slate-500 hover:text-[#000035]'
                 }`}
               >
-                {isEn ? 'Spotify Web' : 'Ouvir no Spotify'}
+                {isEn ? 'Spotify Web' : 'Spotify'}
               </button>
             </div>
           </div>
 
-          <p className="text-xs text-[#607EC9] leading-relaxed">
-            {isEn
-              ? 'Curated daily audio suggestion (podcast or song) directly from your Native Friend.'
-              : 'Sugestão diária de áudio (podcast ou música) indicada diretamente pelo seu Amigo Nativo.'}
-          </p>
+          {/* Subtitle / Playlist tag + View toggle */}
+          <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 shrink-0">
+                It's simple
+              </span>
+              <span className="text-[11px] font-bold text-slate-700 truncate">
+                {levelPlaylistConfig.playlistTitle}
+              </span>
+            </div>
+
+            {spotifyPlayerMode === 'app' ? (
+              <div className="flex items-center gap-1 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setSpotifyEmbedView('track')}
+                  className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
+                    spotifyEmbedView === 'track'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {isEn ? 'Song of the Day' : 'Música de Hoje'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSpotifyEmbedView('playlist')}
+                  className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
+                    spotifyEmbedView === 'playlist'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {isEn ? 'Full Playlist' : 'Playlist Completa'}
+                </button>
+              </div>
+            ) : (
+              <a
+                href={levelPlaylistConfig.playlistUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-1 shrink-0"
+                title={isEn ? 'Open complete playlist on Spotify' : 'Abrir playlist completa no Spotify'}
+              >
+                <span>{isEn ? 'Open in Spotify' : 'Abrir no Spotify'}</span>
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+            )}
+          </div>
 
           {/* Spotify Item Card or Embed */}
-          {spotifyPlayerMode === 'app' && spotifyEmbedUrl ? (
-            <div className="rounded-2xl overflow-hidden border border-[#9AB4FF]/40 shadow-xs h-[152px]">
-              <iframe
-                src={spotifyEmbedUrl}
-                width="100%"
-                height="152"
-                frameBorder="0"
-                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                loading="lazy"
-                title="Spotify Audio"
-              />
-            </div>
+          {spotifyPlayerMode === 'app' ? (
+            spotifyEmbedView === 'playlist' ? (
+              <div className="space-y-1.5">
+                <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[280px] bg-black">
+                  <iframe
+                    src={levelPlaylistConfig.embedPlaylistUrl}
+                    width="100%"
+                    height="280"
+                    frameBorder="0"
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy"
+                    title="Spotify Playlist Player - It's simple"
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
+                  <span className="font-semibold truncate">
+                    🎶 {levelPlaylistConfig.playlistTitle} • Adm Itissimple
+                  </span>
+                  <a
+                    href={levelPlaylistConfig.playlistUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-0.5 shrink-0"
+                  >
+                    <span>{isEn ? 'Open Spotify' : 'No Spotify'}</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[152px] bg-black">
+                  <iframe
+                    src={effectiveEmbedUrl}
+                    width="100%"
+                    height="152"
+                    frameBorder="0"
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy"
+                    title="Spotify Daily Track Player"
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
+                  <span className="font-semibold truncate">
+                    🎵 {effectiveTrackTitle} • {effectiveArtist}
+                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                      {isEn ? `Track ${currentDaySeqIndex}/7` : `Faixa ${currentDaySeqIndex}/7`}
+                    </span>
+                    <a
+                      href={effectiveDirectUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-0.5"
+                    >
+                      <span>{isEn ? 'Open' : 'Abrir'}</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )
           ) : (
-            <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50/50 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
+            <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50/60 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-                  <Radio className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-[#1DB954] text-[#000035] flex items-center justify-center shrink-0 shadow-xs">
+                  <Music className="w-5 h-5" />
                 </div>
                 <div className="min-w-0">
-                  <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 uppercase">
-                    Podcast
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 uppercase">
+                      {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
+                    </span>
+                    <span className="text-[9px] text-emerald-700 font-semibold">
+                      {isEn ? `Track ${currentDaySeqIndex}/7` : `Faixa ${currentDaySeqIndex}/7`}
+                    </span>
+                  </div>
                   <h4 className="text-xs font-black text-[#000035] truncate mt-0.5">
-                    {spotifyData.title}
+                    {effectiveTrackTitle}
                   </h4>
-                  <p className="text-[10px] text-emerald-800 truncate">
-                    {spotifyData.artistOrHost || 'BBC Learning English'}
+                  <p className="text-[10px] text-emerald-800 font-semibold truncate">
+                    {effectiveArtist}
                   </p>
                 </div>
               </div>
 
-              <a
-                href={spotifyDirectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-bold flex items-center gap-1 shrink-0 transition shadow-2xs cursor-pointer"
-              >
-                <span>{isEn ? 'Open in Spotify' : 'Abrir no Spotify'}</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
+              <div className="flex flex-col gap-1.5 shrink-0">
+                <a
+                  href={effectiveDirectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] rounded-xl text-[11px] font-extrabold flex items-center gap-1 transition shadow-xs cursor-pointer"
+                >
+                  <span>{isEn ? 'Play Track' : 'Tocar Faixa'}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+                <a
+                  href={levelPlaylistConfig.playlistUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2 py-0.5 text-center text-[10px] font-bold text-emerald-800 hover:underline"
+                >
+                  {isEn ? 'Open Playlist' : 'Ver Playlist'}
+                </a>
+              </div>
             </div>
           )}
 
           {/* Teacher Tip */}
-          <div className="p-3 bg-[#9AB4FF]/10 rounded-2xl border border-[#9AB4FF]/35 text-[11px] text-[#062863] leading-relaxed">
-            <span className="font-extrabold text-[#000035] block mb-0.5">
-              {isEn ? '💡 Teacher Tip:' : '💡 Dica do Teacher:'}
+          <div className="p-3 bg-[#1DB954]/10 rounded-2xl border border-[#1DB954]/30 text-[11px] text-[#062863] leading-relaxed">
+            <span className="font-extrabold text-[#000035] block mb-0.5 flex items-center gap-1">
+              <span className="text-emerald-700">💡</span> {isEn ? 'Teacher Tip:' : 'Dica do Teacher:'}
             </span>
-            {isEn
-              ? 'Daily suggestion from teacher: Listen to the podcast while having your coffee. Focus on the vocabulary and natural rhythm.'
-              : 'Sugestão diária do Teacher: Ouça o podcast enquanto toma seu café. Preste atenção no vocabulário e no ritmo natural.'}
+            {effectiveTeacherTip}
           </div>
         </div>
       </div>
