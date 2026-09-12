@@ -89,3 +89,55 @@ export async function saveUserToFirestore(user: any): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Dedicated persistence for Student Media Assignments (YouTube & Spotify) directly linked to UID.
+ * Guarantees that even across reloads, disconnects, or new logins, the assigned content is retained in Firestore.
+ */
+export async function saveStudentAssignmentsByUid(
+  uid: string,
+  data: {
+    uid?: string;
+    email?: string;
+    level?: string;
+    videoAssignments?: any[];
+    spotifyAssignments?: any[];
+    routines?: any;
+    watchedVideos?: string[];
+    listenedTracks?: string[];
+    updatedAt?: string;
+  }
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !uid) return false;
+  try {
+    const sanitized = JSON.parse(JSON.stringify({
+      ...data,
+      uid,
+      updatedAt: data.updatedAt || new Date().toISOString(),
+    }));
+    const savePromise = setDoc(doc(db, 'student_assignments', uid), sanitized, { merge: true }).then(() => true);
+    const result = await withTimeout(savePromise, 2000);
+    return !!result;
+  } catch (err) {
+    console.warn('Firestore saveStudentAssignmentsByUid error:', err);
+    return false;
+  }
+}
+
+export async function fetchStudentAssignmentsByUid(uid: string): Promise<any | null> {
+  const db = getFirestoreDb();
+  if (!db || !uid) return null;
+  try {
+    const fetchPromise = getDoc(doc(db, 'student_assignments', uid)).then((snap) => {
+      if (snap.exists()) {
+        return snap.data();
+      }
+      return null;
+    });
+    return await withTimeout(fetchPromise, 2000);
+  } catch (err) {
+    console.warn('Firestore fetchStudentAssignmentsByUid error:', err);
+    return null;
+  }
+}

@@ -45,6 +45,20 @@
         "status": { "type": "string", "enum": ["scheduled", "completed", "not_completed", "cancelled"], "description": "Lesson status" }
       },
       "required": ["studentEmail", "teacherEmail", "startDateTime", "endDateTime", "status"]
+    },
+    "StudentMediaAssignments": {
+      "title": "StudentMediaAssignments",
+      "description": "Student weekly YouTube and Spotify media assignments partitioned by UID",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Student UID" },
+        "email": { "type": "string", "format": "email", "description": "Student email" },
+        "level": { "type": "string", "description": "English level" },
+        "videoAssignments": { "type": "array", "description": "7-day unique YouTube assignments" },
+        "spotifyAssignments": { "type": "array", "description": "7-day unique Spotify assignments" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["uid"]
     }
   },
   "firestore": {
@@ -59,6 +73,10 @@
     "/lessons/{lessonId}": {
       "schema": "LiveLesson",
       "description": "Live scheduled lessons"
+    },
+    "/student_assignments/{userId}": {
+      "schema": "StudentMediaAssignments",
+      "description": "Student media assignments partitioned by user UID"
     }
   }
 }

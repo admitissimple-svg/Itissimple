@@ -35,7 +35,7 @@ import {
   TeacherAssignedSpotify,
 } from '../types';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
-import { extractYouTubeVideoId, getYouTubeEmbedUrl } from '../utils/youtube';
+import { extractYouTubeVideoId, getYouTubeEmbedUrl, getDailyYouTubeVideoForStudent } from '../utils/youtube';
 import {
   getSpotifyEmbedUrl,
   getSpotifyDirectUrl,
@@ -314,29 +314,32 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     }, 2000);
   };
 
-  // Active YouTube video extraction
-  const assignedVideo: TeacherAssignedVideo | null =
-    activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0
-      ? activeActivity.teacherVideos[0]
-      : null;
-
-  const rawVideoUrl = assignedVideo?.videoId || assignedVideo?.url || '';
-  const validVidId = extractYouTubeVideoId(rawVideoUrl);
-  // Fallback to verified valid video (OT1YRzt1f8A - BBC Learning English Eating habits) if none assigned
-  const defaultVideoUrl = validVidId ? `https://www.youtube.com/watch?v=${validVidId}` : 'https://www.youtube.com/watch?v=OT1YRzt1f8A';
-  const defaultVideoTitle =
-    assignedVideo?.title ||
-    (activeActivity
-      ? `English Routine: ${getActivityDisplayName(activeActivity.activityName, currentLanguage)}`
-      : 'Morning Coffee & Routine in English');
-  const embedUrl = getYouTubeEmbedUrl(validVidId || 'OT1YRzt1f8A');
-
-  // Automated level-based Spotify playlist & sequential daily track distribution
+  // Automated level-based Spotify & YouTube curriculum sequential distribution
   const normalizedLevel = normalizeStudentLevel(userProfile?.level);
   const levelPlaylistConfig = getSpotifyPlaylistForLevel(normalizedLevel);
   const dailySpotifyTrack = getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
+  const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
+
+  // Active YouTube video extraction: priority to active selected activity, then any day routine item, then level curriculum daily video
+  const assignedVideo: TeacherAssignedVideo | null =
+    (activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0
+      ? activeActivity.teacherVideos[0]
+      : null) ||
+    currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0)?.teacherVideos?.[0] ||
+    null;
+
+  const rawVideoUrl = assignedVideo?.videoId || assignedVideo?.url || dailyYouTubeVideo.url;
+  const validVidId = extractYouTubeVideoId(rawVideoUrl) || dailyYouTubeVideo.videoId || 'OT1YRzt1f8A';
+  const defaultVideoTitle =
+    assignedVideo?.title ||
+    dailyYouTubeVideo.title ||
+    (activeActivity
+      ? `English Routine: ${getActivityDisplayName(activeActivity.activityName, currentLanguage)}`
+      : 'English Routine Video');
+  const embedUrl = getYouTubeEmbedUrl(validVidId);
+
   const rawAssignedSpotify =
     currentDayActivities.find((act) => act && act.teacherSpotify && act.teacherSpotify.url)?.teacherSpotify ||
     (activeActivity?.teacherSpotify?.url ? activeActivity.teacherSpotify : null);

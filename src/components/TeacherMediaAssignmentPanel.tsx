@@ -31,7 +31,7 @@ import {
   Language,
   GoogleAccount,
 } from '../types';
-import { extractYouTubeVideoId } from '../utils/youtube';
+import { extractYouTubeVideoId, getDailyYouTubeVideoForStudent } from '../utils/youtube';
 import {
   isValidSpotifyUrl,
   parseSpotifyUrl,
@@ -177,6 +177,8 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   const [studentSpotifyAssignments, setStudentSpotifyAssignments] = useState<any[]>([]);
   const [studentListenedTracks, setStudentListenedTracks] = useState<string[]>([]);
   const [assigningSpotifyDay, setAssigningSpotifyDay] = useState<DayOfWeek | null>(null);
+  const [isDistributingYtWeek, setIsDistributingYtWeek] = useState<boolean>(false);
+  const [isDistributingSpotWeek, setIsDistributingSpotWeek] = useState<boolean>(false);
 
   // Resolved student level for automatic Spotify synchronization
   const currentLevelRaw =
@@ -251,6 +253,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       setStudentProfile(profileData);
       setStudentAssignments(assignmentsList);
       setStudentWatched(watchedList);
+      setStudentSpotifyAssignments(spotifyAssignList);
 
       const resolvedLevelRaw =
         profileData?.level ||
@@ -329,8 +332,8 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         } else if (assignedVidUrl) {
           candidateUrl = assignedVidUrl;
         } else {
-          const fallback = defaultRoutinesByDay[d.id]?.[0]?.teacherVideos?.[0]?.url;
-          candidateUrl = fallback || 'https://www.youtube.com/watch?v=OT1YRzt1f8A';
+          const defaultDailyVideo = getDailyYouTubeVideoForStudent(resolvedNormalizedLevel, d.id);
+          candidateUrl = defaultDailyVideo.url || 'https://www.youtube.com/watch?v=OT1YRzt1f8A';
         }
 
         // Canonicalize URL to ensure standard https://www.youtube.com/watch?v=... format
@@ -945,6 +948,134 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     }
   };
 
+  // Handler: Assign strict exclusive unseen Spotify track from level curriculum
+  const handleAssignExclusiveSpotify = async (dayId: DayOfWeek) => {
+    if (!activeStudentEmail && !activeStudentUid) {
+      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para atribuir faixa exclusiva.' });
+      return;
+    }
+
+    setAssigningSpotifyDay(dayId);
+    setAssignFeedback(null);
+
+    try {
+      const res = await fetch('/api/student-spotify-assignments/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeStudentEmail,
+          studentUid: activeStudentUid,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
+          day: dayId,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && data.track) {
+        setSpotifyUrls((prev) => ({ ...prev, [dayId]: data.track.url }));
+        setSpotifyTypes((prev) => ({ ...prev, [dayId]: data.track.type || 'music' }));
+        setAssignFeedback({
+          type: 'success',
+          message: `✨ Faixa exclusiva inédita atribuída para ${dayId.toUpperCase()}: "${data.track.title}" (${data.remainingUnseen ?? 0} restantes)`,
+        });
+        await loadStudentMediaData();
+      } else {
+        setAssignFeedback({
+          type: 'error',
+          message: data.error || 'Erro ao atribuir faixa exclusiva do Spotify.',
+        });
+      }
+    } catch {
+      setAssignFeedback({
+        type: 'error',
+        message: 'Erro na conexão ao atribuir faixa exclusiva.',
+      });
+    } finally {
+      setAssigningSpotifyDay(null);
+    }
+  };
+
+  // Handler: Distribute full 7-day exclusive sequential YouTube videos for student
+  const handleDistributeWeekYouTube = async () => {
+    if (!activeStudentEmail && !activeStudentUid) {
+      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para distribuir vídeos da semana.' });
+      return;
+    }
+    setIsDistributingYtWeek(true);
+    setAssignFeedback(null);
+    try {
+      const res = await fetch('/api/student-video-assignments/distribute-week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeStudentEmail,
+          studentUid: activeStudentUid,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
+          level: currentNormalizedLevel,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAssignFeedback({
+          type: 'success',
+          message: '✨ Semana completa de 7 vídeos exclusivos do YouTube atribuída com sucesso!',
+        });
+        await loadStudentMediaData();
+      } else {
+        setAssignFeedback({
+          type: 'error',
+          message: data.error || 'Erro ao distribuir vídeos da semana.',
+        });
+      }
+    } catch {
+      setAssignFeedback({ type: 'error', message: 'Erro na conexão ao distribuir vídeos.' });
+    } finally {
+      setIsDistributingYtWeek(false);
+    }
+  };
+
+  // Handler: Distribute full 7-day exclusive sequential Spotify tracks for student
+  const handleDistributeWeekSpotify = async () => {
+    if (!activeStudentEmail && !activeStudentUid) {
+      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para distribuir faixas da semana.' });
+      return;
+    }
+    setIsDistributingSpotWeek(true);
+    setAssignFeedback(null);
+    try {
+      const res = await fetch('/api/student-spotify-assignments/distribute-week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: activeStudentEmail,
+          studentUid: activeStudentUid,
+          teacherUid: currentAccount?.uid,
+          teacherEmail: currentAccount?.email,
+          level: currentNormalizedLevel,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAssignFeedback({
+          type: 'success',
+          message: '✨ Semana completa de 7 faixas exclusivas do Spotify distribuída com sucesso!',
+        });
+        await loadStudentMediaData();
+      } else {
+        setAssignFeedback({
+          type: 'error',
+          message: data.error || 'Erro ao distribuir faixas da semana.',
+        });
+      }
+    } catch {
+      setAssignFeedback({ type: 'error', message: 'Erro na conexão ao distribuir áudios.' });
+    } finally {
+      setIsDistributingSpotWeek(false);
+    }
+  };
+
   // Helper to get first routine item display text (always in English for teacher)
   const getActivityLabel = (dayId: DayOfWeek) => {
     const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
@@ -1082,6 +1213,26 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   </span>
                 );
               })()}
+
+              <button
+                type="button"
+                onClick={handleDistributeWeekYouTube}
+                disabled={isDistributingYtWeek}
+                className="px-2.5 py-1 rounded-lg text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-2xs"
+                title={isEn ? 'Distribute 7 exclusive unseen videos for the entire week' : 'Distribuir 7 vídeos exclusivos e inéditos para a semana inteira'}
+              >
+                {isDistributingYtWeek ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Distribuindo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3 h-3 text-amber-300" />
+                    <span>Distribuir Semana (7 Vídeos)</span>
+                  </>
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -1329,6 +1480,64 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             >
               <RotateCcw className={`w-3 h-3 text-emerald-600 ${isResettingAll ? 'animate-spin' : ''}`} />
               <span>{isResettingAll ? (isEn ? 'Restaurando...' : 'Restaurando...') : (isEn ? 'Restaurar 7 Dias' : 'Restaurar 7 Dias')}</span>
+            </button>
+
+            {/* Spotify unseen counter badge */}
+            {(() => {
+              const consumed = new Set<string>();
+              studentListenedTracks.forEach((id) => {
+                const parsed = parseSpotifyUrl(id);
+                if (parsed.id) consumed.add(parsed.id);
+                else consumed.add(id);
+              });
+              studentSpotifyAssignments.forEach((assign) => {
+                const parsed = parseSpotifyUrl(assign.trackId || assign.url);
+                if (parsed.id) consumed.add(parsed.id);
+                else if (assign.trackId) consumed.add(assign.trackId);
+              });
+              const pool = currentLevelConfig?.tracks ? Object.values(currentLevelConfig.tracks) : [];
+              const totalTracks = pool.length;
+              const unseenTracks = pool.filter((t: any) => {
+                const pid = parseSpotifyUrl(t.url).id || t.id;
+                return pid && !consumed.has(pid);
+              }).length;
+
+              return (
+                <span
+                  className={`text-[10px] font-bold px-2 py-1 rounded-lg border hidden lg:flex items-center gap-1 ${
+                    unseenTracks > 0
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                      : 'bg-amber-50 text-amber-800 border-amber-300'
+                  }`}
+                >
+                  <Sparkles className="w-3 h-3 text-emerald-600" />
+                  <span>
+                    {unseenTracks > 0
+                      ? `${unseenTracks} de ${totalTracks} faixas inéditas`
+                      : `Todas as ${totalTracks} faixas já ouvidas/atribuídas`}
+                  </span>
+                </span>
+              );
+            })()}
+
+            <button
+              type="button"
+              onClick={handleDistributeWeekSpotify}
+              disabled={isDistributingSpotWeek}
+              className="px-2.5 py-1 rounded-lg text-xs font-bold bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-2xs"
+              title={isEn ? 'Distribute 7 exclusive unseen tracks for the entire week' : 'Distribuir 7 faixas exclusivas e inéditas para a semana inteira'}
+            >
+              {isDistributingSpotWeek ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Distribuindo...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3 h-3" />
+                  <span>Distribuir Semana (7 Áudios)</span>
+                </>
+              )}
             </button>
 
             <a
@@ -1644,6 +1853,31 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             <Trash2 className="w-4 h-4" />
                           </button>
                         )}
+
+                        {/* Exclusive Unseen Track Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleAssignExclusiveSpotify(day.id)}
+                          disabled={assigningSpotifyDay === day.id}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer border border-[#1DB954]/50 bg-emerald-50 hover:bg-[#1DB954]/20 text-[#000035] disabled:opacity-50 shadow-2xs"
+                          title={
+                            isEn
+                              ? 'Assign next unseen, exclusive Spotify track for this student'
+                              : 'Atribuir próxima faixa exclusiva e inédita do currículo para este aluno'
+                          }
+                        >
+                          {assigningSpotifyDay === day.id ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1DB954]" />
+                              <span className="hidden md:inline">Atribuindo...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-[#1DB954]" />
+                              <span className="hidden md:inline">Faixa Exclusiva</span>
+                            </>
+                          )}
+                        </button>
 
                         <button
                           type="button"

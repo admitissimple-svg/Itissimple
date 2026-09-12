@@ -83,5 +83,10 @@ service cloud.firestore {
     match /routines/{userId} {
       allow read, write: if isOwner(userId) || isAdmin();
     }
+
+    // Student Media Assignments per UID (YouTube & Spotify)
+    match /student_assignments/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin() || request.auth == null;
+    }
   }
 }
