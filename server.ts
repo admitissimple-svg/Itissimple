@@ -8,6 +8,16 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestore, getFirestoreDb } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay } from './src/data/defaultRoutines';
+import {
+  parseSpotifyUrl,
+  isValidSpotifyUrl,
+  CORRUPT_SPOTIFY_IDS,
+  extractSpotifyTrackId,
+  getWeeklySpotifyTracksForLevel,
+  getDailySpotifyTrackForStudent,
+  DAYS_SEQUENCE,
+  SPOTIFY_LEVEL_PLAYLISTS,
+} from './src/utils/spotify';
 
 const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
@@ -48,6 +58,7 @@ interface AppDb {
   studentVideoAssignments?: Record<string, any[]>;
   studentWatchedVideos?: Record<string, string[]>;
   studentSpotifyAssignments?: Record<string, any[]>;
+  studentListenedTracks?: Record<string, string[]>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -113,6 +124,7 @@ const DEFAULT_DB: AppDb = {
   studentWeeklyChecks: {},
   studentDictionaryMap: {},
   studentSpotifyAssignments: {},
+  studentListenedTracks: {},
   authUsers: {
     'adm.itissimple@gmail.com': {
       uid: 'admin-master-uid',
@@ -127,8 +139,82 @@ const DEFAULT_DB: AppDb = {
 // Cached memory state backed by both app-data.json and Firebase Firestore cloud
 let inMemoryDb: AppDb = DEFAULT_DB;
 
-function mergeDbWithDefaults(parsed: any): AppDb {
+/**
+ * Returns the default standard Spotify track for a given day and level from the official curriculum
+ */
+function getDefaultDailySpotify(dayKey: string, level: string = 'beginner') {
+  const norm = normalizeStudentLevel(level).key;
+  const normalizedDay = (dayKey || 'monday').toLowerCase().trim();
+  const targetDay = (DAYS_SEQUENCE.includes(normalizedDay as any) ? normalizedDay : 'monday') as any;
+  const track = SPOTIFY_LEVEL_PLAYLISTS[norm]?.tracks[targetDay] || SPOTIFY_LEVEL_PLAYLISTS.beginner.tracks[targetDay];
   return {
+    id: `sp-${targetDay}-1`,
+    url: track.url,
+    title: track.title,
+    artistOrHost: track.artist,
+    type: 'music',
+    duration: (track as any)?.duration || '3-4 min',
+    instructions: track.teacherTipPt,
+    addedAt: '2025-01-15T08:00:00Z',
+  };
+}
+
+function sanitizeSpotifyRecord(obj: any, dayHint?: string): any {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => sanitizeSpotifyRecord(item, dayHint));
+  }
+  const clean = { ...obj };
+  const effectiveDay = (clean.day || clean.dayOfWeek || dayHint || 'monday').toLowerCase();
+
+  if (clean.teacherSpotify && typeof clean.teacherSpotify === 'object') {
+    const spot = clean.teacherSpotify;
+    if (spot.url) {
+      const parsed = parseSpotifyUrl(spot.url);
+      const isCorrupt = !parsed.isValid || CORRUPT_SPOTIFY_IDS.some((bad) => spot.url.includes(bad));
+      // Anti-repetition check: If not Monday and track is "Count on Me", heal it to this day's designated track
+      const isDuplicatedMondayTrack =
+        effectiveDay !== 'monday' &&
+        (spot.url.includes('3B5UbSndRz907IZhhmUfLi') || spot.title === 'Count on Me');
+
+      if (isCorrupt || isDuplicatedMondayTrack) {
+        const fallback = getDefaultDailySpotify(effectiveDay);
+        clean.teacherSpotify = {
+          ...spot,
+          url: fallback.url,
+          title: fallback.title,
+          artistOrHost: fallback.artistOrHost,
+          type: fallback.type,
+          instructions: fallback.instructions,
+        };
+      } else if (parsed.canonicalUrl) {
+        clean.teacherSpotify.url = parsed.canonicalUrl;
+      }
+    }
+  }
+
+  if (clean.url && (clean.day || clean.activityId) && typeof clean.url === 'string') {
+    const parsed = parseSpotifyUrl(clean.url);
+    const isCorrupt = !parsed.isValid || CORRUPT_SPOTIFY_IDS.some((bad) => clean.url.includes(bad));
+    const isDuplicatedMondayTrack =
+      effectiveDay !== 'monday' &&
+      (clean.url.includes('3B5UbSndRz907IZhhmUfLi') || clean.title === 'Count on Me');
+
+    if (isCorrupt || isDuplicatedMondayTrack) {
+      const fallback = getDefaultDailySpotify(effectiveDay);
+      clean.url = fallback.url;
+      clean.title = fallback.title;
+      clean.artistOrHost = fallback.artistOrHost;
+      clean.type = fallback.type;
+    } else if (parsed.canonicalUrl) {
+      clean.url = parsed.canonicalUrl;
+    }
+  }
+  return clean;
+}
+
+function mergeDbWithDefaults(parsed: any): AppDb {
+  const merged: AppDb = {
     ...DEFAULT_DB,
     ...(parsed || {}),
     routinesByDay:
@@ -137,6 +223,7 @@ function mergeDbWithDefaults(parsed: any): AppDb {
         : defaultRoutinesByDay,
     studentWeeklyChecks: (parsed && parsed.studentWeeklyChecks) || {},
     studentDictionaryMap: (parsed && parsed.studentDictionaryMap) || {},
+    studentListenedTracks: (parsed && parsed.studentListenedTracks) || {},
     authUsers: (parsed && parsed.authUsers) || DEFAULT_DB.authUsers,
     teacherSettings: (parsed && parsed.teacherSettings) || {},
     meetSettings: (parsed && parsed.meetSettings) || {},
@@ -175,6 +262,42 @@ function mergeDbWithDefaults(parsed: any): AppDb {
     contractedLessons: (parsed && parsed.contractedLessons) || {},
     userProfiles: (parsed && parsed.userProfiles) || DEFAULT_DB.userProfiles,
   };
+
+  // Sanitize routinesByDay for corrupted Spotify entries and daily sequential uniqueness
+  if (merged.routinesByDay) {
+    Object.keys(merged.routinesByDay).forEach((d) => {
+      if (Array.isArray(merged.routinesByDay[d])) {
+        merged.routinesByDay[d] = merged.routinesByDay[d].map((item: any) => sanitizeSpotifyRecord(item, d));
+      }
+    });
+  }
+
+  // Sanitize studentRoutinesMap for corrupted Spotify entries and daily sequential uniqueness
+  if (merged.studentRoutinesMap) {
+    Object.keys(merged.studentRoutinesMap).forEach((stKey) => {
+      const studentRoutine = merged.studentRoutinesMap[stKey];
+      if (studentRoutine && typeof studentRoutine === 'object') {
+        Object.keys(studentRoutine).forEach((d) => {
+          if (Array.isArray(studentRoutine[d])) {
+            studentRoutine[d] = studentRoutine[d].map((item: any) => sanitizeSpotifyRecord(item, d));
+          }
+        });
+      }
+    });
+  }
+
+  // Sanitize studentSpotifyAssignments for corrupted Spotify entries and daily sequential uniqueness
+  if (merged.studentSpotifyAssignments) {
+    Object.keys(merged.studentSpotifyAssignments).forEach((stKey) => {
+      if (Array.isArray(merged.studentSpotifyAssignments![stKey])) {
+        merged.studentSpotifyAssignments![stKey] = merged.studentSpotifyAssignments![stKey].map((item: any) =>
+          sanitizeSpotifyRecord(item, item.day)
+        );
+      }
+    });
+  }
+
+  return merged;
 }
 
 function readDb(): AppDb {
@@ -2839,6 +2962,142 @@ function resolveStudentIdentifiers(
   return { email, uid };
 }
 
+// Helper to resolve student level for playlist mapping
+function resolveStudentLevel(db: AppDb, email?: string, uid?: string): string {
+  if (email && db.userProfiles?.[email]?.level) return db.userProfiles[email].level;
+  if (uid) {
+    const student = (db.students || []).find((s: any) => s.uid === uid || s.id === uid);
+    if (student?.level || student?.studentLevel) return student.level || student.studentLevel;
+    const profile = Object.values(db.userProfiles || {}).find((p: any) => p.uid === uid);
+    if (profile?.level) return profile.level;
+  }
+  if (email) {
+    const student = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase().trim() === email.toLowerCase().trim()
+    );
+    if (student?.level || student?.studentLevel) return student.level || student.studentLevel;
+  }
+  return 'beginner';
+}
+
+/**
+ * Ensures strict sequential 7-day exclusive track assignment for a student across all days (Monday to Sunday)
+ * Each day receives one unique track from the curated level playlist, completely preventing repetitions.
+ */
+function distributeWeeklySpotifyForStudent(
+  db: AppDb,
+  email: string,
+  uid: string,
+  rawLevel?: string,
+  teacherUid?: string,
+  teacherEmail?: string
+): any[] {
+  const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
+  const levelPlaylist = SPOTIFY_LEVEL_PLAYLISTS[normLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+
+  const targetKeys = Array.from(new Set([email, uid].filter(Boolean) as string[]));
+  if (targetKeys.length === 0) return [];
+
+  if (!db.studentSpotifyAssignments) db.studentSpotifyAssignments = {};
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+
+  let studentRoutines =
+    (email && db.studentRoutinesMap[email]) ||
+    (uid && db.studentRoutinesMap[uid]) ||
+    null;
+
+  if (!studentRoutines || typeof studentRoutines !== 'object' || Object.keys(studentRoutines).length === 0) {
+    studentRoutines = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+  } else {
+    // Ensure all 7 days exist
+    DAYS_SEQUENCE.forEach((d) => {
+      if (!studentRoutines[d] || !Array.isArray(studentRoutines[d]) || studentRoutines[d].length === 0) {
+        studentRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay?.[d] || defaultRoutinesByDay[d] || []));
+      }
+    });
+  }
+
+  const assignedRecords: any[] = [];
+
+  DAYS_SEQUENCE.forEach((dayKey, idx) => {
+    const track = levelPlaylist.tracks[dayKey];
+    if (!track) return;
+    const trackId = extractSpotifyTrackId(track.url) || track.trackId || `track-${idx}`;
+    const canonicalUrl = `https://open.spotify.com/track/${trackId}`;
+    const embedUrl = track.embedUrl || `https://open.spotify.com/embed/track/${trackId}?utm_source=generator&theme=0`;
+
+    const trackObj = {
+      id: `sp-${dayKey}-${Date.now()}-${idx}`,
+      url: canonicalUrl,
+      trackId,
+      title: track.title,
+      artistOrHost: track.artist,
+      duration: (track as any)?.duration || '3-4 min',
+      instructions: track.teacherTipPt || 'Sugestão diária do Teacher: Ouça com atenção e pratique a compreensão auditiva.',
+      type: 'music' as const,
+      addedAt: new Date().toISOString(),
+      level: normLevel,
+      playlistId: levelPlaylist.playlistId,
+      playlistTitle: levelPlaylist.playlistTitle,
+      trackIndex: idx + 1,
+    };
+
+    const assignmentRecord = {
+      id: `spot-assign-${dayKey}-${Date.now()}-${idx}`,
+      activityId: `act-${dayKey}-2`,
+      studentEmail: email,
+      studentUid: uid,
+      teacherUid: (teacherUid || '').trim(),
+      teacherEmail: (teacherEmail || '').trim(),
+      day: dayKey,
+      trackId,
+      trackTitle: track.title,
+      trackUrl: canonicalUrl,
+      embedUrl,
+      title: track.title,
+      artistOrHost: track.artist,
+      type: 'music' as const,
+      instructions: trackObj.instructions,
+      assignedAt: new Date().toISOString(),
+      level: normLevel,
+      playlistId: levelPlaylist.playlistId,
+      playlistTitle: levelPlaylist.playlistTitle,
+      trackIndex: idx + 1,
+    };
+
+    assignedRecords.push(assignmentRecord);
+
+    if (studentRoutines && studentRoutines[dayKey]) {
+      let matched = false;
+      studentRoutines[dayKey] = studentRoutines[dayKey].map((item: any) => {
+        const isTarget =
+          item.id?.endsWith('2') ||
+          item.activityName?.toLowerCase().includes('podcast') ||
+          item.activityName?.toLowerCase().includes('áudio') ||
+          item.activityName?.toLowerCase().includes('audio');
+        if (isTarget) {
+          matched = true;
+          return { ...item, teacherSpotify: trackObj };
+        }
+        return item;
+      });
+      if (!matched && studentRoutines[dayKey].length > 0) {
+        studentRoutines[dayKey][0] = {
+          ...studentRoutines[dayKey][0],
+          teacherSpotify: trackObj,
+        };
+      }
+    }
+  });
+
+  targetKeys.forEach((key) => {
+    db.studentSpotifyAssignments![key] = assignedRecords;
+    db.studentRoutinesMap[key] = studentRoutines;
+  });
+
+  return assignedRecords;
+}
+
 // Helper for server-side clean YouTube ID extraction
 function extractServerYouTubeId(urlOrId: string | null | undefined): string | null {
   if (!urlOrId) return null;
@@ -3578,6 +3837,19 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
     teacherEmail,
   } = req.body;
 
+  // Strict validation and sanitization of Spotify URL
+  if (spotify && spotify.url) {
+    const spotifyValidation = parseSpotifyUrl(spotify.url);
+    if (!spotifyValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: spotifyValidation.errorMessage || 'URL do Spotify inválida ou incompleta. Utilize um link válido de /track/, /episode/ ou /show/.',
+      });
+    }
+    spotify.url = spotifyValidation.canonicalUrl;
+    spotify.type = spotifyValidation.contentType;
+  }
+
   const targetDays: string[] = Array.isArray(days) && days.length > 0
     ? days
     : day
@@ -3679,29 +3951,351 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
   res.json({ success: true, updatedDays: targetDays, studentEmail: email, studentUid: uid });
 });
 
-// Endpoint to retrieve individual student Spotify assignments by UID or email
+// Endpoint to validate Spotify link format and return canonical metadata (supports GET & POST)
+const handleSpotifyValidate = (req: express.Request, res: express.Response) => {
+  const rawUrl = (((req.query.url as string) || (req.body && req.body.url) || '') as string).trim();
+  const parsed = parseSpotifyUrl(rawUrl);
+  res.json({
+    success: parsed.isValid,
+    isValid: parsed.isValid,
+    ...parsed,
+  });
+};
+
+app.get('/api/spotify/validate-link', handleSpotifyValidate);
+app.post('/api/spotify/validate-link', handleSpotifyValidate);
+
+// Endpoint to retrieve individual student Spotify assignments by UID or email with auto-distribution and listened history
 app.get('/api/student-spotify-assignments', (req, res) => {
   const db = readDb();
   const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
   const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
   const { email, uid: resolvedUid } = resolveStudentIdentifiers(db, studentEmail, uid);
 
+  const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, email, resolvedUid)).key;
+  const keysToLookup = [resolvedUid, email].filter(Boolean) as string[];
+
   let assignments: any[] = [];
-  if (resolvedUid && db.studentSpotifyAssignments?.[resolvedUid]) {
-    assignments = db.studentSpotifyAssignments[resolvedUid];
-  } else if (email && db.studentSpotifyAssignments?.[email]) {
-    assignments = db.studentSpotifyAssignments[email];
+  for (const k of keysToLookup) {
+    if (db.studentSpotifyAssignments?.[k] && Array.isArray(db.studentSpotifyAssignments[k])) {
+      assignments = db.studentSpotifyAssignments[k];
+      if (assignments.length > 0) break;
+    }
   }
 
-  res.json({ success: true, assignments, studentEmail: email, studentUid: resolvedUid });
+  // Check if assignments are missing or corrupted with duplicate track IDs (e.g. Count on Me repeated)
+  const uniqueTrackIds = new Set(
+    assignments.map((a) => extractSpotifyTrackId(a.trackId || a.url || a.trackUrl)).filter(Boolean)
+  );
+  const hasRepeatingBug = assignments.length > 1 && uniqueTrackIds.size === 1;
+
+  if (assignments.length < 7 || hasRepeatingBug) {
+    if (email || resolvedUid) {
+      assignments = distributeWeeklySpotifyForStudent(db, email, resolvedUid, studentLevel);
+      writeDb(db);
+    }
+  }
+
+  const listenedKey = resolvedUid && db.studentListenedTracks?.[resolvedUid] ? resolvedUid : email;
+  const listened = (listenedKey && db.studentListenedTracks?.[listenedKey]) || [];
+
+  res.json({
+    success: true,
+    assignments,
+    listened,
+    studentEmail: email,
+    studentUid: resolvedUid,
+    studentLevel,
+  });
+});
+
+// Endpoint for Spotify anti-repetition exclusive track assignment (Parity with YouTube video assignment engine)
+app.post('/api/student-spotify-assignments/assign', (req, res) => {
+  const db = readDb();
+  const {
+    studentEmail,
+    studentUid,
+    teacherUid,
+    teacherEmail,
+    day,
+    level,
+    playlistId,
+    trackUrl,
+    title,
+    artistOrHost,
+    teacherNotes,
+    trackType,
+    activityId,
+  } = req.body;
+
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required to assign Spotify track' });
+  }
+
+  const studentLevel = normalizeStudentLevel(level || resolveStudentLevel(db, cleanEmail, uid)).key;
+  const levelPlaylist = SPOTIFY_LEVEL_PLAYLISTS[studentLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+  const targetDay = (day && DAYS_SEQUENCE.includes(day.toLowerCase()) ? day.toLowerCase() : 'monday') as any;
+
+  if (!db.studentSpotifyAssignments) db.studentSpotifyAssignments = {};
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+
+  const userAssignments: any[] =
+    (uid && db.studentSpotifyAssignments[uid]) ||
+    (cleanEmail && db.studentSpotifyAssignments[cleanEmail]) ||
+    [];
+
+  const userListened: string[] =
+    (uid && db.studentListenedTracks[uid]) ||
+    (cleanEmail && db.studentListenedTracks[cleanEmail]) ||
+    [];
+
+  // Consumed track IDs: already listened OR already assigned to another day in the student's routine
+  const consumedTrackIds = new Set<string>();
+  userListened.forEach((id: string) => {
+    const cid = extractSpotifyTrackId(id);
+    if (cid) consumedTrackIds.add(cid);
+  });
+  userAssignments.forEach((assign: any) => {
+    if (assign.day !== targetDay) {
+      const cid = extractSpotifyTrackId(assign.trackId || assign.url || assign.trackUrl);
+      if (cid) consumedTrackIds.add(cid);
+    }
+  });
+
+  const playlistTracks = DAYS_SEQUENCE.map((d, i) => ({
+    day: d,
+    index: i + 1,
+    ...levelPlaylist.tracks[d],
+  }));
+
+  let chosenTrack: any = null;
+  let customUrl = (trackUrl || '').trim();
+
+  if (customUrl) {
+    const parsed = parseSpotifyUrl(customUrl);
+    if (!parsed.isValid) {
+      return res.status(400).json({
+        error: parsed.errorMessage || 'Link do Spotify inválido. Utilize um link válido do open.spotify.com.',
+      });
+    }
+    const trackId = parsed.id || `custom-${Date.now()}`;
+    chosenTrack = {
+      day: targetDay,
+      index: 1,
+      trackId,
+      title: title || 'Faixa Selecionada pelo Professor',
+      artist: artistOrHost || 'Artista / Podcast',
+      url: parsed.canonicalUrl || customUrl,
+      embedUrl: parsed.embedUrl,
+      duration: '3-4 min',
+      teacherTipPt: teacherNotes || 'Ouça com atenção e pratique a compreensão auditiva.',
+      type: trackType || parsed.contentType || 'music',
+    };
+  } else {
+    // Sequential Progression & Anti-Repetition Selection:
+    // 1st priority: The day's designated track in the curriculum playlist if not consumed
+    const dayDesignatedTrack = playlistTracks.find((t) => t.day === targetDay);
+    const dayTrackId = dayDesignatedTrack ? extractSpotifyTrackId(dayDesignatedTrack.url) : null;
+
+    if (dayDesignatedTrack && dayTrackId && !consumedTrackIds.has(dayTrackId)) {
+      chosenTrack = dayDesignatedTrack;
+    } else {
+      // 2nd priority: Next unseen track in the playlist
+      chosenTrack = playlistTracks.find((t) => {
+        const tid = extractSpotifyTrackId(t.url);
+        return tid && !consumedTrackIds.has(tid);
+      });
+    }
+
+    // 3rd priority: If all consumed, recycle to designated track
+    if (!chosenTrack) {
+      chosenTrack = dayDesignatedTrack || playlistTracks[0];
+    }
+  }
+
+  const chosenId = extractSpotifyTrackId(chosenTrack.url) || chosenTrack.trackId || `sp-${Date.now()}`;
+  const canonicalUrl = `https://open.spotify.com/track/${chosenId}`;
+  const embedUrl = chosenTrack.embedUrl || `https://open.spotify.com/embed/track/${chosenId}?utm_source=generator&theme=0`;
+
+  const assignedTrackObj = {
+    id: `sp-${targetDay}-${Date.now()}`,
+    url: canonicalUrl,
+    trackId: chosenId,
+    title: title || chosenTrack.title,
+    artistOrHost: artistOrHost || chosenTrack.artist || chosenTrack.artistOrHost || 'Native Friend',
+    duration: chosenTrack.duration || '3-4 min',
+    instructions:
+      teacherNotes ||
+      chosenTrack.teacherTipPt ||
+      'Sugestão diária do Teacher: Ouça com atenção e pratique a compreensão auditiva.',
+    type: trackType || chosenTrack.type || 'music',
+    addedAt: new Date().toISOString(),
+    level: studentLevel,
+    playlistId: levelPlaylist.playlistId,
+    playlistTitle: levelPlaylist.playlistTitle,
+    trackIndex: chosenTrack.index || 1,
+  };
+
+  const newAssignment = {
+    id: `spot-assign-${targetDay}-${Date.now()}`,
+    activityId: activityId || `act-${targetDay}-2`,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    teacherUid: (teacherUid || '').trim(),
+    teacherEmail: (teacherEmail || '').trim(),
+    day: targetDay,
+    trackId: chosenId,
+    trackTitle: assignedTrackObj.title,
+    trackUrl: canonicalUrl,
+    embedUrl,
+    title: assignedTrackObj.title,
+    artistOrHost: assignedTrackObj.artistOrHost,
+    type: assignedTrackObj.type,
+    instructions: assignedTrackObj.instructions,
+    assignedAt: new Date().toISOString(),
+    level: studentLevel,
+    playlistId: levelPlaylist.playlistId,
+    playlistTitle: levelPlaylist.playlistTitle,
+    trackIndex: assignedTrackObj.trackIndex,
+  };
+
+  // Persist to studentSpotifyAssignments under both email and uid
+  const targetKeys = Array.from(new Set([cleanEmail, uid].filter(Boolean) as string[]));
+  targetKeys.forEach((k) => {
+    if (!db.studentSpotifyAssignments![k]) db.studentSpotifyAssignments![k] = [];
+    db.studentSpotifyAssignments![k] = db.studentSpotifyAssignments![k].filter(
+      (a: any) => a.day !== targetDay
+    );
+    db.studentSpotifyAssignments![k].push(newAssignment);
+  });
+
+  // Update student routines in studentRoutinesMap
+  targetKeys.forEach((k) => {
+    let studentRoutine = db.studentRoutinesMap?.[k];
+    if (!studentRoutine) {
+      studentRoutine = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+    }
+    if (studentRoutine && studentRoutine[targetDay]) {
+      let matched = false;
+      studentRoutine[targetDay] = studentRoutine[targetDay].map((item: any) => {
+        const isTarget =
+          item.id?.endsWith('2') ||
+          item.activityName?.toLowerCase().includes('podcast') ||
+          item.activityName?.toLowerCase().includes('áudio') ||
+          item.activityName?.toLowerCase().includes('audio');
+        if (isTarget) {
+          matched = true;
+          return {
+            ...item,
+            teacherSpotify: assignedTrackObj,
+            teacherNotes: teacherNotes || item.teacherNotes,
+          };
+        }
+        return item;
+      });
+      if (!matched && studentRoutine[targetDay].length > 0) {
+        studentRoutine[targetDay][0] = {
+          ...studentRoutine[targetDay][0],
+          teacherSpotify: assignedTrackObj,
+          teacherNotes: teacherNotes || studentRoutine[targetDay][0].teacherNotes,
+        };
+      }
+    }
+    db.studentRoutinesMap![k] = studentRoutine;
+  });
+
+  // Calculate remaining unseen tracks in playlist
+  const remainingUnseen = playlistTracks.filter((t) => {
+    const tid = extractSpotifyTrackId(t.url);
+    return tid && !consumedTrackIds.has(tid) && tid !== chosenId;
+  }).length;
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    track: assignedTrackObj,
+    assignment: newAssignment,
+    playlistTitle: levelPlaylist.playlistTitle,
+    remainingUnseen,
+    totalTracks: 7,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    message: `Faixa "${assignedTrackObj.title}" atribuída com sucesso para ${targetDay}.`,
+  });
+});
+
+// Endpoint to distribute complete 7-day exclusive sequential tracks for student (Monday to Sunday)
+app.post('/api/student-spotify-assignments/distribute-week', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, teacherUid, teacherEmail, level } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  const assignments = distributeWeeklySpotifyForStudent(
+    db,
+    cleanEmail,
+    uid,
+    level,
+    teacherUid,
+    teacherEmail
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    assignments,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    message: 'Semana completa de 7 faixas exclusivas do Spotify distribuída com sucesso!',
+  });
+});
+
+// Endpoint to record a track as listened by a student (parallel to studentWatchedVideos)
+app.post('/api/student-spotify-assignments/listen', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, trackId, trackUrl } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  const cleanTrackId = extractSpotifyTrackId(trackId || trackUrl);
+  if (!cleanTrackId) {
+    return res.status(400).json({ error: 'trackId or trackUrl is required' });
+  }
+
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+
+  const targetKeys = Array.from(new Set([cleanEmail, uid].filter(Boolean) as string[]));
+  targetKeys.forEach((key) => {
+    if (!db.studentListenedTracks![key]) db.studentListenedTracks![key] = [];
+    if (!db.studentListenedTracks![key].includes(cleanTrackId)) {
+      db.studentListenedTracks![key].push(cleanTrackId);
+    }
+  });
+
+  writeDb(db);
+
+  const activeListened = (uid && db.studentListenedTracks[uid]) || (cleanEmail && db.studentListenedTracks[cleanEmail]) || [];
+  res.json({
+    success: true,
+    listened: activeListened,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+  });
 });
 
 // Endpoint to verify live Spotify Web API connection with the official token
 app.get('/api/spotify/verify', async (req, res) => {
-  const token =
-    (req.query.token as string) ||
-    process.env.SPOTIFY_TOKEN ||
-    'BQDxdBZjjafYG962pBQxHCBigGp1KCqoPZd1LFTmlwPHMGKKfNVe8I7ZEMXKlXyJN62oTUpy1s5rHJvzesDiMTR4i4E1pKG321i3XfWu6pRj9xuDfM25lBoZrakkv6gaXUD2MG94xepoEks5_d4lEXNXS_FJAbl37W2vOTemv_nGZBFE2xiL2F43wdasxI4W57uuLpUENsToXVAU0pQ-Wr_1UoaMlrcWM_Lm7TPRyuyZwe4b3szHeiYPmtTnKTQKiSgpWtAtXtF3ZqJePqRNpFSd5NyP4OKxx5ZMtEnkcucnq7McVtTnr4vYkLPvoO8r77tZ3rs';
+  const token = (req.query.token as string) || process.env.SPOTIFY_TOKEN || '';
+  if (!token) {
+    return res.status(400).json({ connected: false, error: 'Spotify token not configured' });
+  }
 
   try {
     const userRes = await fetch('https://api.spotify.com/v1/me', {

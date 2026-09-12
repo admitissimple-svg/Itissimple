@@ -17,6 +17,11 @@ import {
   CheckCircle2,
   ChevronDown,
   RotateCcw,
+  AlertTriangle,
+  Play,
+  Volume2,
+  Info,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   RoutineItem,
@@ -29,11 +34,14 @@ import {
 import { extractYouTubeVideoId } from '../utils/youtube';
 import {
   isValidSpotifyUrl,
+  parseSpotifyUrl,
+  getSpotifyEmbedUrl,
   getDailySpotifyTrackForStudent,
   normalizeStudentLevel,
   getSpotifyPlaylistForLevel,
   getSpotifyContentType,
   getSpotifyDirectUrl,
+  CORRUPT_SPOTIFY_IDS,
 } from '../utils/spotify';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { defaultRoutinesByDay } from '../data/defaultRoutines';
@@ -89,6 +97,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
   const activeStudentEmail = selectedStudent?.email || (selectedStudentEmail && selectedStudentEmail !== 'all' ? selectedStudentEmail : '') || students[0]?.email || '';
   const activeStudentUid = selectedStudent?.uid || selectedStudent?.id || selectedStudentUid || '';
+  const activeStudentName = selectedStudent?.name || (activeStudentEmail ? activeStudentEmail.split('@')[0] : 'Aluno');
 
   // Local state for student-specific routines loaded from backend
   const [studentRoutines, setStudentRoutines] = useState<Record<DayOfWeek, RoutineItem[]> | null>(null);
@@ -126,6 +135,29 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     sunday: 'music',
   });
 
+  // Spotify player preview and fallback states
+  const [selectedPreviewDay, setSelectedPreviewDay] = useState<DayOfWeek>('monday');
+  const [isMiniPlayerOpen, setIsMiniPlayerOpen] = useState<boolean>(true);
+  const [isResettingAll, setIsResettingAll] = useState<boolean>(false);
+  const [playerFallbackMode, setPlayerFallbackMode] = useState<Record<DayOfWeek, boolean>>({
+    monday: false,
+    tuesday: false,
+    wednesday: false,
+    thursday: false,
+    friday: false,
+    saturday: false,
+    sunday: false,
+  });
+  const [spotValidationErrors, setSpotValidationErrors] = useState<Record<DayOfWeek, string>>({
+    monday: '',
+    tuesday: '',
+    wednesday: '',
+    thursday: '',
+    friday: '',
+    saturday: '',
+    sunday: '',
+  });
+
   // Save feedback state per day
   const [savedDayFeedback, setSavedDayFeedback] = useState<Record<string, boolean>>({});
   const [savingYtDay, setSavingYtDay] = useState<DayOfWeek | null>(null);
@@ -140,6 +172,11 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   const [studentWatched, setStudentWatched] = useState<string[]>([]);
   const [assignLoadingDay, setAssignLoadingDay] = useState<string | null>(null);
   const [assignFeedback, setAssignFeedback] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
+
+  // Spotify Sequential Anti-Repetition Assignment State
+  const [studentSpotifyAssignments, setStudentSpotifyAssignments] = useState<any[]>([]);
+  const [studentListenedTracks, setStudentListenedTracks] = useState<string[]>([]);
+  const [assigningSpotifyDay, setAssigningSpotifyDay] = useState<DayOfWeek | null>(null);
 
   // Resolved student level for automatic Spotify synchronization
   const currentLevelRaw =
@@ -327,17 +364,32 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           return 'music';
         };
 
+        let activeSpotUrl = '';
+        let activeSpotType: 'podcast' | 'music' = 'music';
+
         if (daySpotifyAssign && daySpotifyAssign.url) {
-          newSpot[d.id] = daySpotifyAssign.url;
-          newSpotTypes[d.id] = toAudioType(daySpotifyAssign.type, daySpotifyAssign.url);
+          activeSpotUrl = daySpotifyAssign.url;
+          activeSpotType = toAudioType(daySpotifyAssign.type, daySpotifyAssign.url);
         } else if (itemWithSpot?.teacherSpotify?.url) {
-          newSpot[d.id] = itemWithSpot.teacherSpotify.url;
-          newSpotTypes[d.id] = toAudioType(itemWithSpot.teacherSpotify.type, itemWithSpot.teacherSpotify.url);
+          activeSpotUrl = itemWithSpot.teacherSpotify.url;
+          activeSpotType = toAudioType(itemWithSpot.teacherSpotify.type, itemWithSpot.teacherSpotify.url);
         } else {
           // Strictly synchronize with what student sees by default for their level
-          newSpot[d.id] = defaultDailyTrack.url;
-          newSpotTypes[d.id] = 'music';
+          activeSpotUrl = defaultDailyTrack.url;
+          activeSpotType = 'music';
         }
+
+        // Auto-sanitize on load: if broken or corrupted link, fallback cleanly to level default
+        const parsedSpot = parseSpotifyUrl(activeSpotUrl);
+        if (!parsedSpot.isValid) {
+          activeSpotUrl = defaultDailyTrack.url;
+          activeSpotType = 'music';
+        } else if (parsedSpot.canonicalUrl) {
+          activeSpotUrl = parsedSpot.canonicalUrl;
+        }
+
+        newSpot[d.id] = activeSpotUrl;
+        newSpotTypes[d.id] = activeSpotType;
       });
 
       setYoutubeUrls(newYt);
@@ -724,8 +776,50 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     }
   };
 
-  // Handler: Save individual Spotify Audio for a day
-  const handleSaveSpotifyDay = async (dayId: DayOfWeek) => {
+  // Handler: Reset a day's Spotify track to the student's verified level default
+  const handleResetToDefaultTrack = (dayId: DayOfWeek) => {
+    const defaultTrack = getDailySpotifyTrackForStudent(currentNormalizedLevel, dayId);
+    setSpotifyUrls((prev) => ({ ...prev, [dayId]: defaultTrack.url }));
+    setSpotifyTypes((prev) => ({ ...prev, [dayId]: 'music' }));
+    setSpotValidationErrors((prev) => ({ ...prev, [dayId]: '' }));
+    setPlayerFallbackMode((prev) => ({ ...prev, [dayId]: false }));
+    handleSaveSpotifyDay(dayId, defaultTrack.url, 'music');
+  };
+
+  // Handler: Reset all 7 days to verified curriculum tracks with one click
+  const handleResetAllDays = async () => {
+    setIsResettingAll(true);
+    try {
+      const updatedUrls: Record<DayOfWeek, string> = { ...spotifyUrls };
+      const updatedTypes: Record<DayOfWeek, 'podcast' | 'music'> = { ...spotifyTypes };
+
+      for (const day of WEEK_DAYS) {
+        const defTrack = getDailySpotifyTrackForStudent(currentNormalizedLevel, day.id);
+        updatedUrls[day.id] = defTrack.url;
+        updatedTypes[day.id] = 'music';
+        await handleSaveSpotifyDay(day.id, defTrack.url, 'music');
+      }
+
+      setSpotifyUrls(updatedUrls);
+      setSpotifyTypes(updatedTypes);
+      setSpotValidationErrors({
+        monday: '', tuesday: '', wednesday: '', thursday: '', friday: '', saturday: '', sunday: ''
+      });
+      setAssignFeedback({
+        type: 'success',
+        message: isEn
+          ? 'All 7 days restored and synchronized to verified curriculum audio!'
+          : 'Todos os 7 dias foram restaurados e sincronizados com os áudios oficiais verificados!',
+      });
+    } catch (err) {
+      console.error('Error resetting all days:', err);
+    } finally {
+      setIsResettingAll(false);
+    }
+  };
+
+  // Handler: Save individual Spotify Audio for a day with strict validation and sanitization
+  const handleSaveSpotifyDay = async (dayId: DayOfWeek, overrideUrl?: string, overrideType?: 'podcast' | 'music') => {
     const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
     const targetActivity =
       dayItems.find((i) => i && (i.id.endsWith('2') || i.activityName?.toLowerCase().includes('podcast') || i.activityName?.toLowerCase().includes('áudio'))) ||
@@ -733,18 +827,44 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       dayItems[0];
     if (!targetActivity) return;
 
-    setSavingSpotDay(dayId);
-    const url = (spotifyUrls[dayId] || '').trim();
-    const type = spotifyTypes[dayId] || 'music';
+    const rawUrl = (overrideUrl !== undefined ? overrideUrl : (spotifyUrls[dayId] || '')).trim();
+    const type = overrideType || spotifyTypes[dayId] || 'music';
     const defaultTrack = getDailySpotifyTrackForStudent(currentNormalizedLevel, dayId);
-    const isDefault = url === defaultTrack.url.trim();
+
+    // Strict validation
+    if (rawUrl) {
+      const validation = parseSpotifyUrl(rawUrl);
+      if (!validation.isValid) {
+        setSpotValidationErrors((prev) => ({
+          ...prev,
+          [dayId]: validation.errorMessage || 'Link inválido do Spotify. Use links /track/, /episode/ ou /show/.',
+        }));
+        setAssignFeedback({
+          type: 'error',
+          message: validation.errorMessage || 'URL do Spotify inválida. Use um link válido de /track/, /episode/ ou /show/.',
+        });
+        return;
+      }
+    }
+
+    setSpotValidationErrors((prev) => ({ ...prev, [dayId]: '' }));
+    setSavingSpotDay(dayId);
+
+    const parsed = parseSpotifyUrl(rawUrl);
+    const canonicalUrl = parsed.isValid && parsed.canonicalUrl ? parsed.canonicalUrl : rawUrl;
+    const isDefault = canonicalUrl === defaultTrack.url.trim();
+
+    // Ensure input field is populated with the clean canonical URL
+    if (canonicalUrl !== spotifyUrls[dayId]) {
+      setSpotifyUrls((prev) => ({ ...prev, [dayId]: canonicalUrl }));
+    }
 
     let finalSpotify: TeacherAssignedSpotify | null = null;
 
-    if (url) {
+    if (canonicalUrl) {
       finalSpotify = {
         id: `spot-${dayId}-${Date.now()}`,
-        url,
+        url: canonicalUrl,
         title: isDefault
           ? defaultTrack.title
           : type === 'podcast'
@@ -760,7 +880,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     }
 
     try {
-      await fetch('/api/routines/teacher-spotify', {
+      const res = await fetch('/api/routines/teacher-spotify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -774,8 +894,28 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           day: dayId,
         }),
       });
-    } catch (err) {
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Erro ao salvar áudio no servidor.');
+      }
+
+      setSavedDayFeedback((prev) => ({ ...prev, [`spot-${dayId}`]: true }));
+      setTimeout(() => {
+        setSavedDayFeedback((prev) => ({ ...prev, [`spot-${dayId}`]: false }));
+      }, 2500);
+
+      setAssignFeedback({
+        type: 'success',
+        message: `✓ Áudio do Spotify para ${dayId.toUpperCase()} salvo e sincronizado com o aluno!`,
+      });
+      setTimeout(() => setAssignFeedback(null), 3500);
+    } catch (err: any) {
       console.warn('Error saving teacher spotify:', err);
+      setAssignFeedback({
+        type: 'error',
+        message: err.message || 'Erro ao salvar áudio do Spotify no servidor.',
+      });
     } finally {
       setSavingSpotDay(null);
     }
@@ -803,11 +943,6 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         activeStudentUid
       );
     }
-
-    setSavedDayFeedback((prev) => ({ ...prev, [`spot-${dayId}`]: true }));
-    setTimeout(() => {
-      setSavedDayFeedback((prev) => ({ ...prev, [`spot-${dayId}`]: false }));
-    }, 2500);
   };
 
   // Helper to get first routine item display text (always in English for teacher)
@@ -1150,44 +1285,187 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         </div>
       </div>
 
-      {/* TABLE 2: Assign Spotify Podcasts & Music (Matching attached image 4) */}
+      {/* TABLE 2: Assign Spotify Podcasts & Music (Minimalist & Compact Layout) */}
       <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-xs overflow-hidden">
-        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-              <Headphones className="w-4 h-4 text-[#1DB954]" />
+        {/* Minimalist Header */}
+        <div className="p-3 sm:p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+              <Headphones className="w-3.5 h-3.5 text-[#1DB954]" />
             </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-black text-sm text-[#000035] uppercase tracking-wider">
-                  Assign Spotify Podcasts & Music
-                </h3>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30 flex items-center gap-1">
-                  <Music className="w-3 h-3 text-[#1DB954]" />
-                  <span>
-                    {isEn ? 'Student Level' : 'Nível do Aluno'}: {currentLevelConfig.levelLabelEn} ({currentLevelConfig.levelLabelPt})
-                  </span>
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 font-normal mt-0.5">
-                {isEn
-                  ? "Daily audio URLs mirror the student's Spotify curriculum based on their level. Teachers have full freedom to edit or customize links individually."
-                  : 'Os links diários espelham a trilha de áudios do Spotify distribuída com base no nível do aluno. O professor tem liberdade total para editar, customizar e salvar para o aluno.'}
-              </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-black text-xs sm:text-sm text-[#000035] uppercase tracking-wider">
+                {isEn ? 'Spotify Audio Assignment' : 'Atribuição de Áudios Spotify'}
+              </h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30 flex items-center gap-1">
+                <Music className="w-2.5 h-2.5 text-[#1DB954]" />
+                <span>{currentLevelConfig.levelLabelPt}</span>
+              </span>
             </div>
           </div>
 
-          <a
-            href={currentLevelConfig.playlistUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 shrink-0 bg-emerald-50 px-2.5 py-1.5 rounded-xl border border-emerald-200"
-            title={isEn ? "Open official It's Simple playlist for this level on Spotify" : "Abrir playlist oficial da It's Simple para este nível no Spotify"}
-          >
-            <span>{currentLevelConfig.playlistTitle}</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setIsMiniPlayerOpen((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                isMiniPlayerOpen
+                  ? 'bg-[#000035] text-emerald-400 border border-[#000035]'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+              }`}
+              title={isEn ? 'Toggle compact preview player' : 'Alternar mini player de verificação'}
+            >
+              <Headphones className="w-3.5 h-3.5 text-[#1DB954]" />
+              <span>{isMiniPlayerOpen ? (isEn ? 'Ocultar Player' : 'Ocultar Player') : (isEn ? 'Mini Player' : 'Mini Player')}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResetAllDays}
+              disabled={isResettingAll}
+              className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+              title={isEn ? 'Restore all 7 days to verified curriculum tracks' : 'Restaurar todos os 7 dias para as faixas verificadas oficiais'}
+            >
+              <RotateCcw className={`w-3 h-3 text-emerald-600 ${isResettingAll ? 'animate-spin' : ''}`} />
+              <span>{isResettingAll ? (isEn ? 'Restaurando...' : 'Restaurando...') : (isEn ? 'Restaurar 7 Dias' : 'Restaurar 7 Dias')}</span>
+            </button>
+
+            <a
+              href={currentLevelConfig.playlistUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs font-bold text-slate-600 hover:text-emerald-700 flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200"
+              title="Abrir playlist oficial no Spotify"
+            >
+              <span className="hidden sm:inline">Playlist</span>
+              <ExternalLink className="w-3 h-3 text-slate-400" />
+            </a>
+          </div>
         </div>
+
+        {/* MINIMALIST & COMPACT SPOTIFY DOCK (Super small 80px embed with day chips) */}
+        {isMiniPlayerOpen && (() => {
+          const previewUrl = (spotifyUrls[selectedPreviewDay] || '').trim();
+          const defaultTrack = getDailySpotifyTrackForStudent(currentNormalizedLevel, selectedPreviewDay);
+          const previewValidation = parseSpotifyUrl(previewUrl);
+          const isCorrupted =
+            CORRUPT_SPOTIFY_IDS.some((bad) => previewUrl.includes(bad)) ||
+            (!previewValidation.isValid && previewUrl !== '');
+          const embedUrl = previewValidation.isValid
+            ? previewValidation.embedUrl
+            : isCorrupted
+            ? null
+            : defaultTrack.embedUrl;
+          const isFallbackForced = playerFallbackMode[selectedPreviewDay];
+          const activeTitle = defaultTrack.title;
+          const activeArtist = defaultTrack.artist;
+
+          return (
+            <div className="px-3.5 py-2.5 bg-slate-900 text-white border-b border-slate-800">
+              {/* Compact top control line */}
+              <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+                {/* Mini Day selector chips */}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1 hidden sm:inline">
+                    {isEn ? 'Preview' : 'Ouvir'}:
+                  </span>
+                  {WEEK_DAYS.map((wDay) => {
+                    const isCur = selectedPreviewDay === wDay.id;
+                    const wDayUrl = spotifyUrls[wDay.id] || '';
+                    const wDayVal = parseSpotifyUrl(wDayUrl);
+                    const isBad = CORRUPT_SPOTIFY_IDS.some((b) => wDayUrl.includes(b));
+
+                    return (
+                      <button
+                        key={wDay.id}
+                        type="button"
+                        onClick={() => setSelectedPreviewDay(wDay.id)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                          isCur
+                            ? 'bg-[#1DB954] text-[#000035] shadow-xs'
+                            : 'bg-white/10 hover:bg-white/20 text-slate-300'
+                        }`}
+                      >
+                        <span>{wDay.name.slice(0, 3)}</span>
+                        {isBad ? (
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                        ) : wDayVal.isValid ? (
+                          <span className={`w-1.5 h-1.5 rounded-full ${isCur ? 'bg-[#000035]' : 'bg-emerald-400'}`} />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Active Track Title & Direct Link */}
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-300 truncate max-w-[220px] sm:max-w-xs text-[11px]">
+                    <strong className="text-white capitalize">{selectedPreviewDay}:</strong>{' '}
+                    {activeTitle} — {activeArtist}
+                  </span>
+                  {previewUrl && (
+                    <a
+                      href={getSpotifyDirectUrl(previewUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-bold text-[#1DB954] hover:underline flex items-center gap-0.5"
+                      title="Abrir no Spotify"
+                    >
+                      <span>Spotify</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleResetToDefaultTrack(selectedPreviewDay)}
+                    className="text-[10px] text-slate-400 hover:text-emerald-400 flex items-center gap-0.5 ml-1"
+                    title="Restaurar padrão deste dia"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    <span>Restaurar</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Ultra-compact 80px Spotify Embed or discreet 1-line fallback */}
+              {isCorrupted || isFallbackForced || !embedUrl ? (
+                <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-center justify-between gap-3 text-xs text-amber-200">
+                  <div className="flex items-center gap-2 truncate">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="truncate text-[11px]">
+                      {isEn
+                        ? 'Audio link unavailable in embed. Click to restore verified curriculum audio.'
+                        : 'Link indisponível no catálogo. Clique para restaurar o áudio verificado.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleResetToDefaultTrack(selectedPreviewDay)}
+                    className="px-2.5 py-1 rounded bg-[#1DB954] text-[#000035] font-bold text-[11px] hover:bg-[#1ed760] transition shrink-0 flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>{isEn ? 'Restore Audio' : 'Restaurar Áudio'}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="rounded-lg overflow-hidden border border-slate-800 bg-black">
+                  <iframe
+                    key={`teacher-spotify-embed-${selectedPreviewDay}-${embedUrl}`}
+                    src={embedUrl}
+                    width="100%"
+                    height="80"
+                    frameBorder="0"
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy"
+                    title={`Spotify Player - ${selectedPreviewDay}`}
+                    className="w-full h-[80px]"
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -1254,7 +1532,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                           </button>
                         </div>
 
-                        {/* URL input */}
+                        {/* URL input and validation */}
                         <div className="relative flex-1 min-w-[220px]">
                           <input
                             type="url"
@@ -1262,6 +1540,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             onChange={(e) => {
                               const val = e.target.value;
                               setSpotifyUrls((prev) => ({ ...prev, [day.id]: val }));
+                              // Clear error on edit
+                              if (spotValidationErrors[day.id]) {
+                                setSpotValidationErrors((prev) => ({ ...prev, [day.id]: '' }));
+                              }
                               if (val.includes('/episode/') || val.includes('/show/')) {
                                 setSpotifyTypes((prev) => ({ ...prev, [day.id]: 'podcast' }));
                               } else if (val.includes('/track/') || val.includes('/album/')) {
@@ -1276,7 +1558,9 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             }}
                             placeholder="https://open.spotify.com/track/... or episode/..."
                             className={`w-full pl-3 pr-8 py-1.5 text-xs text-[#000035] bg-slate-50 border rounded-lg focus:outline-hidden focus:ring-1 focus:ring-[#1DB954] focus:bg-white transition ${
-                              isValidSpot
+                              spotValidationErrors[day.id] || (currentUrl && !isValidSpot)
+                                ? 'border-rose-400 bg-rose-50/30'
+                                : isValidSpot
                                 ? 'border-emerald-400/80 bg-emerald-50/20'
                                 : currentUrl
                                 ? 'border-amber-300'
@@ -1295,7 +1579,33 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                           )}
+                          {spotValidationErrors[day.id] && (
+                            <p className="text-[10px] text-rose-600 font-bold mt-1 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                              <span>{spotValidationErrors[day.id]}</span>
+                            </p>
+                          )}
                         </div>
+
+                        {/* Preview button to test this day in the upper player */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedPreviewDay(day.id);
+                            setIsMiniPlayerOpen(true);
+                          }}
+                          className={`p-1.5 rounded-lg border text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer ${
+                            selectedPreviewDay === day.id && isMiniPlayerOpen
+                              ? 'bg-[#000035] text-emerald-400 border-[#000035]'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
+                          }`}
+                          title={isEn ? 'Preview and test this audio in the player above' : 'Ouvir e testar este áudio no player acima'}
+                        >
+                          <Headphones className="w-3.5 h-3.5 text-[#1DB954]" />
+                          <span className="hidden sm:inline text-[10px]">
+                            {selectedPreviewDay === day.id && isMiniPlayerOpen ? 'Ouvindo' : 'Player'}
+                          </span>
+                        </button>
 
                         {/* Automated / Custom status badge */}
                         {isDefault ? (
@@ -1312,10 +1622,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             </span>
                             <button
                               type="button"
-                              onClick={() => {
-                                setSpotifyUrls((prev) => ({ ...prev, [day.id]: defaultTrack.url }));
-                                setSpotifyTypes((prev) => ({ ...prev, [day.id]: 'music' }));
-                              }}
+                              onClick={() => handleResetToDefaultTrack(day.id)}
                               className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-md transition cursor-pointer"
                               title={isEn ? `Restore level default (${defaultTrack.title})` : `Restaurar padrão do nível (${defaultTrack.title})`}
                             >
@@ -1329,6 +1636,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             type="button"
                             onClick={() => {
                               setSpotifyUrls((prev) => ({ ...prev, [day.id]: '' }));
+                              setSpotValidationErrors((prev) => ({ ...prev, [day.id]: '' }));
                             }}
                             className="p-1.5 text-slate-300 hover:text-rose-500 transition rounded-md hover:bg-rose-50 cursor-pointer shrink-0"
                             title={isEn ? 'Clear Spotify URL' : 'Limpar URL do Spotify'}

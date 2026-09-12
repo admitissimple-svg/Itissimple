@@ -43,6 +43,7 @@ import {
   getSpotifyPlaylistForLevel,
   getDailySpotifyTrackForStudent,
   DAYS_SEQUENCE,
+  isValidSpotifyUrl,
 } from '../utils/spotify';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
@@ -340,9 +341,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     currentDayActivities.find((act) => act && act.teacherSpotify && act.teacherSpotify.url)?.teacherSpotify ||
     (activeActivity?.teacherSpotify?.url ? activeActivity.teacherSpotify : null);
 
-  // Guard against any obsolete or dummy placeholder Spotify URLs
+  // Guard against any obsolete, broken or dummy placeholder Spotify URLs
   const assignedSpotify =
-    rawAssignedSpotify && !rawAssignedSpotify.url.includes('5VzKk7uV4C8Oa2sH3eWz9Y')
+    rawAssignedSpotify && isValidSpotifyUrl(rawAssignedSpotify.url)
       ? rawAssignedSpotify
       : null;
 

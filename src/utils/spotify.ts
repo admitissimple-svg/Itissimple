@@ -50,8 +50,7 @@ export const DAYS_SEQUENCE: DayOfWeek[] = [
  * - Intermediate: https://open.spotify.com/playlist/1PdOI8azTqiywT5FWfimQM
  * - Advanced: https://open.spotify.com/playlist/2bMnxz06NIK6dHeG9lwyUF
  */
-export const SPOTIFY_IT_IS_SIMPLE_TOKEN =
-  'BQDxdBZjjafYG962pBQxHCBigGp1KCqoPZd1LFTmlwPHMGKKfNVe8I7ZEMXKlXyJN62oTUpy1s5rHJvzesDiMTR4i4E1pKG321i3XfWu6pRj9xuDfM25lBoZrakkv6gaXUD2MG94xepoEks5_d4lEXNXS_FJAbl37W2vOTemv_nGZBFE2xiL2F43wdasxI4W57uuLpUENsToXVAU0pQ-Wr_1UoaMlrcWM_Lm7TPRyuyZwe4b3szHeiYPmtTnKTQKiSgpWtAtXtF3ZqJePqRNpFSd5NyP4OKxx5ZMtEnkcucnq7McVtTnr4vYkLPvoO8r77tZ3rs';
+export const SPOTIFY_IT_IS_SIMPLE_TOKEN = '';
 
 export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLevelPlaylistConfig> = {
   beginner: {
@@ -411,16 +410,176 @@ export function getDailySpotifyTrackForStudent(
 }
 
 /**
+ * Known corrupt, deleted, or dummy Spotify IDs that fail, return 404, or produce "Couldn't find that podcast"
+ */
+export const CORRUPT_SPOTIFY_IDS = [
+  '5VzKk7uV4C8Oa2sH3eWz9Y', // legacy dummy placeholder that returns 404
+  '2qO2kUvhq8XwXhL3oG5F9y', // fake episode placeholder that returns 404
+  '3G7aZ1pL9yQw6Vx8J2nMbT', // fake episode placeholder that returns 404
+  '07eP4C54x26sOaVn9z1mJy', // fake show placeholder that returns 500
+  '07eP4C54x26sQaVn9z1mJy', // fake show placeholder that returns 500
+  '0nvd89U6p8s95aGphBvR5J', // fake show placeholder that returns 500
+  '4bHsxqRFFGmgTyKeUmF9ox', // old broken track ID
+];
+
+export interface SpotifyUrlValidationResult {
+  isValid: boolean;
+  type: 'track' | 'episode' | 'show' | 'playlist' | 'album' | null;
+  id: string | null;
+  canonicalUrl: string | null;
+  embedUrl: string | null;
+  directUrl: string;
+  contentType: SpotifyContentType;
+  errorMessage?: string;
+}
+
+/**
+ * Strict parser and sanitizer for Spotify URLs and URIs.
+ * Validates /track/, /episode/, /show/, /playlist/, and /album/ URLs.
+ * Handles internationalized prefixes (e.g. /intl-pt/) and strips query parameters.
+ */
+export function parseSpotifyUrl(url: string | null | undefined): SpotifyUrlValidationResult {
+  if (!url || typeof url !== 'string') {
+    return {
+      isValid: false,
+      type: null,
+      id: null,
+      canonicalUrl: null,
+      embedUrl: null,
+      directUrl: 'https://open.spotify.com',
+      contentType: 'podcast',
+      errorMessage: 'URL do Spotify não fornecida.',
+    };
+  }
+
+  const clean = url.trim();
+
+  // Check for known corrupted or broken IDs
+  for (const badId of CORRUPT_SPOTIFY_IDS) {
+    if (clean.includes(badId)) {
+      return {
+        isValid: false,
+        type: 'episode',
+        id: badId,
+        canonicalUrl: null,
+        embedUrl: null,
+        directUrl: 'https://open.spotify.com',
+        contentType: 'podcast',
+        errorMessage: 'Link corrompido do Spotify detectado: este conteúdo não existe no catálogo ("Couldn\'t find that podcast").',
+      };
+    }
+  }
+
+  // 1. Matches standard web URL or internationalized URL (e.g., /intl-pt/track/...)
+  // or embed URL (e.g., /embed/track/...)
+  const webRegex = /^(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)*spotify\.com(?::\d+)?\/(?:intl-[a-z]{2,3}(?:-[a-z]{2,4})?\/)?(?:embed\/)?(track|episode|show|playlist|album)\/([a-zA-Z0-9]{15,35})(?:[?#].*)?$/i;
+  const webMatch = clean.match(webRegex);
+
+  if (webMatch) {
+    const type = webMatch[1].toLowerCase() as 'track' | 'episode' | 'show' | 'playlist' | 'album';
+    const id = webMatch[2];
+
+    const canonicalUrl = `https://open.spotify.com/${type}/${id}`;
+    const embedUrl = `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`;
+    const contentType: SpotifyContentType = (type === 'episode' || type === 'show') ? 'podcast' : type === 'playlist' ? 'playlist' : 'music';
+
+    return {
+      isValid: true,
+      type,
+      id,
+      canonicalUrl,
+      embedUrl,
+      directUrl: canonicalUrl,
+      contentType,
+    };
+  }
+
+  // 2. Matches Spotify URI (spotify:track:ID, spotify:episode:ID, etc.)
+  const uriRegex = /^spotify:(track|episode|show|playlist|album):([a-zA-Z0-9]{15,35})$/i;
+  const uriMatch = clean.match(uriRegex);
+
+  if (uriMatch) {
+    const type = uriMatch[1].toLowerCase() as 'track' | 'episode' | 'show' | 'playlist' | 'album';
+    const id = uriMatch[2];
+
+    const canonicalUrl = `https://open.spotify.com/${type}/${id}`;
+    const embedUrl = `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`;
+    const contentType: SpotifyContentType = (type === 'episode' || type === 'show') ? 'podcast' : type === 'playlist' ? 'playlist' : 'music';
+
+    return {
+      isValid: true,
+      type,
+      id,
+      canonicalUrl,
+      embedUrl,
+      directUrl: canonicalUrl,
+      contentType,
+    };
+  }
+
+  // If it didn't match the strict patterns, generate a helpful diagnostic error
+  if (!clean.includes('spotify.com') && !clean.startsWith('spotify:')) {
+    return {
+      isValid: false,
+      type: null,
+      id: null,
+      canonicalUrl: null,
+      embedUrl: null,
+      directUrl: 'https://open.spotify.com',
+      contentType: 'podcast',
+      errorMessage: 'O link fornecido não pertence ao Spotify. Cole uma URL do open.spotify.com.',
+    };
+  }
+
+  if (clean.includes('/episode/') || clean.includes('/track/') || clean.includes('/show/')) {
+    return {
+      isValid: false,
+      type: null,
+      id: null,
+      canonicalUrl: null,
+      embedUrl: null,
+      directUrl: 'https://open.spotify.com',
+      contentType: 'podcast',
+      errorMessage: 'O ID do Spotify parece incompleto ou truncado. Copie o link completo através do botão "Compartilhar" no Spotify.',
+    };
+  }
+
+  return {
+    isValid: false,
+    type: null,
+    id: null,
+    canonicalUrl: null,
+    embedUrl: null,
+    directUrl: 'https://open.spotify.com',
+    contentType: 'podcast',
+    errorMessage: 'Formato de link não suportado. Use links de episódios (/episode/), músicas (/track/) ou podcasts (/show/).',
+  };
+}
+
+/**
+ * Extracts a clean 22-character Spotify track or episode ID from any URL, URI, or ID string
+ */
+export function extractSpotifyTrackId(urlOrId?: string | null): string | null {
+  if (!urlOrId || typeof urlOrId !== 'string') return null;
+  const clean = urlOrId.trim();
+  if (/^[a-zA-Z0-9]{15,35}$/.test(clean)) return clean;
+  const parsed = parseSpotifyUrl(clean);
+  return parsed.isValid ? parsed.id : null;
+}
+
+/**
+ * Returns the ordered array of 7 tracks for a student's level (Monday through Sunday)
+ */
+export function getWeeklySpotifyTracksForLevel(level: NormalizedStudentLevel = 'beginner'): SpotifyDailyTrack[] {
+  const playlist = SPOTIFY_LEVEL_PLAYLISTS[level] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+  return DAYS_SEQUENCE.map((day) => playlist.tracks[day]);
+}
+
+/**
  * Validates if the string is a valid Spotify URL or URI
  */
 export function isValidSpotifyUrl(url: string): boolean {
-  if (!url || typeof url !== 'string') return false;
-  const clean = url.trim();
-  return (
-    clean.includes('spotify.com/') ||
-    clean.startsWith('spotify:') ||
-    /^https?:\/\/(open\.)?spotify\.com\/(track|episode|show|playlist|album)\/[a-zA-Z0-9]+/i.test(clean)
-  );
+  return parseSpotifyUrl(url).isValid;
 }
 
 /**
@@ -429,65 +588,32 @@ export function isValidSpotifyUrl(url: string): boolean {
  * E.g.: https://open.spotify.com/track/xyz -> https://open.spotify.com/embed/track/xyz?utm_source=generator&theme=0
  */
 export function getSpotifyEmbedUrl(url: string): string | null {
-  if (!url) return null;
-  const clean = url.trim();
-
-  // If already an embed URL
-  if (clean.includes('open.spotify.com/embed/')) {
-    return clean;
-  }
-
-  // Matches open.spotify.com/(track|episode|show|playlist|album)/ID
-  const match = clean.match(/spotify\.com\/(track|episode|show|playlist|album)\/([a-zA-Z0-9]+)/i);
-  if (match) {
-    const type = match[1].toLowerCase();
-    const id = match[2];
-    return `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`;
-  }
-
-  // Matches URI format spotify:(track|episode|show|playlist|album):ID
-  const uriMatch = clean.match(/spotify:(track|episode|show|playlist|album):([a-zA-Z0-9]+)/i);
-  if (uriMatch) {
-    const type = uriMatch[1].toLowerCase();
-    const id = uriMatch[2];
-    return `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`;
-  }
-
-  // Fallback: if it's an open.spotify.com link with query params
-  if (clean.includes('open.spotify.com/')) {
-    const parts = clean.split('?')[0].split('/');
-    const id = parts[parts.length - 1];
-    const type = parts[parts.length - 2];
-    if (id && type && ['track', 'episode', 'show', 'playlist', 'album'].includes(type)) {
-      return `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`;
-    }
-  }
-
-  return null;
+  const result = parseSpotifyUrl(url);
+  return result.isValid ? result.embedUrl : null;
 }
 
 /**
- * Returns a standardized web link to open in Spotify app/browser
+ * Returns a standardized canonical web link to open in Spotify app/browser
  */
 export function getSpotifyDirectUrl(url: string): string {
-  if (!url) return 'https://open.spotify.com';
-  const clean = url.trim();
-  if (clean.startsWith('http://') || clean.startsWith('https://')) {
-    return clean;
+  const result = parseSpotifyUrl(url);
+  if (result.isValid && result.canonicalUrl) {
+    return result.canonicalUrl;
   }
-  if (clean.startsWith('spotify:')) {
-    const parts = clean.split(':');
-    if (parts.length === 3) {
-      return `https://open.spotify.com/${parts[1]}/${parts[2]}`;
-    }
+  if (url && typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))) {
+    return url.trim();
   }
-  return clean;
+  return 'https://open.spotify.com';
 }
 
 /**
  * Determines content type (podcast vs music) from Spotify URL
  */
 export function getSpotifyContentType(url: string): SpotifyContentType {
+  const result = parseSpotifyUrl(url);
+  if (result.isValid) {
+    return result.contentType;
+  }
   if (!url) return 'podcast';
   const lower = url.toLowerCase();
   if (lower.includes('/episode/') || lower.includes(':episode:') || lower.includes('/show/') || lower.includes(':show:')) {
