@@ -3696,6 +3696,48 @@ app.get('/api/student-spotify-assignments', (req, res) => {
   res.json({ success: true, assignments, studentEmail: email, studentUid: resolvedUid });
 });
 
+// Endpoint to verify live Spotify Web API connection with the official token
+app.get('/api/spotify/verify', async (req, res) => {
+  const token =
+    (req.query.token as string) ||
+    process.env.SPOTIFY_TOKEN ||
+    'BQDxdBZjjafYG962pBQxHCBigGp1KCqoPZd1LFTmlwPHMGKKfNVe8I7ZEMXKlXyJN62oTUpy1s5rHJvzesDiMTR4i4E1pKG321i3XfWu6pRj9xuDfM25lBoZrakkv6gaXUD2MG94xepoEks5_d4lEXNXS_FJAbl37W2vOTemv_nGZBFE2xiL2F43wdasxI4W57uuLpUENsToXVAU0pQ-Wr_1UoaMlrcWM_Lm7TPRyuyZwe4b3szHeiYPmtTnKTQKiSgpWtAtXtF3ZqJePqRNpFSd5NyP4OKxx5ZMtEnkcucnq7McVtTnr4vYkLPvoO8r77tZ3rs';
+
+  try {
+    const userRes = await fetch('https://api.spotify.com/v1/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const userData = await userRes.json();
+
+    const playlistsRes = await fetch('https://api.spotify.com/v1/me/playlists?limit=20', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const playlistsData = await playlistsRes.json();
+
+    const topTracksRes = await fetch('https://api.spotify.com/v1/me/top/tracks?time_range=long_term&limit=5', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const topTracksData = await topTracksRes.json();
+
+    res.json({
+      connected: userRes.ok,
+      user: userData,
+      playlistsCount: playlistsData?.items?.length || 0,
+      playlists: (playlistsData?.items || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        totalTracks: p.items?.total || p.tracks?.total || 7,
+        url: p.external_urls?.spotify,
+      })),
+      topTracksCount: topTracksData?.items?.length || 0,
+      topTracks: topTracksData?.items || [],
+      tokenStatus: userRes.ok ? 'valid' : 'expired_or_invalid',
+    });
+  } catch (err: any) {
+    res.status(500).json({ connected: false, error: err?.message || 'Failed to verify Spotify' });
+  }
+});
+
 // 7.0 YouTube Playlists & Anti-Repetition Exclusive Video Assignment Endpoints
 app.get('/api/youtube-playlists', (req, res) => {
   const db = readDb();

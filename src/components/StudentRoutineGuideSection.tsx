@@ -336,9 +336,15 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const dailySpotifyTrack = getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
-  const assignedSpotify =
+  const rawAssignedSpotify =
     currentDayActivities.find((act) => act && act.teacherSpotify && act.teacherSpotify.url)?.teacherSpotify ||
     (activeActivity?.teacherSpotify?.url ? activeActivity.teacherSpotify : null);
+
+  // Guard against any obsolete or dummy placeholder Spotify URLs
+  const assignedSpotify =
+    rawAssignedSpotify && !rawAssignedSpotify.url.includes('5VzKk7uV4C8Oa2sH3eWz9Y')
+      ? rawAssignedSpotify
+      : null;
 
   const hasTeacherCustomAudio = Boolean(
     assignedSpotify?.url &&
@@ -1048,16 +1054,28 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 </button>
               </div>
             ) : (
-              <a
-                href={levelPlaylistConfig.playlistUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-1 shrink-0"
-                title={isEn ? 'Open complete playlist on Spotify' : 'Abrir playlist completa no Spotify'}
-              >
-                <span>{isEn ? 'Open in Spotify' : 'Abrir no Spotify'}</span>
-                <ExternalLink className="w-2.5 h-2.5" />
-              </a>
+              <div className="flex items-center gap-2">
+                <a
+                  href={levelPlaylistConfig.playlistUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-1 shrink-0"
+                  title={isEn ? 'Open complete playlist on Spotify' : 'Abrir playlist completa no Spotify'}
+                >
+                  <span>{isEn ? 'Open in Spotify' : 'Abrir no Spotify'}</span>
+                  <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+                <a
+                  href="https://open.spotify.com/home?facet=music-chip"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] font-bold text-slate-500 hover:text-emerald-700 flex items-center gap-1 shrink-0"
+                  title="Spotify Web Home"
+                >
+                  <span>Spotify Web</span>
+                  <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
             )}
           </div>
 
@@ -1170,14 +1188,6 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
               </div>
             </div>
           )}
-
-          {/* Teacher Tip */}
-          <div className="p-3 bg-[#1DB954]/10 rounded-2xl border border-[#1DB954]/30 text-[11px] text-[#062863] leading-relaxed">
-            <span className="font-extrabold text-[#000035] block mb-0.5 flex items-center gap-1">
-              <span className="text-emerald-700">💡</span> {isEn ? 'Teacher Tip:' : 'Dica do Teacher:'}
-            </span>
-            {effectiveTeacherTip}
-          </div>
         </div>
       </div>
 

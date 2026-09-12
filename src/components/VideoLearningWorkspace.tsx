@@ -683,7 +683,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setTeacherSpotifyUrl('https://open.spotify.com/episode/5VzKk7uV4C8Oa2sH3eWz9Y');
+                      setTeacherSpotifyUrl('https://open.spotify.com/show/3CF9ANEicXGxEROA3cOryE');
                       setTeacherSpotifyTitle('BBC 6 Minute English: Daily Practice');
                       setTeacherSpotifyType('podcast');
                       setTeacherSpotifyInstructions('Sugestão do Teacher: Ouça prestando atenção nos novos termos.');
