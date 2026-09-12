@@ -47,6 +47,7 @@ interface AppDb {
   youtubePlaylists?: any[];
   studentVideoAssignments?: Record<string, any[]>;
   studentWatchedVideos?: Record<string, string[]>;
+  studentSpotifyAssignments?: Record<string, any[]>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -111,6 +112,7 @@ const DEFAULT_DB: AppDb = {
   dictionary: {},
   studentWeeklyChecks: {},
   studentDictionaryMap: {},
+  studentSpotifyAssignments: {},
   authUsers: {
     'adm.itissimple@gmail.com': {
       uid: 'admin-master-uid',
@@ -2444,9 +2446,12 @@ app.post('/api/students/profile', (req, res) => {
 
 app.get('/api/user-profile', (req, res) => {
   const db = readDb();
-  const email = ((req.query.email as string) || '').toLowerCase().trim();
-  if (!email) {
-    return res.status(400).json({ error: 'Email parameter is required' });
+  const rawEmail = ((req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const resolved = resolveStudentIdentifiers(db, rawEmail, uid);
+  const email = resolved.email || rawEmail;
+  if (!email && !uid) {
+    return res.status(400).json({ error: 'Email or UID parameter is required' });
   }
 
   // If user is a teacher / Native Friend, return their tutor profile directly
@@ -3593,6 +3598,8 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
 
   if (email || uid) {
     if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentSpotifyAssignments) db.studentSpotifyAssignments = {};
+
     let existingRoutines =
       (email && db.studentRoutinesMap[email]) ||
       (uid && db.studentRoutinesMap[uid]) ||
@@ -3634,6 +3641,34 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
           };
         }
       }
+
+      // Record in studentSpotifyAssignments for strict UID/email persistence and auditing
+      const keysToUpdate = [email, uid].filter(Boolean) as string[];
+      keysToUpdate.forEach((key) => {
+        if (!db.studentSpotifyAssignments![key]) db.studentSpotifyAssignments![key] = [];
+        db.studentSpotifyAssignments![key] = db.studentSpotifyAssignments![key].filter(
+          (a: any) => a.day !== d
+        );
+
+        if (spotify && spotify.url) {
+          const newAssignment = {
+            id: spotify.id || `spot-assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            activityId: activityId || 'act-2',
+            studentEmail: email,
+            studentUid: uid,
+            teacherUid: (teacherUid || '').trim(),
+            teacherEmail: (teacherEmail || '').trim(),
+            day: d,
+            url: spotify.url,
+            title: spotify.title || 'Teacher Recommended Audio',
+            artistOrHost: spotify.artistOrHost,
+            type: spotify.type || 'music',
+            instructions: spotify.instructions || teacherNotes,
+            assignedAt: spotify.addedAt || new Date().toISOString(),
+          };
+          db.studentSpotifyAssignments![key].push(newAssignment);
+        }
+      });
     });
 
     if (email) db.studentRoutinesMap[email] = existingRoutines;
@@ -3642,6 +3677,23 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
 
   writeDb(db);
   res.json({ success: true, updatedDays: targetDays, studentEmail: email, studentUid: uid });
+});
+
+// Endpoint to retrieve individual student Spotify assignments by UID or email
+app.get('/api/student-spotify-assignments', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const { email, uid: resolvedUid } = resolveStudentIdentifiers(db, studentEmail, uid);
+
+  let assignments: any[] = [];
+  if (resolvedUid && db.studentSpotifyAssignments?.[resolvedUid]) {
+    assignments = db.studentSpotifyAssignments[resolvedUid];
+  } else if (email && db.studentSpotifyAssignments?.[email]) {
+    assignments = db.studentSpotifyAssignments[email];
+  }
+
+  res.json({ success: true, assignments, studentEmail: email, studentUid: resolvedUid });
 });
 
 // 7.0 YouTube Playlists & Anti-Repetition Exclusive Video Assignment Endpoints

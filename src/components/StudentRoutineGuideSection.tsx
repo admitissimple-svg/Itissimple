@@ -335,11 +335,32 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const levelPlaylistConfig = getSpotifyPlaylistForLevel(normalizedLevel);
   const dailySpotifyTrack = getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
 
-  const effectiveTrackTitle = dailySpotifyTrack.title;
-  const effectiveArtist = dailySpotifyTrack.artist;
-  const effectiveEmbedUrl = dailySpotifyTrack.embedUrl;
-  const effectiveDirectUrl = dailySpotifyTrack.url;
-  const effectiveTeacherTip = isEn ? dailySpotifyTrack.teacherTipEn : dailySpotifyTrack.teacherTipPt;
+  const currentDayActivities = routinesByDay[selectedDay] || [];
+  const assignedSpotify =
+    currentDayActivities.find((act) => act && act.teacherSpotify && act.teacherSpotify.url)?.teacherSpotify ||
+    (activeActivity?.teacherSpotify?.url ? activeActivity.teacherSpotify : null);
+
+  const hasTeacherCustomAudio = Boolean(
+    assignedSpotify?.url &&
+    assignedSpotify.url.trim() !== '' &&
+    assignedSpotify.url.trim() !== dailySpotifyTrack.url.trim()
+  );
+
+  const effectiveTrackTitle = hasTeacherCustomAudio && assignedSpotify?.title && assignedSpotify.title !== 'Teacher Recommended Audio'
+    ? assignedSpotify.title
+    : dailySpotifyTrack.title;
+  const effectiveArtist = hasTeacherCustomAudio && assignedSpotify?.artistOrHost
+    ? assignedSpotify.artistOrHost
+    : dailySpotifyTrack.artist;
+  const effectiveEmbedUrl = hasTeacherCustomAudio && assignedSpotify?.url
+    ? (getSpotifyEmbedUrl(assignedSpotify.url) || dailySpotifyTrack.embedUrl)
+    : dailySpotifyTrack.embedUrl;
+  const effectiveDirectUrl = hasTeacherCustomAudio && assignedSpotify?.url
+    ? getSpotifyDirectUrl(assignedSpotify.url)
+    : dailySpotifyTrack.url;
+  const effectiveTeacherTip = hasTeacherCustomAudio && assignedSpotify?.instructions
+    ? assignedSpotify.instructions
+    : (isEn ? dailySpotifyTrack.teacherTipEn : dailySpotifyTrack.teacherTipPt);
   const currentDaySeqIndex = DAYS_SEQUENCE.indexOf(selectedDay) + 1;
 
   // End of day reminder calculation
