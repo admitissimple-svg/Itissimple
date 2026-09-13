@@ -1607,16 +1607,23 @@ export default function App() {
 
   // Handler: Save Teacher Meet Settings
   const handleSaveTeacherMeetSettings = async (settings: TeacherMeetSettings) => {
+    const cleanEmail = (settings.teacherEmail || '').toLowerCase().trim();
+    const uid =
+      settings.uid ||
+      (currentAccount?.email?.toLowerCase().trim() === cleanEmail ? currentAccount?.uid : undefined);
+    const merged = { ...settings, teacherEmail: cleanEmail, ...(uid ? { uid } : {}) };
+
     setTeacherMeetSettings((prev) => ({
       ...prev,
-      [settings.teacherEmail]: settings,
+      [cleanEmail]: merged,
+      ...(uid ? { [uid]: merged } : {}),
     }));
 
     try {
       await fetch('/api/teacher-settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(merged),
       });
     } catch {
       // local fallback
@@ -2708,7 +2715,17 @@ export default function App() {
         isOpen={isMeetConfigModalOpen}
         onClose={() => setIsMeetConfigModalOpen(false)}
         teacherEmail={teacherEmailForConfig}
-        currentSettings={teacherMeetSettings[teacherEmailForConfig]}
+        teacherUid={
+          (currentAccount?.email?.toLowerCase().trim() === teacherEmailForConfig?.toLowerCase().trim()
+            ? currentAccount?.uid
+            : undefined) ||
+          tutors.find((t) => (t.email || '').toLowerCase().trim() === teacherEmailForConfig?.toLowerCase().trim())?.uid
+        }
+        currentSettings={
+          teacherMeetSettings[teacherEmailForConfig?.toLowerCase().trim()] ||
+          teacherMeetSettings[teacherEmailForConfig] ||
+          (currentAccount?.uid ? teacherMeetSettings[currentAccount.uid] : undefined)
+        }
         onSave={handleSaveTeacherMeetSettings}
         currentLanguage="en"
       />

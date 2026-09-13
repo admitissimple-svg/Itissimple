@@ -59,6 +59,25 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
       },
       "required": ["uid"]
+    },
+    "TeacherAvailability": {
+      "title": "TeacherAvailability",
+      "description": "Teacher granular 30-minute availability schedule structured per day of week linked to UID",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Teacher user auth UID" },
+        "teacherEmail": { "type": "string", "format": "email", "description": "Teacher email address" },
+        "meetLink": { "type": "string", "description": "Default Google Meet room URL" },
+        "timezone": { "type": "string", "description": "Teacher timezone" },
+        "availableDays": { "type": "array", "description": "Active teaching days" },
+        "availability": { "type": "object", "description": "Granular 30-min slots map by day of week" },
+        "availableHoursByDay": { "type": "object", "description": "Granular 30-min slots map by day of week" },
+        "availableHours": { "type": "array", "description": "Fallback list of slots" },
+        "workingHoursStart": { "type": "string", "description": "Earliest starting slot" },
+        "workingHoursEnd": { "type": "string", "description": "Latest ending slot" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["teacherEmail"]
     }
   },
   "firestore": {
@@ -77,6 +96,10 @@
     "/student_assignments/{userId}": {
       "schema": "StudentMediaAssignments",
       "description": "Student media assignments partitioned by user UID"
+    },
+    "/teacher_availability/{userId}": {
+      "schema": "TeacherAvailability",
+      "description": "Teacher availability schedule partitioned by teacher UID or ID"
     }
   }
 }

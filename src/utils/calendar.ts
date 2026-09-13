@@ -177,11 +177,12 @@ export function generateTeacherAvailableSlots(
 
   // Retrieve enabled slots for this day from settings
   let enabledTimeSlots: string[] = [];
-  if (
-    teacherSettings.availableHoursByDay &&
-    teacherSettings.availableHoursByDay[currentDayOfWeek]
-  ) {
-    enabledTimeSlots = teacherSettings.availableHoursByDay[currentDayOfWeek];
+  const daySchedule =
+    teacherSettings.availability?.[currentDayOfWeek] ||
+    teacherSettings.availableHoursByDay?.[currentDayOfWeek];
+
+  if (daySchedule && Array.isArray(daySchedule)) {
+    enabledTimeSlots = daySchedule;
   } else if (
     teacherSettings.availableHours &&
     teacherSettings.availableHours.length > 0

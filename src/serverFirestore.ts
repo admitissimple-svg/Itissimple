@@ -141,3 +141,71 @@ export async function fetchStudentAssignmentsByUid(uid: string): Promise<any | n
     return null;
   }
 }
+
+/**
+ * Dedicated persistence for Teacher Availability Schedule directly linked to UID and Email.
+ * Stores granular 30-min slots partitioned by day of week.
+ */
+export async function saveTeacherAvailabilityToFirestore(
+  uidOrEmail: string,
+  data: {
+    uid?: string;
+    teacherEmail?: string;
+    meetLink?: string;
+    timezone?: string;
+    availableDays?: string[];
+    availableHours?: string[];
+    availableHoursByDay?: Record<string, string[]>;
+    availability?: Record<string, string[]>;
+    workingHoursStart?: string;
+    workingHoursEnd?: string;
+    updatedAt?: string;
+  }
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !uidOrEmail) return false;
+  try {
+    const sanitized = JSON.parse(JSON.stringify({
+      ...data,
+      updatedAt: data.updatedAt || new Date().toISOString(),
+    }));
+
+    const cleanDocId = uidOrEmail.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const savePromise = setDoc(doc(db, 'teacher_availability', cleanDocId), sanitized, { merge: true }).then(() => true);
+
+    // If teacher UID is present and different from cleanDocId, also mirror to UID doc
+    if (data.uid && data.uid !== cleanDocId) {
+      setDoc(doc(db, 'teacher_availability', data.uid), sanitized, { merge: true }).catch(() => {});
+    }
+
+    const result = await withTimeout(savePromise, 2000);
+    return !!result;
+  } catch (err) {
+    console.warn('Firestore saveTeacherAvailabilityToFirestore error:', err);
+    return false;
+  }
+}
+
+export async function fetchTeacherAvailabilityFromFirestore(uidOrEmail: string): Promise<any | null> {
+  const db = getFirestoreDb();
+  if (!db || !uidOrEmail) return null;
+  try {
+    const cleanDocId = uidOrEmail.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fetchPromise = getDoc(doc(db, 'teacher_availability', cleanDocId)).then(async (snap) => {
+      if (snap.exists()) {
+        return snap.data();
+      }
+      // If not found by cleanDocId and uidOrEmail is different, try directly
+      if (uidOrEmail !== cleanDocId) {
+        const snapDirect = await getDoc(doc(db, 'teacher_availability', uidOrEmail));
+        if (snapDirect.exists()) return snapDirect.data();
+      }
+      return null;
+    });
+    return await withTimeout(fetchPromise, 2000);
+  } catch (err) {
+    console.warn('Firestore fetchTeacherAvailabilityFromFirestore error:', err);
+    return null;
+  }
+}
+

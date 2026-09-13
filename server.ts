@@ -5,7 +5,16 @@ import dotenv from 'dotenv';
 dotenv.config();
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { fetchAppStateFromFirestore, saveAppStateToFirestore, saveUserToFirestore, getFirestoreDb, saveStudentAssignmentsByUid, fetchStudentAssignmentsByUid } from './src/serverFirestore';
+import {
+  fetchAppStateFromFirestore,
+  saveAppStateToFirestore,
+  saveUserToFirestore,
+  getFirestoreDb,
+  saveStudentAssignmentsByUid,
+  fetchStudentAssignmentsByUid,
+  saveTeacherAvailabilityToFirestore,
+  fetchTeacherAvailabilityFromFirestore,
+} from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay } from './src/data/defaultRoutines';
 import {
@@ -2265,7 +2274,7 @@ async function lookupServerDictionaryWord(cleanWord: string): Promise<{
 }
 
 // 3. Meet Settings & Teacher Settings Endpoints
-app.get(['/api/meet-settings', '/api/teacher-settings'], (req, res) => {
+app.get(['/api/meet-settings', '/api/teacher-settings'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -2281,19 +2290,64 @@ app.get(['/api/meet-settings', '/api/teacher-settings'], (req, res) => {
   }
 
   if (teacherEmail || uid) {
-    const specific =
+    let specific =
       (teacherEmail ? (db.meetSettings[teacherEmail] || db.teacherSettings[teacherEmail]) : null) ||
       (uid ? (db.meetSettings[uid] || db.teacherSettings[uid]) : null) ||
-      {};
+      null;
 
-    // If meet link is missing, fallback to tutor profile meetUrl
-    if (!specific.meetLink && teacherEmail) {
-      const tutorMatch = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === teacherEmail);
-      if (tutorMatch?.meetUrl || tutorMatch?.meetLink) {
-        specific.meetLink = tutorMatch.meetUrl || tutorMatch.meetLink;
+    // Check tutor match from db.tutorsList
+    const tutorMatch = (db.tutorsList || []).find(
+      (t: any) =>
+        (teacherEmail && (t.email || '').toLowerCase().trim() === teacherEmail) ||
+        (uid && t.uid === uid)
+    );
+
+    // If specific is not yet found or missing availability, attempt to retrieve from Firestore
+    if (!specific || (!specific.availability && !specific.availableHoursByDay)) {
+      try {
+        const firestoreData = await fetchTeacherAvailabilityFromFirestore(uid || teacherEmail);
+        if (firestoreData) {
+          specific = {
+            ...(specific || {}),
+            ...firestoreData,
+          };
+          if (teacherEmail) {
+            db.meetSettings[teacherEmail] = specific;
+            db.teacherSettings[teacherEmail] = specific;
+          }
+          if (uid) {
+            db.meetSettings[uid] = specific;
+            db.teacherSettings[uid] = specific;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not read teacher availability from Firestore:', err);
       }
     }
-    return res.json(specific);
+
+    const finalResult = {
+      ...(specific || {}),
+      teacherEmail: teacherEmail || specific?.teacherEmail || tutorMatch?.email || '',
+      uid: uid || specific?.uid || tutorMatch?.uid || '',
+    };
+
+    // If meet link is missing, fallback to tutor profile meetUrl
+    if (!finalResult.meetLink && tutorMatch) {
+      finalResult.meetLink = tutorMatch.meetUrl || tutorMatch.meetLink || '';
+    }
+
+    // If availability was stored on tutorMatch, merge it
+    if (!finalResult.availability && tutorMatch?.availability) {
+      finalResult.availability = tutorMatch.availability;
+    }
+    if (!finalResult.availableHoursByDay && tutorMatch?.availableHoursByDay) {
+      finalResult.availableHoursByDay = tutorMatch.availableHoursByDay;
+    }
+    if (!finalResult.availableDays && tutorMatch?.availableDays) {
+      finalResult.availableDays = tutorMatch.availableDays;
+    }
+
+    return res.json(finalResult);
   }
 
   // Return all known meet settings
@@ -2309,19 +2363,61 @@ app.post(['/api/meet-settings', '/api/teacher-settings'], async (req, res) => {
     return res.status(400).json({ error: 'Missing teacherEmail or settings' });
   }
   const cleanEmail = teacherEmail.toLowerCase().trim();
+
+  // Normalize granular availability maps
+  const availability = settings.availability || settings.availableHoursByDay || {};
+  const availableHoursByDay = settings.availableHoursByDay || settings.availability || {};
+
   const entry = {
     ...settings,
     teacherEmail: cleanEmail,
     ...(uid ? { uid } : {}),
+    availability,
+    availableHoursByDay,
+    updatedAt: new Date().toISOString(),
   };
+
   db.meetSettings[cleanEmail] = entry;
   db.teacherSettings[cleanEmail] = entry;
   if (uid) {
     db.meetSettings[uid] = entry;
     db.teacherSettings[uid] = entry;
   }
+
+  // Also update corresponding tutor in tutorsList if present
+  if (db.tutorsList && Array.isArray(db.tutorsList)) {
+    const tutorIdx = db.tutorsList.findIndex(
+      (t: any) => (t.email || '').toLowerCase().trim() === cleanEmail || (uid && t.uid === uid)
+    );
+    if (tutorIdx >= 0) {
+      db.tutorsList[tutorIdx] = {
+        ...db.tutorsList[tutorIdx],
+        meetUrl: entry.meetLink || db.tutorsList[tutorIdx].meetUrl,
+        meetLink: entry.meetLink || db.tutorsList[tutorIdx].meetLink,
+        availableDays: entry.availableDays || db.tutorsList[tutorIdx].availableDays,
+        availableHours: entry.availableHours || db.tutorsList[tutorIdx].availableHours,
+        availability: entry.availability || db.tutorsList[tutorIdx].availability,
+        availableHoursByDay: entry.availableHoursByDay || db.tutorsList[tutorIdx].availableHoursByDay,
+        timezone: entry.timezone || db.tutorsList[tutorIdx].timezone,
+      };
+    }
+  }
+
   await writeDbSync(db);
-  res.json({ success: true, meetSettings: db.meetSettings, teacherSettings: db.teacherSettings });
+
+  // Directly persist to Firestore linked to teacher UID / Email in teacher_availability collection
+  if (uid || cleanEmail) {
+    saveTeacherAvailabilityToFirestore(uid || cleanEmail, entry).catch((err) => {
+      console.warn('Background Firestore teacher availability save failed:', err);
+    });
+  }
+
+  res.json({
+    success: true,
+    settings: entry,
+    meetSettings: db.meetSettings,
+    teacherSettings: db.teacherSettings,
+  });
 });
 
 // 4. Students & Enrollments Endpoints

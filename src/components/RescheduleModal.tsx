@@ -8,7 +8,7 @@ import {
   AlertCircle,
   AlertTriangle,
 } from 'lucide-react';
-import { LiveLesson, GoogleAccount, Language, TeacherMeetSettings } from '../types';
+import { LiveLesson, GoogleAccount, Language, TeacherMeetSettings, DayOfWeek } from '../types';
 import {
   generate30MinTimeSlots,
   formatDateInTimeZone,
@@ -69,12 +69,39 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
     return diff >= 45 ? 50 : 25;
   }, [lesson]);
 
+  const newDayKey = useMemo(() => {
+    if (!newDate) return 'monday';
+    try {
+      const [y, m, d] = newDate.split('-').map(Number);
+      const dayIdx = new Date(y, m - 1, d).getDay();
+      const map: Record<number, DayOfWeek> = {
+        0: 'sunday',
+        1: 'monday',
+        2: 'tuesday',
+        3: 'wednesday',
+        4: 'thursday',
+        5: 'friday',
+        6: 'saturday',
+      };
+      return map[dayIdx] || 'monday';
+    } catch {
+      return 'monday';
+    }
+  }, [newDate]);
+
   const timeSlots = useMemo(() => {
+    const daySchedule =
+      activeSettings?.availability?.[newDayKey] ||
+      activeSettings?.availableHoursByDay?.[newDayKey];
+
+    if (daySchedule && Array.isArray(daySchedule) && daySchedule.length > 0) {
+      return [...daySchedule].sort();
+    }
     if (activeSettings?.availableHours && activeSettings.availableHours.length > 0) {
       return [...activeSettings.availableHours].sort();
     }
     return generate30MinTimeSlots('07:00', '22:00');
-  }, [activeSettings]);
+  }, [activeSettings, newDayKey]);
 
   // Check proposed start and end using exact timezone
   const proposedIso = useMemo(() => {

@@ -88,5 +88,11 @@ service cloud.firestore {
     match /student_assignments/{userId} {
       allow read, write: if isOwner(userId) || isAdmin() || request.auth == null;
     }
+
+    // Teacher availability schedule per UID / document
+    match /teacher_availability/{userId} {
+      allow read: if true;
+      allow write: if isOwner(userId) || isAdmin() || request.auth == null;
+    }
   }
 }

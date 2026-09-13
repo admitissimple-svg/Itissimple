@@ -236,12 +236,27 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   }, [selectedDate]);
 
   const isDayAvailable = useMemo(() => {
-    if (!activeTeacherSettings.availableDays || activeTeacherSettings.availableDays.length === 0) return true;
-    return activeTeacherSettings.availableDays.includes(selectedDayKey);
-  }, [activeTeacherSettings.availableDays, selectedDayKey]);
+    if (activeTeacherSettings.availableDays && activeTeacherSettings.availableDays.length > 0) {
+      if (!activeTeacherSettings.availableDays.includes(selectedDayKey)) return false;
+    }
+    const daySchedule =
+      activeTeacherSettings.availability?.[selectedDayKey] ||
+      activeTeacherSettings.availableHoursByDay?.[selectedDayKey];
+    if (daySchedule && Array.isArray(daySchedule) && daySchedule.length === 0) {
+      return false;
+    }
+    return true;
+  }, [activeTeacherSettings.availableDays, activeTeacherSettings.availability, activeTeacherSettings.availableHoursByDay, selectedDayKey]);
 
-  // Generate 30-minute time slots based on teacher settings
+  // Generate 30-minute time slots based on teacher settings for the specific day of week
   const timeSlots = useMemo(() => {
+    const daySchedule =
+      activeTeacherSettings.availability?.[selectedDayKey] ||
+      activeTeacherSettings.availableHoursByDay?.[selectedDayKey];
+
+    if (daySchedule && Array.isArray(daySchedule) && daySchedule.length > 0) {
+      return [...daySchedule].sort();
+    }
     if (activeTeacherSettings.availableHours && activeTeacherSettings.availableHours.length > 0) {
       return [...activeTeacherSettings.availableHours].sort();
     }
@@ -249,7 +264,14 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
       activeTeacherSettings.workingHoursStart || '08:00',
       activeTeacherSettings.workingHoursEnd || '20:00'
     );
-  }, [activeTeacherSettings.availableHours, activeTeacherSettings.workingHoursStart, activeTeacherSettings.workingHoursEnd]);
+  }, [
+    activeTeacherSettings.availability,
+    activeTeacherSettings.availableHoursByDay,
+    activeTeacherSettings.availableHours,
+    activeTeacherSettings.workingHoursStart,
+    activeTeacherSettings.workingHoursEnd,
+    selectedDayKey,
+  ]);
 
   // Calculate start and end ISO using exact timezone conversion
   const calculateEndDateTime = () => {

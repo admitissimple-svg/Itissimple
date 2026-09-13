@@ -239,6 +239,7 @@ export interface StudentEnrollment {
 
 export interface TeacherMeetSettings {
   teacherEmail: string;
+  uid?: string;
   meetLink: string;
   workingHoursStart?: string;
   workingHoursEnd?: string;
@@ -246,7 +247,9 @@ export interface TeacherMeetSettings {
   availableDays?: DayOfWeek[];
   availableHours?: string[];
   availableHoursByDay?: Record<string, string[]>;
+  availability?: Record<string, string[]>;
   timezone?: string;
+  updatedAt?: string;
 }
 
 export interface LiveLessonVocabNote {
