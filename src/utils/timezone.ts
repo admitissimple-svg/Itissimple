@@ -122,6 +122,34 @@ export function getDayKeyInTimeZone(
   }
 }
 
+export function getDefaultTimezoneForCountry(country?: string, accent?: string): string {
+  const c = (country || '').toLowerCase().trim();
+  const a = (accent || '').toLowerCase().trim();
+
+  if (c.includes('canada') || a.includes('toronto') || a.includes('canada') || a.includes('canadian')) {
+    return 'America/Toronto';
+  }
+  if (c.includes('united states') || c.includes('usa') || c.includes('us') || a.includes('american') || a.includes('new york')) {
+    return 'America/New_York';
+  }
+  if (c.includes('united kingdom') || c.includes('uk') || c.includes('ireland') || a.includes('british') || a.includes('irish')) {
+    return 'Europe/London';
+  }
+  if (c.includes('south africa') || a.includes('south african')) {
+    return 'Africa/Johannesburg';
+  }
+  if (c.includes('australia') || a.includes('australian') || a.includes('sydney')) {
+    return 'Australia/Sydney';
+  }
+  if (c.includes('new zealand') || a.includes('kiwi')) {
+    return 'Pacific/Auckland';
+  }
+  if (c.includes('brazil') || c.includes('brasil')) {
+    return 'America/Sao_Paulo';
+  }
+  return DEFAULT_TEACHER_TIMEZONE;
+}
+
 export function getTimezoneDisplayLabel(
   timeZone: string = DEFAULT_STUDENT_TIMEZONE,
   lang: 'pt' | 'en' = 'pt'
@@ -132,10 +160,13 @@ export function getTimezoneDisplayLabel(
   if (timeZone.includes('Sao_Paulo') || timeZone.includes('Brazil')) {
     return lang === 'en' ? 'Brasília Time (GMT-3)' : 'Horário de Brasília (GMT-3)';
   }
-  if (timeZone.includes('London')) return 'London (GMT+0/+1)';
-  if (timeZone.includes('Lisbon')) return 'Lisboa / Portugal';
-  if (timeZone.includes('Los_Angeles')) return 'Pacific Time (LA)';
   if (timeZone.includes('Chicago')) return 'Central Time (Chicago)';
+  if (timeZone.includes('Los_Angeles')) return 'Pacific Time (LA)';
+  if (timeZone.includes('London') || timeZone.includes('Dublin')) return 'London (GMT)';
+  if (timeZone.includes('Lisbon')) return 'Lisboa / Portugal';
+  if (timeZone.includes('Johannesburg')) return 'South Africa (SAST)';
+  if (timeZone.includes('Sydney') || timeZone.includes('Melbourne')) return 'Sydney (AEST)';
+  if (timeZone.includes('Auckland')) return 'New Zealand (NZST)';
   return timeZone.replace('_', ' ');
 }
 
@@ -145,18 +176,26 @@ export function getShortTzBadge(timeZone: string): string {
   if (timeZone.includes('London')) return 'GMT';
   if (timeZone.includes('Lisbon')) return 'WET';
   if (timeZone.includes('Los_Angeles')) return 'PT (GMT-7)';
+  if (timeZone.includes('Chicago')) return 'CT (GMT-5)';
+  if (timeZone.includes('Johannesburg')) return 'SAST (GMT+2)';
+  if (timeZone.includes('Sydney')) return 'AEST (GMT+10)';
+  if (timeZone.includes('Auckland')) return 'NZST (GMT+12)';
   return 'GMT';
 }
 
 
 export const TIMEZONE_OPTIONS = [
-  { value: 'America/Sao_Paulo', label: 'Brasília (BRT)', offset: 'GMT-3' },
   { value: 'America/Toronto', label: 'Toronto / New York (ET)', offset: 'GMT-4' },
+  { value: 'America/New_York', label: 'New York / Eastern Time (ET)', offset: 'GMT-4' },
   { value: 'America/Chicago', label: 'Chicago (CT)', offset: 'GMT-5' },
   { value: 'America/Los_Angeles', label: 'Los Angeles (PT)', offset: 'GMT-7' },
-  { value: 'Europe/London', label: 'London (GMT)', offset: 'GMT+0' },
+  { value: 'America/Sao_Paulo', label: 'Brasília (BRT)', offset: 'GMT-3' },
+  { value: 'Europe/London', label: 'London / Dublin (GMT)', offset: 'GMT+0' },
   { value: 'Europe/Lisbon', label: 'Lisbon (WET)', offset: 'GMT+0' },
   { value: 'Europe/Madrid', label: 'Madrid / Paris (CET)', offset: 'GMT+1' },
+  { value: 'Africa/Johannesburg', label: 'South Africa (SAST)', offset: 'GMT+2' },
+  { value: 'Australia/Sydney', label: 'Sydney / Melbourne (AEST)', offset: 'GMT+10' },
+  { value: 'Pacific/Auckland', label: 'Auckland / NZ (NZST)', offset: 'GMT+12' },
 ];
 
 export function generate30MinTimeSlots(startHour: string = '00:00', endHour: string = '24:00'): string[] {

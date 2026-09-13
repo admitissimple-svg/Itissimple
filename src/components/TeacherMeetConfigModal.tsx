@@ -16,6 +16,7 @@ import { TeacherMeetSettings, DayOfWeek, Language, NativeFriendTutor } from '../
 import {
   TIMEZONE_OPTIONS,
   DEFAULT_TEACHER_TIMEZONE,
+  getDefaultTimezoneForCountry,
   generate30MinTimeSlots,
   FIXED_30MIN_AVAILABILITY_SLOTS,
   DEFAULT_TEACHER_AVAILABILITY_HOURS,
@@ -135,25 +136,30 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
   currentLanguage = 'en',
 }) => {
   // Resolve correct teacher timezone:
-  // 1. tutorProfile?.timezone (registered on profile)
-  // 2. currentSettings?.timezone (if not stale Brasilia for North American profile)
-  // 3. DEFAULT_TEACHER_TIMEZONE ('America/Toronto')
+  // 1. tutorProfile?.timezone (what the native friend informed when signing up on the platform)
+  // 2. currentSettings?.timezone (if already configured and not an accidental Brazil fallback for a native teacher)
+  // 3. Auto-detected from country/accent informed when signing up (e.g. Canada -> America/Toronto, USA -> America/New_York, UK -> Europe/London)
+  // 4. DEFAULT_TEACHER_TIMEZONE ('America/Toronto')
   const resolveInitialTimezone = useCallback((): string => {
-    if (tutorProfile?.timezone) {
-      return tutorProfile.timezone;
+    if (tutorProfile?.timezone && tutorProfile.timezone.trim()) {
+      return tutorProfile.timezone.trim();
     }
-    if (currentSettings?.timezone) {
-      const isNorthAmerican =
-        (tutorProfile?.accent || '').toLowerCase().includes('north american') ||
-        (tutorProfile?.country || '').toLowerCase().includes('canada') ||
-        (tutorProfile?.country || '').toLowerCase().includes('united states') ||
-        (tutorProfile?.country || '').toLowerCase().includes('usa') ||
-        (tutorProfile?.country || '').toLowerCase().includes('toronto');
+    if (currentSettings?.timezone && currentSettings.timezone.trim()) {
+      const isBrazilian =
+        (tutorProfile?.country || '').toLowerCase().includes('brazil') ||
+        (tutorProfile?.country || '').toLowerCase().includes('brasil');
 
-      if (currentSettings.timezone === 'America/Sao_Paulo' && isNorthAmerican) {
-        return DEFAULT_TEACHER_TIMEZONE;
+      if (
+        currentSettings.timezone === 'America/Sao_Paulo' &&
+        !isBrazilian &&
+        (tutorProfile?.country || tutorProfile?.accent)
+      ) {
+        return getDefaultTimezoneForCountry(tutorProfile?.country, tutorProfile?.accent);
       }
-      return currentSettings.timezone;
+      return currentSettings.timezone.trim();
+    }
+    if (tutorProfile?.country || tutorProfile?.accent) {
+      return getDefaultTimezoneForCountry(tutorProfile.country, tutorProfile.accent);
     }
     return DEFAULT_TEACHER_TIMEZONE;
   }, [tutorProfile, currentSettings]);
@@ -423,6 +429,11 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                       {opt.label} ({opt.offset})
                     </option>
                   ))}
+                  {timezone && !TIMEZONE_OPTIONS.some((opt) => opt.value === timezone) && (
+                    <option key={timezone} value={timezone}>
+                      {timezone}
+                    </option>
+                  )}
                 </select>
               </div>
             </div>

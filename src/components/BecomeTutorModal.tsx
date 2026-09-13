@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Language, DayOfWeek } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
+import { TIMEZONE_OPTIONS, getDefaultTimezoneForCountry } from '../utils/timezone';
 
 interface BecomeTutorModalProps {
   isOpen: boolean;
@@ -42,6 +43,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
     videoUrl: '',
     priceUsd: '',
     meetUrl: '',
+    timezone: 'America/Toronto',
     availableDays: [] as DayOfWeek[],
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -131,6 +133,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
         pricePerSessionUsd: Number(formData.priceUsd) || 20,
         pricePerSessionBrl: Math.round((Number(formData.priceUsd) || 20) * 5.5),
         availableDays: formData.availableDays,
+        timezone: formData.timezone || 'America/Toronto',
         approvalStatus: 'pending',
         registeredByAdmin: false,
       };
@@ -162,7 +165,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
             workingHoursEnd: '18:00',
             slotDurationMinutes: 30,
             availableDays: formData.availableDays,
-            timezone: 'America/New_York',
+            timezone: formData.timezone || 'America/Toronto',
           },
         }),
       });
@@ -378,7 +381,11 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                       </label>
                       <select
                         value={formData.country}
-                        onChange={(e) => setFormData({ ...formData, country: e.target.value })}
+                        onChange={(e) => {
+                          const country = e.target.value;
+                          const autoTz = getDefaultTimezoneForCountry(country, formData.accent);
+                          setFormData({ ...formData, country, timezone: autoTz });
+                        }}
                         className="w-full px-3 py-2 bg-slate-50 border border-[#607EC9]/30 rounded-xl text-sm text-[#000035] focus:bg-white focus:outline-hidden"
                       >
                         <option value="">Select country...</option>
@@ -514,6 +521,29 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                         className="w-full px-3 py-2 bg-slate-50 border border-[#607EC9]/30 rounded-xl text-xs font-mono text-[#000035]"
                       />
                     </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-[#1C4C96]" />
+                      <span>Timezone (Fuso Horário do Amigo Nativo) *</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={formData.timezone}
+                        onChange={(e) => setFormData({ ...formData, timezone: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-[#607EC9]/30 rounded-xl text-xs text-[#000035] focus:bg-white focus:outline-hidden"
+                      >
+                        {TIMEZONE_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label} ({opt.offset})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      Detectado automaticamente pelo país de origem. Você pode alterar manualmente a qualquer momento.
+                    </span>
                   </div>
 
                   <div>
