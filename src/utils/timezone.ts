@@ -56,14 +56,40 @@ export function formatTimeInTimeZone(
 
 export function formatTimeSlot12h(timeStr: string): string {
   if (!timeStr) return '';
-  const parts = timeStr.split(':');
-  if (parts.length < 2) return timeStr;
+  const trimmed = timeStr.trim();
+  // If already in 12h format (e.g., '12:00 AM', '01:30 PM')
+  if (/^(0?[1-9]|1[0-2]):[0-5][0-9]\s*(AM|PM)$/i.test(trimmed)) {
+    const [t, ampm] = trimmed.split(/\s+/);
+    const [h, m] = t.split(':');
+    return `${h.padStart(2, '0')}:${m} ${ampm.toUpperCase()}`;
+  }
+  const parts = trimmed.split(':');
+  if (parts.length < 2) return trimmed;
   const hour = parseInt(parts[0], 10);
-  const min = parts[1];
-  if (isNaN(hour)) return timeStr;
+  const min = parts[1].slice(0, 2);
+  if (isNaN(hour)) return trimmed;
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const hour12 = hour % 12 || 12;
   return `${String(hour12).padStart(2, '0')}:${min} ${ampm}`;
+}
+
+/**
+ * Parses any 12h or 24h time string to standard 24h 'HH:mm' format
+ */
+export function parseTimeSlotTo24h(timeStr: string): string {
+  if (!timeStr) return '';
+  const trimmed = timeStr.trim();
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return trimmed;
+  let h = parseInt(match[1], 10);
+  const m = match[2];
+  const ampm = match[3].toUpperCase();
+  if (ampm === 'AM') {
+    if (h === 12) h = 0;
+  } else {
+    if (h < 12) h += 12;
+  }
+  return `${String(h).padStart(2, '0')}:${m}`;
 }
 
 export function getDayKeyInTimeZone(
@@ -133,13 +159,18 @@ export const TIMEZONE_OPTIONS = [
   { value: 'Europe/Madrid', label: 'Madrid / Paris (CET)', offset: 'GMT+1' },
 ];
 
-export function generate30MinTimeSlots(startHour: string = '07:00', endHour: string = '22:00'): string[] {
+export function generate30MinTimeSlots(startHour: string = '00:00', endHour: string = '24:00'): string[] {
   const slots: string[] = [];
   const [sH, sM] = startHour.split(':').map(Number);
   const [eH, eM] = endHour.split(':').map(Number);
 
-  let currentMin = sH * 60 + (sM || 0);
-  const endMin = eH * 60 + (eM || 0);
+  let currentMin = (isNaN(sH) ? 0 : sH) * 60 + (isNaN(sM) ? 0 : sM);
+  let endMin = (isNaN(eH) ? 24 : eH) * 60 + (isNaN(eM) ? 0 : eM);
+
+  // If caller specified 23:30 expecting to include the final 30-min slot of the day, cap at 24:00 (1440 mins)
+  if (eH === 23 && eM === 30) {
+    endMin = 24 * 60;
+  }
 
   while (currentMin < endMin) {
     const h = Math.floor(currentMin / 60);
@@ -152,10 +183,10 @@ export function generate30MinTimeSlots(startHour: string = '07:00', endHour: str
   return slots;
 }
 
-// Fixed 30-minute slots from 06:00 to 22:30 for Native Friends availability
-export const FIXED_30MIN_AVAILABILITY_SLOTS: string[] = generate30MinTimeSlots('06:00', '23:00');
+// Full 24-hour fixed 30-minute availability slots from 00:00 (12:00 AM) to 23:30 (11:30 PM) - 48 total slots
+export const FIXED_30MIN_AVAILABILITY_SLOTS: string[] = generate30MinTimeSlots('00:00', '24:00');
 
-// Default popular teacher availability hours (08:00 to 18:00)
+// Default popular teacher daytime availability hours (08:00 to 18:00)
 export const DEFAULT_TEACHER_AVAILABILITY_HOURS: string[] = generate30MinTimeSlots('08:00', '18:00');
 
 /**

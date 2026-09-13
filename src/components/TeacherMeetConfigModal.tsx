@@ -20,6 +20,8 @@ import {
   generate30MinTimeSlots,
   FIXED_30MIN_AVAILABILITY_SLOTS,
   DEFAULT_TEACHER_AVAILABILITY_HOURS,
+  formatTimeSlot12h,
+  parseTimeSlotTo24h,
 } from '../utils/timezone';
 
 interface TeacherMeetConfigModalProps {
@@ -42,10 +44,49 @@ const ALL_DAYS: { id: DayOfWeek; labelEn: string; fullEn: string }[] = [
   { id: 'sunday', labelEn: 'Sun', fullEn: 'Sunday' },
 ];
 
+export interface TimePeriodGroup {
+  id: 'overnight' | 'morning' | 'afternoon' | 'evening';
+  label: string;
+  range12h: string;
+  iconText: string;
+  slots: string[];
+}
+
+export const TIME_PERIOD_GROUPS: TimePeriodGroup[] = [
+  {
+    id: 'overnight',
+    label: 'Overnight & Early Morning',
+    range12h: '12:00 AM – 07:30 AM',
+    iconText: '🌙',
+    slots: generate30MinTimeSlots('00:00', '08:00'),
+  },
+  {
+    id: 'morning',
+    label: 'Morning',
+    range12h: '08:00 AM – 11:30 AM',
+    iconText: '☀️',
+    slots: generate30MinTimeSlots('08:00', '12:00'),
+  },
+  {
+    id: 'afternoon',
+    label: 'Afternoon',
+    range12h: '12:00 PM – 05:30 PM',
+    iconText: '🌤️',
+    slots: generate30MinTimeSlots('12:00', '18:00'),
+  },
+  {
+    id: 'evening',
+    label: 'Evening & Late Night',
+    range12h: '06:00 PM – 11:30 PM',
+    iconText: '🌆',
+    slots: generate30MinTimeSlots('18:00', '24:00'),
+  },
+];
+
 function getInitialAvailability(settings?: TeacherMeetSettings): Record<DayOfWeek, string[]> {
   const defaultSlots =
     settings?.availableHours && settings.availableHours.length > 0
-      ? [...settings.availableHours]
+      ? settings.availableHours.map(parseTimeSlotTo24h)
       : DEFAULT_TEACHER_AVAILABILITY_HOURS;
 
   const legacyDays = settings?.availableDays || [
@@ -71,9 +112,9 @@ function getInitialAvailability(settings?: TeacherMeetSettings): Record<DayOfWee
 
   ALL_DAYS.forEach((d) => {
     if (sourceMap[d.id] && Array.isArray(sourceMap[d.id])) {
-      result[d.id] = [...sourceMap[d.id]].sort();
+      result[d.id] = [...sourceMap[d.id]].map(parseTimeSlotTo24h).sort();
     } else if (legacyDays.includes(d.id)) {
-      result[d.id] = [...defaultSlots].sort();
+      result[d.id] = [...defaultSlots].map(parseTimeSlotTo24h).sort();
     } else {
       result[d.id] = [];
     }
@@ -101,6 +142,9 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
   );
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<
+    'all' | 'overnight' | 'morning' | 'afternoon' | 'evening'
+  >('all');
 
   // Re-sync on modal open
   useEffect(() => {
@@ -111,6 +155,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
       setAvailabilityByDay(initial);
       setSavedSuccess(false);
       setActionNotice(null);
+      setSelectedPeriodFilter('all');
     }
   }, [isOpen, currentSettings]);
 
@@ -144,20 +189,42 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
     });
   };
 
+  // Toggle an entire time-of-day period for the active day
+  const togglePeriodForActiveDay = (periodSlots: string[]) => {
+    setAvailabilityByDay((prev) => {
+      const current = prev[activeDay] || [];
+      const allSelected = periodSlots.every((s) => current.includes(s));
+      let updated: string[];
+      if (allSelected) {
+        updated = current.filter((s) => !periodSlots.includes(s));
+      } else {
+        const set = new Set([...current, ...periodSlots]);
+        updated = Array.from(set).sort();
+      }
+      return {
+        ...prev,
+        [activeDay]: updated,
+      };
+    });
+  };
+
   // Quick preset application for active day ONLY
   const handleSelectPreset = (
-    preset: 'morning' | 'afternoon' | 'evening' | 'business' | 'all' | 'clear'
+    preset: 'overnight' | 'morning' | 'afternoon' | 'evening' | 'business' | 'all' | 'clear'
   ) => {
     let newSlots: string[] = [];
     switch (preset) {
+      case 'overnight':
+        newSlots = generate30MinTimeSlots('00:00', '08:00');
+        break;
       case 'morning':
         newSlots = generate30MinTimeSlots('08:00', '12:00');
         break;
       case 'afternoon':
-        newSlots = generate30MinTimeSlots('13:00', '18:00');
+        newSlots = generate30MinTimeSlots('12:00', '18:00');
         break;
       case 'evening':
-        newSlots = generate30MinTimeSlots('18:00', '22:00');
+        newSlots = generate30MinTimeSlots('18:00', '24:00');
         break;
       case 'business':
         newSlots = generate30MinTimeSlots('08:00', '18:00');
@@ -272,7 +339,10 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                   Native Friend Schedule & Setup
                 </h3>
                 <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#9AB4FF] border border-[#9AB4FF]/30">
-                  Fixed 30-min Slots
+                  24h Availability (12:00 AM – 11:30 PM)
+                </span>
+                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-[#F4CA54]/20 text-[#F4CA54] border border-[#F4CA54]/40 hidden sm:inline-block">
+                  30-min Slots
                 </span>
               </div>
               <p className="text-xs text-[#9AB4FF]">{teacherEmail}</p>
@@ -438,7 +508,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                     id="enable-day-button"
                     className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[11px] font-bold transition cursor-pointer"
                   >
-                    + Enable {activeDayObj.labelEn} (08h-18h)
+                    + Enable {activeDayObj.labelEn} (08:00 AM - 06:00 PM)
                   </button>
                 )}
 
@@ -467,7 +537,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
             </div>
           </div>
 
-          {/* 🌟 AVAILABILITY SCHEDULE (GRANULAR 30-MIN SLOTS FOR ACTIVE DAY) */}
+          {/* 🌟 AVAILABILITY SCHEDULE (GRANULAR 30-MIN SLOTS FOR ACTIVE DAY - 24 HOURS / 12H AM/PM) */}
           <div
             className="p-4 bg-[#9AB4FF]/10 rounded-2xl border border-[#607EC9]/30 space-y-3"
             id="active-day-slots-card"
@@ -477,12 +547,12 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                 <div className="flex items-center gap-2">
                   <Clock className="w-4 h-4 text-[#1C4C96]" />
                   <span className="font-black text-xs sm:text-sm text-[#000035]">
-                    Availability Schedule — {activeDayObj.fullEn} (Fixed 30-min Slots)
+                    Availability Schedule — {activeDayObj.fullEn} (24-Hour Grade • 12:00 AM to 11:30 PM)
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-600">
-                  Click to open or close 30-minute intervals for students to book on{' '}
-                  <span className="font-bold text-[#000035]">{activeDayObj.fullEn}s</span>.
+                  Select any 30-minute block across the 24 hours of{' '}
+                  <span className="font-bold text-[#000035]">{activeDayObj.fullEn}</span>. All times follow the American 12h format.
                 </p>
               </div>
 
@@ -494,7 +564,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Presets for Current Day */}
+            {/* Quick Presets for Current Day (Standardized 12h AM/PM) */}
             <div
               className="flex items-center gap-1.5 flex-wrap"
               id="active-day-quick-presets"
@@ -504,11 +574,19 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
               </span>
               <button
                 type="button"
+                onClick={() => handleSelectPreset('overnight')}
+                id="preset-overnight-button"
+                className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 cursor-pointer transition"
+              >
+                Overnight (12:00 AM - 08:00 AM)
+              </button>
+              <button
+                type="button"
                 onClick={() => handleSelectPreset('morning')}
                 id="preset-morning-button"
                 className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 cursor-pointer transition"
               >
-                Morning (08h-12h)
+                Morning (08:00 AM - 12:00 PM)
               </button>
               <button
                 type="button"
@@ -516,7 +594,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                 id="preset-afternoon-button"
                 className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 cursor-pointer transition"
               >
-                Afternoon (13h-18h)
+                Afternoon (12:00 PM - 06:00 PM)
               </button>
               <button
                 type="button"
@@ -524,7 +602,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                 id="preset-evening-button"
                 className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 cursor-pointer transition"
               >
-                Evening (18h-22h)
+                Evening (06:00 PM - 11:30 PM)
               </button>
               <button
                 type="button"
@@ -532,7 +610,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                 id="preset-full-day-button"
                 className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 cursor-pointer transition"
               >
-                Full Day (08h-18h)
+                Daytime (08:00 AM - 06:00 PM)
               </button>
               <button
                 type="button"
@@ -540,7 +618,7 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                 id="preset-select-all-button"
                 className="px-2 py-1 bg-[#1C4C96]/10 hover:bg-[#1C4C96]/20 border border-[#1C4C96]/30 rounded-lg text-[11px] font-black text-[#1C4C96] cursor-pointer transition"
               >
-                Select All
+                Select All 24h (48 slots)
               </button>
               <button
                 type="button"
@@ -552,39 +630,138 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
               </button>
             </div>
 
-            {/* 30-min Slot Grid for Active Day */}
-            <div
-              className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5 max-h-60 overflow-y-auto p-1.5 bg-white rounded-2xl border border-[#607EC9]/30"
-              id="active-day-slots-grid"
-            >
-              {FIXED_30MIN_AVAILABILITY_SLOTS.map((slot) => {
-                const isSelected = activeDaySlots.includes(slot);
+            {/* Period Filter Tabs */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-[#607EC9]/20" id="period-filter-tabs">
+              <span className="text-[11px] font-bold text-slate-500 mr-1">View Period:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedPeriodFilter('all')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer transition border ${
+                  selectedPeriodFilter === 'all'
+                    ? 'bg-[#1C4C96] text-white border-[#1C4C96] shadow-2xs'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                All 24 Hours (48 slots)
+              </button>
+              {TIME_PERIOD_GROUPS.map((group) => {
+                const isSelected = selectedPeriodFilter === group.id;
+                const inGroupCount = group.slots.filter((s) => activeDaySlots.includes(s)).length;
                 return (
                   <button
-                    key={slot}
+                    key={group.id}
                     type="button"
-                    onClick={() => toggleSlotForActiveDay(slot)}
-                    id={`slot-btn-${activeDay}-${slot.replace(':', '-')}`}
-                    className={`py-2 px-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer border ${
+                    onClick={() => setSelectedPeriodFilter(group.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer transition border flex items-center gap-1 ${
                       isSelected
                         ? 'bg-[#1C4C96] text-white border-[#1C4C96] shadow-2xs'
-                        : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-700'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
-                    {isSelected ? (
-                      <Check className="w-3 h-3 text-[#F4CA54] shrink-0 stroke-[3]" />
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />
-                    )}
-                    <span>{slot}</span>
+                    <span>{group.iconText}</span>
+                    <span>{group.label.split('&')[0].trim()}</span>
+                    <span
+                      className={`text-[10px] px-1 rounded-full ${
+                        isSelected
+                          ? 'bg-white/20 text-white'
+                          : inGroupCount > 0
+                          ? 'bg-[#1C4C96]/10 text-[#1C4C96]'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {inGroupCount}/{group.slots.length}
+                    </span>
                   </button>
+                );
+              })}
+            </div>
+
+            {/* 30-min Slot Sections for Active Day (Grouped & Standardized to 12h AM/PM) */}
+            <div
+              className="space-y-3 max-h-80 overflow-y-auto pr-1"
+              id="active-day-slots-container"
+            >
+              {TIME_PERIOD_GROUPS.filter(
+                (group) => selectedPeriodFilter === 'all' || selectedPeriodFilter === group.id
+              ).map((group) => {
+                const groupSelectedSlots = group.slots.filter((s) => activeDaySlots.includes(s));
+                const allGroupSelected =
+                  group.slots.length > 0 && groupSelectedSlots.length === group.slots.length;
+
+                return (
+                  <div
+                    key={group.id}
+                    className="p-2.5 bg-white rounded-2xl border border-[#607EC9]/30 shadow-2xs space-y-2"
+                    id={`period-card-${group.id}`}
+                  >
+                    {/* Period Header */}
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base leading-none">{group.iconText}</span>
+                        <div>
+                          <span className="text-xs font-black text-[#000035]">
+                            {group.label}
+                          </span>
+                          <span className="text-[11px] font-semibold text-slate-500 ml-1.5">
+                            ({group.range12h})
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          {groupSelectedSlots.length} / {group.slots.length} open
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => togglePeriodForActiveDay(group.slots)}
+                          id={`toggle-period-${group.id}-btn`}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition cursor-pointer ${
+                            allGroupSelected
+                              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                              : 'bg-[#1C4C96]/10 text-[#1C4C96] border-[#1C4C96]/30 hover:bg-[#1C4C96]/20'
+                          }`}
+                        >
+                          {allGroupSelected ? 'Deselect Block' : `Select Block (${group.slots.length})`}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Slots Grid in Strict 12h AM/PM Format */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
+                      {group.slots.map((slot) => {
+                        const isSelected = activeDaySlots.includes(slot);
+                        return (
+                          <button
+                            key={slot}
+                            type="button"
+                            onClick={() => toggleSlotForActiveDay(slot)}
+                            id={`slot-btn-${activeDay}-${slot.replace(':', '-')}`}
+                            title={`${formatTimeSlot12h(slot)} (${slot})`}
+                            className={`py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer border whitespace-nowrap ${
+                              isSelected
+                                ? 'bg-[#1C4C96] text-white border-[#1C4C96] shadow-2xs ring-1 ring-[#1C4C96]/40'
+                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-100'
+                            }`}
+                          >
+                            {isSelected ? (
+                              <Check className="w-3 h-3 text-[#F4CA54] shrink-0 stroke-[3]" />
+                            ) : (
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />
+                            )}
+                            <span className="tracking-tight">{formatTimeSlot12h(slot)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 );
               })}
             </div>
 
             <p className="text-[11px] text-slate-500">
               ℹ️ Blue slots are open for student bookings on <strong>{activeDayObj.fullEn}s</strong>.
-              Each slot is strictly 30 minutes. Anti-duplicity lock prevents overlapping bookings.
+              All slots follow the American 12h format (12:00 AM to 11:30 PM). Anti-duplicity lock prevents overlapping bookings.
             </p>
           </div>
 
