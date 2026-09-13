@@ -1802,20 +1802,23 @@ export default function App() {
       )
     );
 
-    // Sync timezone to teacherMeetSettings if provided
-    if (updatedTutor.timezone) {
-      setTeacherMeetSettings((prev) => {
-        const cleanEmail = updatedTutor.email.toLowerCase().trim();
-        const existing = prev[cleanEmail];
-        if (existing) {
-          return {
-            ...prev,
-            [cleanEmail]: { ...existing, timezone: updatedTutor.timezone },
-          };
-        }
-        return prev;
-      });
-    }
+    // Sync timezone, meetLink, and availableDays to teacherMeetSettings if provided
+    setTeacherMeetSettings((prev) => {
+      const cleanEmail = updatedTutor.email.toLowerCase().trim();
+      const existing = prev[cleanEmail];
+      if (existing) {
+        return {
+          ...prev,
+          [cleanEmail]: {
+            ...existing,
+            ...(updatedTutor.timezone ? { timezone: updatedTutor.timezone } : {}),
+            ...(updatedTutor.meetUrl ? { meetLink: updatedTutor.meetUrl } : {}),
+            ...(updatedTutor.availableDays && updatedTutor.availableDays.length > 0 ? { availableDays: updatedTutor.availableDays } : {}),
+          },
+        };
+      }
+      return prev;
+    });
 
     try {
       await fetch(`/api/tutors/${updatedTutor.id}`, {

@@ -49,7 +49,7 @@ app.use(express.json());
 const DB_FILE = path.join(process.cwd(), 'app-data.json');
 
 interface AppDb {
-  teachers: Array<{ email: string; name: string; role: string; registeredByAdmin?: boolean; avatar?: string; picture?: string; approvalStatus?: string }>;
+  teachers: Array<{ email: string; name: string; role: string; registeredByAdmin?: boolean; avatar?: string; picture?: string; approvalStatus?: string; country?: string; accent?: string; timezone?: string; availableDays?: any; videoIntroUrl?: string; [key: string]: any }>;
   tutorsList: Array<any>;
   deletedTutorIds?: string[];
   deletedTutorEmails?: string[];
@@ -1635,12 +1635,30 @@ app.put('/api/tutors/:id', (req, res) => {
     
     // Sync with db.teachers
     const tEmail = (db.tutorsList[existingIdx].email || '').toLowerCase();
+    const currentTutor = db.tutorsList[existingIdx];
     const teacherIdx = (db.teachers || []).findIndex((tc: any) => tc.email?.toLowerCase() === tEmail);
     if (teacherIdx >= 0) {
       db.teachers[teacherIdx] = {
         ...db.teachers[teacherIdx],
-        name: db.tutorsList[existingIdx].name,
-        avatar: db.tutorsList[existingIdx].avatar,
+        name: currentTutor.name,
+        avatar: currentTutor.avatar,
+        country: currentTutor.country,
+        accent: currentTutor.accent,
+        timezone: currentTutor.timezone,
+        availableDays: currentTutor.availableDays,
+        videoIntroUrl: currentTutor.videoIntroUrl,
+      };
+    }
+
+    // Sync with db.teacherSettings
+    if (tEmail) {
+      db.teacherSettings = db.teacherSettings || {};
+      db.teacherSettings[tEmail] = {
+        ...db.teacherSettings[tEmail],
+        teacherEmail: tEmail,
+        ...(currentTutor.meetUrl ? { meetLink: currentTutor.meetUrl } : {}),
+        ...(currentTutor.timezone ? { timezone: currentTutor.timezone } : {}),
+        ...(currentTutor.availableDays && currentTutor.availableDays.length > 0 ? { availableDays: currentTutor.availableDays } : {}),
       };
     }
 

@@ -319,7 +319,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
             </button>
           )}
 
-          {onOpenEditProfile && (
+          {!tutorProfile && onOpenEditProfile && (
             <button
               type="button"
               onClick={onOpenEditProfile}

@@ -4,17 +4,21 @@ import {
   User,
   Save,
   Check,
-  Camera,
   Video,
   DollarSign,
   MapPin,
   Globe,
   Sparkles,
-  FileText,
+  ExternalLink,
+  Calendar,
 } from 'lucide-react';
-import { NativeFriendTutor, Language } from '../types';
+import { NativeFriendTutor, Language, DayOfWeek } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
-import { TIMEZONE_OPTIONS, DEFAULT_TEACHER_TIMEZONE } from '../utils/timezone';
+import {
+  TIMEZONE_OPTIONS,
+  DEFAULT_TEACHER_TIMEZONE,
+  getDefaultTimezoneForCountry,
+} from '../utils/timezone';
 
 interface EditTutorProfileModalProps {
   isOpen: boolean;
@@ -23,6 +27,26 @@ interface EditTutorProfileModalProps {
   onSave: (updated: NativeFriendTutor) => void;
   currentLanguage: Language;
 }
+
+const COUNTRY_OPTIONS = [
+  { name: 'Canada', flag: '🇨🇦', code: 'CA' },
+  { name: 'United States', flag: '🇺🇸', code: 'US' },
+  { name: 'United Kingdom', flag: '🇬🇧', code: 'GB' },
+  { name: 'South Africa', flag: '🇿🇦', code: 'ZA' },
+  { name: 'Ireland', flag: '🇮🇪', code: 'IE' },
+  { name: 'Australia', flag: '🇦🇺', code: 'AU' },
+  { name: 'New Zealand', flag: '🇳🇿', code: 'NZ' },
+];
+
+const ALL_DAYS: { key: DayOfWeek; label: string; full: string }[] = [
+  { key: 'monday', label: 'MON', full: 'Monday' },
+  { key: 'tuesday', label: 'TUE', full: 'Tuesday' },
+  { key: 'wednesday', label: 'WED', full: 'Wednesday' },
+  { key: 'thursday', label: 'THU', full: 'Thursday' },
+  { key: 'friday', label: 'FRI', full: 'Friday' },
+  { key: 'saturday', label: 'SAT', full: 'Saturday' },
+  { key: 'sunday', label: 'SUN', full: 'Sunday' },
+];
 
 export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
   isOpen,
@@ -61,17 +85,43 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
 
   if (!isOpen || !tutor) return null;
 
-  const isEn = currentLanguage === 'en';
-
   const handleChange = (field: keyof NativeFriendTutor, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
+
+  const handleCountryChange = (countryName: string) => {
+    const found = COUNTRY_OPTIONS.find((c) => c.name === countryName);
+    const newFlag = found?.flag || formData.flag || '🌐';
+    const newCode = found?.code || formData.countryCode || 'US';
+    const suggestedTz = getDefaultTimezoneForCountry(countryName, formData.accent);
+
+    setFormData((prev) => ({
+      ...prev,
+      country: countryName,
+      flag: newFlag,
+      countryCode: newCode,
+      timezone: prev.timezone || suggestedTz,
+    }));
+  };
+
+  const toggleDay = (day: DayOfWeek) => {
+    const current = (formData.availableDays || []) as DayOfWeek[];
+    const next = current.includes(day)
+      ? current.filter((d) => d !== day)
+      : [...current, day];
+    setFormData((prev) => ({ ...prev, availableDays: next }));
+  };
+
+  const currentUsdPrice = Number(formData.pricePerSessionUsd) || tutor.pricePerSessionUsd || 15;
+  const calculatedBrlPrice = Math.round(currentUsdPrice * 5.5);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const updated: NativeFriendTutor = {
       ...(tutor as NativeFriendTutor),
       ...formData,
+      pricePerSessionUsd: currentUsdPrice,
+      pricePerSessionBrl: calculatedBrlPrice,
       specialties: specialtiesText
         .split(',')
         .map((s) => s.trim())
@@ -95,7 +145,7 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
     >
       <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-[#607EC9]/40 overflow-hidden flex flex-col max-h-[90vh] my-auto animate-in fade-in zoom-in duration-200">
         {/* Header */}
-        <div className="p-6 bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] text-white flex items-center justify-between border-b border-[#607EC9]/40 shrink-0">
+        <div className="p-5 sm:p-6 bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] text-white flex items-center justify-between border-b border-[#607EC9]/40 shrink-0">
           <div className="flex items-center gap-3.5">
             <div className="w-12 h-12 rounded-2xl bg-[#1C4C96] text-[#F4CA54] flex items-center justify-center font-black shadow-md border border-[#9AB4FF]/50">
               <User className="w-6 h-6" />
@@ -105,7 +155,7 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
                 Edit My Public Profile & Presentation
               </h2>
               <p className="text-xs text-[#9AB4FF]">
-                Update your bio, photo, hourly rate, and video introduction.
+                Update your bio, photo, rate, Google Meet, and availability.
               </p>
             </div>
           </div>
@@ -122,23 +172,26 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
           {savedSuccess && (
-            <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-2xl text-xs font-bold text-emerald-800 flex items-center gap-2">
+            <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-2xl text-xs font-bold text-emerald-800 flex items-center gap-2 animate-in fade-in">
               <Check className="w-4 h-4 text-emerald-600" />
-              <span>Profile updated successfully!</span>
+              <span>Profile updated successfully! All changes are synced.</span>
             </div>
           )}
 
-          {/* Profile Photo Upload */}
-          <ImageUploadInput
-            label="Profile Photo / Avatar (Upload from device or choose)"
-            value={formData.avatar}
-            onChange={(newAvatar) => handleChange('avatar', newAvatar)}
-            currentLanguage="en"
-            helperText="Your photo will be showcased on the Native Friends catalog and live session bookings."
-          />
+          {/* 1. Profile Photo Upload */}
+          <div className="bg-slate-50/70 p-4 rounded-2xl border border-slate-200">
+            <ImageUploadInput
+              label="Profile Photo / Avatar (Upload from device or choose)"
+              value={formData.avatar}
+              onChange={(newAvatar) => handleChange('avatar', newAvatar)}
+              currentLanguage="en"
+              helperText="Your photo will be showcased on the Native Friends catalog and live session bookings."
+            />
+          </div>
 
+          {/* 2. Personal & Public Presentation Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -147,23 +200,23 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
               <input
                 type="text"
                 required
-                value={formData.name}
+                value={formData.name || ''}
                 onChange={(e) => handleChange('name', e.target.value)}
-                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035]"
+                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               />
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                Headline / Specialty *
+                Headline / Catchphrase *
               </label>
               <input
                 type="text"
                 required
-                value={formData.headline}
+                value={formData.headline || ''}
                 onChange={(e) => handleChange('headline', e.target.value)}
                 placeholder="e.g. Native New Yorker • Daily Conversation"
-                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035]"
+                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               />
             </div>
 
@@ -178,11 +231,14 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
                   min="5"
                   max="200"
                   required
-                  value={formData.pricePerSessionUsd}
+                  value={formData.pricePerSessionUsd ?? 15}
                   onChange={(e) => handleChange('pricePerSessionUsd', Number(e.target.value))}
-                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035]"
+                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
                 />
               </div>
+              <p className="text-[11px] text-slate-500 mt-1 font-semibold">
+                ≈ R$ {calculatedBrlPrice} for Brazilian students
+              </p>
             </div>
 
             <div>
@@ -193,10 +249,10 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
                 <MapPin className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  value={formData.accent}
+                  value={formData.accent || ''}
                   onChange={(e) => handleChange('accent', e.target.value)}
                   placeholder="e.g. North American (Canadian/Toronto)"
-                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
+                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
                 />
               </div>
             </div>
@@ -206,14 +262,24 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
                 Native Country
               </label>
               <div className="relative">
-                <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={formData.country}
-                  onChange={(e) => handleChange('country', e.target.value)}
-                  placeholder="e.g. Canada, United States, UK"
-                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
-                />
+                <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  value={formData.country || ''}
+                  onChange={(e) => handleCountryChange(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                >
+                  <option value="">Select country...</option>
+                  {COUNTRY_OPTIONS.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.flag} {c.name}
+                    </option>
+                  ))}
+                  {formData.country && !COUNTRY_OPTIONS.some((c) => c.name === formData.country) && (
+                    <option value={formData.country}>
+                      {formData.flag || '🌐'} {formData.country}
+                    </option>
+                  )}
+                </select>
               </div>
             </div>
 
@@ -238,47 +304,123 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Specialties (separated by comma)
-            </label>
-            <input
-              type="text"
-              value={specialtiesText}
-              onChange={(e) => setSpecialtiesText(e.target.value)}
-              placeholder="e.g. Daily Habits, Accent Polish, Business Confidence"
-              className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035]"
-            />
-          </div>
+          {/* 3. Google Meet Link & Booking Availability */}
+          <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-4">
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Video className="w-3.5 h-3.5 text-[#1C4C96]" />
+                  <span>Google Meet Link (Link Permanente de Aula)</span>
+                </label>
+                {formData.meetUrl && formData.meetUrl.trim() !== '' && (
+                  <a
+                    href={formData.meetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] font-bold text-[#1C4C96] hover:underline flex items-center gap-1"
+                  >
+                    <span>Test link</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+              <div className="relative">
+                <Video className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="url"
+                  value={formData.meetUrl || ''}
+                  onChange={(e) => handleChange('meetUrl', e.target.value)}
+                  placeholder="https://meet.google.com/xxx-yyyy-zzz"
+                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Your permanent Google Meet link automatically attached to student bookings and calendar reminders.
+              </p>
+            </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Video Introduction Link (YouTube / Vimeo / Loom)
-            </label>
-            <div className="relative">
-              <Video className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="url"
-                value={formData.videoIntroUrl || ''}
-                onChange={(e) => handleChange('videoIntroUrl', e.target.value)}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
-              />
+            {/* Available Days */}
+            <div className="space-y-1.5 pt-2 border-t border-slate-200/80">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#1C4C96]" />
+                  <span>Available Days for Sessions (Dias de Atendimento)</span>
+                </label>
+                <span className="text-[11px] text-slate-500 font-semibold">
+                  {(formData.availableDays || []).length} days active
+                </span>
+              </div>
+              <div className="grid grid-cols-7 gap-1.5">
+                {ALL_DAYS.map(({ key, label, full }) => {
+                  const isSelected = (formData.availableDays || []).includes(key);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => toggleDay(key)}
+                      title={full}
+                      className={`py-2 text-xs font-black rounded-xl border transition cursor-pointer text-center ${
+                        isSelected
+                          ? 'bg-[#062863] text-white border-[#062863] shadow-xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Choose the days of the week on which students are allowed to book practice sessions.
+              </p>
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Biography & Presentation *
-            </label>
-            <textarea
-              rows={4}
-              required
-              value={formData.bio}
-              onChange={(e) => handleChange('bio', e.target.value)}
-              placeholder="Tell students about yourself and your approach to practicing English through daily routines..."
-              className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035]"
-            />
+          {/* 4. Specialties & Video Intro */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-[#F4CA54]" />
+                <span>Specialties (separated by comma)</span>
+              </label>
+              <input
+                type="text"
+                value={specialtiesText}
+                onChange={(e) => setSpecialtiesText(e.target.value)}
+                placeholder="e.g. Daily Habits, Accent Polish, Business Confidence"
+                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Video Introduction Link (YouTube / Vimeo / Loom)
+              </label>
+              <div className="relative">
+                <Video className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="url"
+                  value={formData.videoIntroUrl || ''}
+                  onChange={(e) => handleChange('videoIntroUrl', e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Biography & Presentation *
+              </label>
+              <textarea
+                rows={4}
+                required
+                value={formData.bio || ''}
+                onChange={(e) => handleChange('bio', e.target.value)}
+                placeholder="Tell students about yourself and your approach to practicing English through daily routines..."
+                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+              />
+            </div>
           </div>
 
           {/* Footer Save */}
