@@ -5,16 +5,12 @@ import {
   BookOpen,
   Volume2,
   CheckCircle2,
-  Copy,
   Check,
-  Send,
   Trash2,
-  ExternalLink,
   User,
   Calendar,
   History,
   Lightbulb,
-  MessageSquare,
   CornerDownLeft,
   Edit3,
   Globe,
@@ -148,7 +144,6 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
   }, [newWordInput]);
 
   // UI state
-  const [copied, setCopied] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'editor' | 'history'>('editor');
   const [editingVocabId, setEditingVocabId] = useState<string | null>(null);
@@ -393,62 +388,6 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
     setTimeout(() => setSavedSuccess(false), 3000);
   };
 
-  // Copy formatted notes for Google Meet Chat or WhatsApp
-  const handleCopyFormatted = () => {
-    const studentName = activeStudent?.name || activeLesson?.studentName || 'Student';
-    const dateStr = activeLesson
-      ? formatDateInTimeZone(activeLesson.startDateTime, timeZone, 'en')
-      : new Date().toLocaleDateString('en-US', { dateStyle: 'medium' });
-
-    let text = `🌟 *Live Session Summary & Coaching Notes*\n`;
-    text += `👤 *Student:* ${studentName}\n`;
-    text += `📅 *Date:* ${dateStr}\n`;
-    if (topic) text += `🎯 *Topic / Focus:* ${topic}\n\n`;
-
-    if (Array.isArray(vocabList) && vocabList.length > 0) {
-      text += `📚 *Key Vocabulary & Expressions:*\n`;
-      vocabList.forEach((v) => {
-        text += `• *${v.word}*`;
-        if (v.meaningOrTip) text += ` — ${v.meaningOrTip}`;
-        if (v.exampleSentence) text += ` (Ex: "${v.exampleSentence}")`;
-        text += `\n`;
-      });
-      text += `\n`;
-    }
-
-    if (pronunciationNotes) {
-      text += `🗣️ *Pronunciation & Phrasing Tips:*\n${pronunciationNotes}\n\n`;
-    }
-
-    if (generalNotes) {
-      text += `📝 *Session Observations:*\n${generalNotes}\n\n`;
-    }
-
-    if (recommendations) {
-      text += `🚀 *Weekly Recommendations & Action Steps:*\n${recommendations}\n\n`;
-    }
-
-    text += `Keep living your English every day! — ${currentAccount?.name || 'Your Native Friend'}`;
-
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
-
-  // Send summary notification to student
-  const handleSendToStudent = () => {
-    if (!selectedStudentEmail) return;
-    handleSave();
-
-    if (onSendStudentNotification) {
-      const title = `🌟 New Live Session Vocabulary from ${currentAccount?.name || 'Native Friend'}`;
-      const snippet = vocabList.length > 0
-        ? `Added ${vocabList.length} new vocabulary expression(s) from your live session.`
-        : `Your Native Friend updated your live session vocabulary list.`;
-      onSendStudentNotification(selectedStudentEmail, title, snippet);
-    }
-  };
-
   return (
     <div
       className="bg-white rounded-3xl p-5 sm:p-6 border border-[#607EC9]/30 shadow-xs space-y-5"
@@ -477,7 +416,7 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
               )}
             </div>
             <p className="text-xs text-[#607EC9] mt-1">
-              Capture vocabulary, expressions, automatic simplified English definitions, and conversational examples during your Google Meet sessions.
+              Capture vocabulary, expressions, automatic simplified English definitions, and conversational examples in real time.
             </p>
           </div>
         </div>
@@ -512,66 +451,52 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
         </div>
       </div>
 
-      {/* Active Lesson / Session Bar (Only if session options or Google Meet link exist) */}
-      {((teacherLessons.length > 0 && teacherLessons.filter((l) => !selectedStudentEmail || l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase()).length > 0) || activeLesson?.meetLink) && (
-        <div className="p-3 bg-[#9AB4FF]/10 rounded-2xl border border-[#9AB4FF]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Calendar className="w-4 h-4 text-[#1C4C96] shrink-0" />
-            <span className="text-xs font-black text-[#000035] uppercase tracking-wider">
-              Session:
-            </span>
-            <select
-              value={selectedLessonId}
-              onChange={(e) => setSelectedLessonId(e.target.value)}
-              className="bg-white border border-[#607EC9]/40 rounded-xl px-3 py-1.5 text-xs font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] cursor-pointer shadow-2xs max-w-[280px] truncate"
-            >
-              <option value="">-- General Student Notes --</option>
-              {teacherLessons
-                .filter(
-                  (l) =>
-                    !selectedStudentEmail ||
-                    l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase()
-                )
-                .map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {formatDateInTimeZone(l.startDateTime, timeZone, 'en')} at{' '}
-                    {formatTimeInTimeZone(l.startDateTime, timeZone)} - {l.title || 'Lesson'} (
-                    {l.status})
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          {/* Quick Google Meet Join button if active lesson has link */}
-          {activeLesson?.meetLink && (
-            <a
-              href={activeLesson.meetLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-2xs shrink-0 cursor-pointer"
-            >
-              <span>Open Google Meet Call</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          )}
-        </div>
-      )}
-
       {activeTab === 'editor' ? (
         <div className="space-y-4">
-          {/* Session Topic / Focus (Clean compact bar) */}
-          <div className="flex items-center gap-3 bg-slate-50 border border-[#607EC9]/30 rounded-2xl px-4 py-2.5">
-            <label className="text-xs font-black text-[#000035] uppercase tracking-wider flex items-center gap-1.5 shrink-0">
-              <Lightbulb className="w-4 h-4 text-[#F4CA54]" />
-              <span>Session Topic:</span>
-            </label>
-            <input
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g., Job Interview Prep, Weekend Small Talk, Airport Travel Roleplay..."
-              className="flex-1 bg-transparent border-0 text-xs font-semibold text-[#000035] placeholder:text-slate-400 focus:outline-hidden"
-            />
+          {/* Unified Session & Session Topic Bar */}
+          <div className="p-3 bg-slate-50 rounded-2xl border border-[#607EC9]/30 flex flex-col md:flex-row md:items-center gap-3 shadow-2xs">
+            <div className="flex items-center gap-2 shrink-0 min-w-[220px] md:max-w-[320px]">
+              <Calendar className="w-4 h-4 text-[#1C4C96] shrink-0" />
+              <span className="text-xs font-black text-[#000035] uppercase tracking-wider shrink-0">
+                Session:
+              </span>
+              <select
+                value={selectedLessonId}
+                onChange={(e) => setSelectedLessonId(e.target.value)}
+                className="w-full bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] cursor-pointer shadow-2xs truncate"
+              >
+                <option value="">-- General Student Notes --</option>
+                {teacherLessons
+                  .filter(
+                    (l) =>
+                      !selectedStudentEmail ||
+                      l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase()
+                  )
+                  .map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {formatDateInTimeZone(l.startDateTime, timeZone, 'en')} at{' '}
+                      {formatTimeInTimeZone(l.startDateTime, timeZone)} - {l.title || 'Lesson'} (
+                      {l.status})
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div className="hidden md:block w-px h-6 bg-slate-200 shrink-0" />
+
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <Lightbulb className="w-4 h-4 text-[#F4CA54] shrink-0" />
+              <span className="text-xs font-black text-[#000035] uppercase tracking-wider shrink-0">
+                Session Topic:
+              </span>
+              <input
+                type="text"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="e.g. Job Interview Prep, Weekend Small Talk, Airport Travel Roleplay..."
+                className="flex-1 bg-white border border-[#607EC9]/40 rounded-xl px-3 py-1.5 text-xs font-semibold text-[#000035] placeholder:text-slate-400 placeholder:font-normal focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] min-w-0"
+              />
+            </div>
           </div>
 
           {/* Real-Time Vocabulary Table Section */}

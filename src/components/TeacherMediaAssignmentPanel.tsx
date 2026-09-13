@@ -85,9 +85,9 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   selectedStudentUid,
   currentAccount,
   onTeacherSaveVideos,
-  currentLanguage = 'pt',
+  currentLanguage = 'en',
 }) => {
-  const isEn = currentLanguage === 'en';
+  const isEn = true; // Teacher/Native Friend view is 100% English
   // Find current active student info
   const selectedStudent = (students || []).find(
     (s) =>
@@ -97,7 +97,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
   const activeStudentEmail = selectedStudent?.email || (selectedStudentEmail && selectedStudentEmail !== 'all' ? selectedStudentEmail : '') || students[0]?.email || '';
   const activeStudentUid = selectedStudent?.uid || selectedStudent?.id || selectedStudentUid || '';
-  const activeStudentName = selectedStudent?.name || (activeStudentEmail ? activeStudentEmail.split('@')[0] : 'Aluno');
+  const activeStudentName = selectedStudent?.name || (activeStudentEmail ? activeStudentEmail.split('@')[0] : 'Student');
 
   // Local state for student-specific routines loaded from backend
   const [studentRoutines, setStudentRoutines] = useState<Record<DayOfWeek, RoutineItem[]> | null>(null);
@@ -532,7 +532,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // Handler: Assign strict exclusive unseen video from playlist
   const handleAssignExclusive = async (dayId: DayOfWeek) => {
     if (!activeStudentEmail && !activeStudentUid) {
-      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para atribuir vídeo exclusivo.' });
+      setAssignFeedback({ type: 'warning', message: 'Select a student to assign an exclusive video.' });
       return;
     }
 
@@ -574,7 +574,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       if (data.allConsumed) {
         setAssignFeedback({
           type: 'warning',
-          message: data.message || `Todos os vídeos da playlist selecionada já foram atribuídos ou assistidos por este aluno.`,
+          message: data.message || `All videos from the selected playlist have already been assigned or watched by this student.`,
         });
       } else if (data.success && data.video) {
         setYoutubeUrls((prev) => ({ ...prev, [dayId]: data.video.url }));
@@ -614,19 +614,19 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         }
         setAssignFeedback({
           type: 'success',
-          message: `✨ Vídeo exclusivo inédito atribuído para ${dayId.toUpperCase()} (${assignedTopicTitle}): "${data.video.title}" (${data.remainingUnseen} restantes)`,
+          message: `✨ Unseen exclusive video assigned for ${dayId.toUpperCase()} (${assignedTopicTitle}): "${data.video.title}" (${data.remainingUnseen} remaining)`,
         });
         loadStudentMediaData();
       } else {
         setAssignFeedback({
           type: 'error',
-          message: data.error || 'Erro ao atribuir vídeo exclusivo.',
+          message: data.error || 'Error assigning exclusive video.',
         });
       }
     } catch {
       setAssignFeedback({
         type: 'error',
-        message: 'Erro na conexão ao atribuir vídeo exclusivo.',
+        message: 'Connection error while assigning exclusive video.',
       });
     } finally {
       setAssignLoadingDay(null);
@@ -740,14 +740,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
       setAssignFeedback({
         type: 'success',
-        message: `✓ URL do vídeo para ${dayId.toUpperCase()} salva e sincronizada com a página do aluno!`,
+        message: `✓ Video URL for ${dayId.toUpperCase()} saved and synchronized with student page!`,
       });
       setTimeout(() => setAssignFeedback(null), 4000);
     } catch (err) {
       console.warn('Error saving teacher video:', err);
       setAssignFeedback({
         type: 'error',
-        message: 'Erro ao salvar vídeo no servidor.',
+        message: 'Error saving video to server.',
       });
     } finally {
       setSavingYtDay(null);
@@ -810,9 +810,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       });
       setAssignFeedback({
         type: 'success',
-        message: isEn
-          ? 'All 7 days restored and synchronized to verified curriculum audio!'
-          : 'Todos os 7 dias foram restaurados e sincronizados com os áudios oficiais verificados!',
+        message: 'All 7 days restored and synchronized to verified curriculum audio!',
       });
     } catch (err) {
       console.error('Error resetting all days:', err);
@@ -840,11 +838,11 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       if (!validation.isValid) {
         setSpotValidationErrors((prev) => ({
           ...prev,
-          [dayId]: validation.errorMessage || 'Link inválido do Spotify. Use links /track/, /episode/ ou /show/.',
+          [dayId]: validation.errorMessage || 'Invalid Spotify link. Use /track/, /episode/ or /show/ links.',
         }));
         setAssignFeedback({
           type: 'error',
-          message: validation.errorMessage || 'URL do Spotify inválida. Use um link válido de /track/, /episode/ ou /show/.',
+          message: validation.errorMessage || 'Invalid Spotify URL. Use a valid /track/, /episode/ or /show/ link.',
         });
         return;
       }
@@ -871,12 +869,12 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         title: isDefault
           ? defaultTrack.title
           : type === 'podcast'
-          ? (isEn ? 'Recommended English Podcast' : 'Podcast Recomendado em Inglês')
-          : (isEn ? 'Recommended English Song' : 'Música Recomendada em Inglês'),
+          ? 'Recommended English Podcast'
+          : 'Recommended English Song',
         artistOrHost: isDefault ? defaultTrack.artist : (currentAccount?.name || 'Native Friend'),
         instructions: isDefault
-          ? (isEn ? defaultTrack.teacherTipEn : defaultTrack.teacherTipPt)
-          : (isEn ? 'Listen attentively to practice your listening comprehension.' : 'Ouça com atenção para praticar sua compreensão auditiva.'),
+          ? defaultTrack.teacherTipEn
+          : 'Listen attentively to practice your listening comprehension.',
         type,
         addedAt: new Date().toISOString(),
       };
@@ -900,7 +898,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Erro ao salvar áudio no servidor.');
+        throw new Error(errData.error || 'Error saving audio on server.');
       }
 
       setSavedDayFeedback((prev) => ({ ...prev, [`spot-${dayId}`]: true }));
@@ -910,14 +908,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
       setAssignFeedback({
         type: 'success',
-        message: `✓ Áudio do Spotify para ${dayId.toUpperCase()} salvo e sincronizado com o aluno!`,
+        message: `✓ Spotify audio for ${dayId.toUpperCase()} saved and synchronized with student!`,
       });
       setTimeout(() => setAssignFeedback(null), 3500);
     } catch (err: any) {
       console.warn('Error saving teacher spotify:', err);
       setAssignFeedback({
         type: 'error',
-        message: err.message || 'Erro ao salvar áudio do Spotify no servidor.',
+        message: err.message || 'Error saving Spotify audio on server.',
       });
     } finally {
       setSavingSpotDay(null);
@@ -951,7 +949,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // Handler: Assign strict exclusive unseen Spotify track from level curriculum
   const handleAssignExclusiveSpotify = async (dayId: DayOfWeek) => {
     if (!activeStudentEmail && !activeStudentUid) {
-      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para atribuir faixa exclusiva.' });
+      setAssignFeedback({ type: 'warning', message: 'Select a student to assign exclusive track.' });
       return;
     }
 
@@ -977,19 +975,19 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         setSpotifyTypes((prev) => ({ ...prev, [dayId]: data.track.type || 'music' }));
         setAssignFeedback({
           type: 'success',
-          message: `✨ Faixa exclusiva inédita atribuída para ${dayId.toUpperCase()}: "${data.track.title}" (${data.remainingUnseen ?? 0} restantes)`,
+          message: `✨ Unseen exclusive track assigned for ${dayId.toUpperCase()}: "${data.track.title}" (${data.remainingUnseen ?? 0} remaining)`,
         });
         await loadStudentMediaData();
       } else {
         setAssignFeedback({
           type: 'error',
-          message: data.error || 'Erro ao atribuir faixa exclusiva do Spotify.',
+          message: data.error || 'Error assigning exclusive Spotify track.',
         });
       }
     } catch {
       setAssignFeedback({
         type: 'error',
-        message: 'Erro na conexão ao atribuir faixa exclusiva.',
+        message: 'Connection error while assigning exclusive track.',
       });
     } finally {
       setAssigningSpotifyDay(null);
@@ -999,7 +997,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // Handler: Distribute full 7-day exclusive sequential YouTube videos for student
   const handleDistributeWeekYouTube = async () => {
     if (!activeStudentEmail && !activeStudentUid) {
-      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para distribuir vídeos da semana.' });
+      setAssignFeedback({ type: 'warning', message: 'Select a student to distribute weekly videos.' });
       return;
     }
     setIsDistributingYtWeek(true);
@@ -1020,17 +1018,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       if (data.success) {
         setAssignFeedback({
           type: 'success',
-          message: '✨ Semana completa de 7 vídeos exclusivos do YouTube atribuída com sucesso!',
+          message: '✨ Complete week of 7 exclusive YouTube videos assigned successfully!',
         });
         await loadStudentMediaData();
       } else {
         setAssignFeedback({
           type: 'error',
-          message: data.error || 'Erro ao distribuir vídeos da semana.',
+          message: data.error || 'Error distributing weekly videos.',
         });
       }
     } catch {
-      setAssignFeedback({ type: 'error', message: 'Erro na conexão ao distribuir vídeos.' });
+      setAssignFeedback({ type: 'error', message: 'Connection error while distributing videos.' });
     } finally {
       setIsDistributingYtWeek(false);
     }
@@ -1039,7 +1037,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // Handler: Distribute full 7-day exclusive sequential Spotify tracks for student
   const handleDistributeWeekSpotify = async () => {
     if (!activeStudentEmail && !activeStudentUid) {
-      setAssignFeedback({ type: 'warning', message: 'Selecione um aluno para distribuir faixas da semana.' });
+      setAssignFeedback({ type: 'warning', message: 'Select a student to distribute weekly tracks.' });
       return;
     }
     setIsDistributingSpotWeek(true);
@@ -1060,17 +1058,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       if (data.success) {
         setAssignFeedback({
           type: 'success',
-          message: '✨ Semana completa de 7 faixas exclusivas do Spotify distribuída com sucesso!',
+          message: '✨ Complete week of 7 exclusive Spotify tracks distributed successfully!',
         });
         await loadStudentMediaData();
       } else {
         setAssignFeedback({
           type: 'error',
-          message: data.error || 'Erro ao distribuir faixas da semana.',
+          message: data.error || 'Error distributing weekly tracks.',
         });
       }
     } catch {
-      setAssignFeedback({ type: 'error', message: 'Erro na conexão ao distribuir áudios.' });
+      setAssignFeedback({ type: 'error', message: 'Connection error while distributing tracks.' });
     } finally {
       setIsDistributingSpotWeek(false);
     }
@@ -1107,7 +1105,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             </div>
             <div>
               <div className="text-[10px] font-bold text-[#9AB4FF] uppercase tracking-wider flex items-center gap-2 flex-wrap">
-                <span>ATRIBUIÇÃO INDIVIDUAL DE MÍDIA DO ALUNO</span>
+                <span>STUDENT INDIVIDUAL MEDIA ASSIGNMENT</span>
                 {activeStudentUid && (
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#1C4C96] text-white font-mono">
                     UID: {activeStudentUid.slice(0, 10)}...
@@ -1116,7 +1114,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 {currentLevelConfig && (
                   <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-800/80 text-emerald-200 font-bold border border-emerald-500/40 flex items-center gap-1">
                     <Music className="w-2.5 h-2.5 text-[#1DB954]" />
-                    <span>NÍVEL: {currentLevelConfig.levelLabelEn.toUpperCase()} ({currentLevelConfig.levelLabelPt.toUpperCase()})</span>
+                    <span>LEVEL: {currentLevelConfig.levelLabelEn.toUpperCase()}</span>
                   </span>
                 )}
               </div>
@@ -1129,12 +1127,12 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             {isLoadingStudentRoutines ? (
               <span className="flex items-center gap-1.5 text-amber-300">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Sincronizando com a rotina do aluno...</span>
+                <span>Synchronizing with student routine...</span>
               </span>
             ) : (
               <span className="flex items-center gap-1.5 text-emerald-300">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Espelhado em tempo real com a página do aluno</span>
+                <span>Mirrored in real time with student page</span>
               </span>
             )}
           </div>
@@ -1171,7 +1169,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 >
                   {playlists.map((pl) => (
                     <option key={pl.id} value={pl.id}>
-                      {pl.title} ({pl.videos?.length || 0} vídeos)
+                      {pl.title} ({pl.videos?.length || 0} videos)
                     </option>
                   ))}
                 </select>
@@ -1207,8 +1205,8 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                     <Sparkles className="w-3 h-3 text-amber-500" />
                     <span>
                       {unseenVids > 0
-                        ? `${unseenVids} de ${totalVids} vídeos inéditos para este aluno`
-                        : `Todos os ${totalVids} vídeos já atribuídos/assistidos`}
+                        ? `${unseenVids} of ${totalVids} unseen videos for this student`
+                        : `All ${totalVids} videos already assigned or watched`}
                     </span>
                   </span>
                 );
@@ -1219,17 +1217,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 onClick={handleDistributeWeekYouTube}
                 disabled={isDistributingYtWeek}
                 className="px-2.5 py-1 rounded-lg text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-2xs"
-                title={isEn ? 'Distribute 7 exclusive unseen videos for the entire week' : 'Distribuir 7 vídeos exclusivos e inéditos para a semana inteira'}
+                title="Distribute 7 exclusive unseen videos for the entire week"
               >
                 {isDistributingYtWeek ? (
                   <>
                     <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>Distribuindo...</span>
+                    <span>Distributing...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-3 h-3 text-amber-300" />
-                    <span>Distribuir Semana (7 Vídeos)</span>
+                    <span>Distribute Week (7 Videos)</span>
                   </>
                 )}
               </button>
@@ -1316,7 +1314,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             onChange={(e) => handleDayPlaylistChange(day.id, e.target.value)}
                             aria-label="Playlist Topic"
                             className="text-xs font-bold py-1 pl-2.5 pr-7 bg-slate-50 hover:bg-white text-[#000035] border border-slate-300 hover:border-[#1C4C96] rounded-xl appearance-none cursor-pointer transition focus:outline-hidden max-w-[210px] truncate shadow-2xs"
-                            title="Tópico da Playlist do YouTube unificado com a rotina do aluno"
+                            title="YouTube playlist topic unified with student routine"
                           >
                             {playlists.map((pl) => (
                               <option key={pl.id} value={pl.id}>
@@ -1351,7 +1349,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                                 ? 'border-amber-300'
                                 : 'border-slate-300'
                             }`}
-                            title={isEn ? 'Press Enter or click Save to update student video' : 'Pressione Enter ou clique em Salvar para atualizar o vídeo do aluno'}
+                            title="Press Enter or click Save to update student video"
                           />
                           {/* Live recognition & external test link icon */}
                           {currentVidId && (
@@ -1360,7 +1358,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               target="_blank"
                               rel="noreferrer"
                               className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-600 transition p-0.5 rounded cursor-pointer"
-                              title={isEn ? `Recognized YouTube video (ID: ${currentVidId}) - Click to test` : `Vídeo do YouTube reconhecido (ID: ${currentVidId}) - Clique para testar`}
+                              title={`Recognized YouTube video (ID: ${currentVidId}) - Click to test`}
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
                             </a>
@@ -1373,14 +1371,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                           onClick={() => handleAssignExclusive(day.id)}
                           disabled={isAssigningThisDay}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition flex items-center gap-1 shrink-0 bg-amber-400 hover:bg-amber-300 text-[#000035] border border-amber-500/40 disabled:opacity-50 cursor-pointer shadow-2xs"
-                          title="Atribuir estritamente um vídeo inédito da playlist selecionada (anti-repetição)"
+                          title="Assign an exclusive unseen video from the selected playlist"
                         >
                           {isAssigningThisDay ? (
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           ) : (
                             <Sparkles className="w-3.5 h-3.5 text-[#000035]" />
                           )}
-                          <span className="whitespace-nowrap">Vídeo Exclusivo</span>
+                          <span className="whitespace-nowrap">Exclusive Video</span>
                         </button>
 
                         {currentUrl && (
@@ -1390,7 +1388,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               handleUrlChange(day.id, '');
                             }}
                             className="p-1.5 text-slate-300 hover:text-rose-500 transition rounded-md hover:bg-rose-50 cursor-pointer shrink-0"
-                            title={isEn ? 'Clear video URL' : 'Limpar URL do vídeo'}
+                            title="Clear video URL"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1407,17 +1405,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               ? 'bg-[#1C4C96]/70 text-white'
                               : 'bg-[#1C4C96] hover:bg-[#062863] text-white'
                           }`}
-                          title={isEn ? 'Save and synchronize URL to student page' : 'Salvar e sincronizar URL na página do aluno'}
+                          title="Save and synchronize URL with student page"
                         >
                           {isSavingThisDay ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>Salvando...</span>
+                              <span>Saving...</span>
                             </>
                           ) : isSaved ? (
                             <>
                               <Check className="w-3.5 h-3.5" />
-                              <span>Salvo ✓</span>
+                              <span>Saved ✓</span>
                             </>
                           ) : (
                             <>
@@ -1446,11 +1444,11 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-black text-xs sm:text-sm text-[#000035] uppercase tracking-wider">
-                {isEn ? 'Spotify Audio Assignment' : 'Atribuição de Áudios Spotify'}
+                Spotify Audio Assignment
               </h3>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30 flex items-center gap-1">
                 <Music className="w-2.5 h-2.5 text-[#1DB954]" />
-                <span>{currentLevelConfig.levelLabelPt}</span>
+                <span>{currentLevelConfig.levelLabelEn}</span>
               </span>
             </div>
           </div>
@@ -1465,10 +1463,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   ? 'bg-[#000035] text-emerald-400 border border-[#000035]'
                   : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
               }`}
-              title={isEn ? 'Toggle compact preview player' : 'Alternar mini player de verificação'}
+              title="Toggle preview player"
             >
               <Headphones className="w-3.5 h-3.5 text-[#1DB954]" />
-              <span>{isMiniPlayerOpen ? (isEn ? 'Ocultar Player' : 'Ocultar Player') : (isEn ? 'Mini Player' : 'Mini Player')}</span>
+              <span>{isMiniPlayerOpen ? 'Hide Player' : 'Mini Player'}</span>
             </button>
 
             <button
@@ -1476,10 +1474,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               onClick={handleResetAllDays}
               disabled={isResettingAll}
               className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
-              title={isEn ? 'Restore all 7 days to verified curriculum tracks' : 'Restaurar todos os 7 dias para as faixas verificadas oficiais'}
+              title="Restore all 7 days to verified curriculum tracks"
             >
               <RotateCcw className={`w-3 h-3 text-emerald-600 ${isResettingAll ? 'animate-spin' : ''}`} />
-              <span>{isResettingAll ? (isEn ? 'Restaurando...' : 'Restaurando...') : (isEn ? 'Restaurar 7 Dias' : 'Restaurar 7 Dias')}</span>
+              <span>{isResettingAll ? 'Restoring...' : 'Restore 7 Days'}</span>
             </button>
 
             {/* Spotify unseen counter badge */}
@@ -1513,8 +1511,8 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   <Sparkles className="w-3 h-3 text-emerald-600" />
                   <span>
                     {unseenTracks > 0
-                      ? `${unseenTracks} de ${totalTracks} faixas inéditas`
-                      : `Todas as ${totalTracks} faixas já ouvidas/atribuídas`}
+                      ? `${unseenTracks} of ${totalTracks} unseen tracks`
+                      : `All ${totalTracks} tracks already assigned or listened`}
                   </span>
                 </span>
               );
@@ -1525,17 +1523,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               onClick={handleDistributeWeekSpotify}
               disabled={isDistributingSpotWeek}
               className="px-2.5 py-1 rounded-lg text-xs font-bold bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-2xs"
-              title={isEn ? 'Distribute 7 exclusive unseen tracks for the entire week' : 'Distribuir 7 faixas exclusivas e inéditas para a semana inteira'}
+              title="Distribute 7 exclusive unseen tracks for the entire week"
             >
               {isDistributingSpotWeek ? (
                 <>
                   <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Distribuindo...</span>
+                  <span>Distributing...</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="w-3 h-3" />
-                  <span>Distribuir Semana (7 Áudios)</span>
+                  <span>Distribute Week (7 Audios)</span>
                 </>
               )}
             </button>
@@ -1545,7 +1543,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               target="_blank"
               rel="noreferrer"
               className="text-xs font-bold text-slate-600 hover:text-emerald-700 flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200"
-              title="Abrir playlist oficial no Spotify"
+              title="Open official playlist on Spotify"
             >
               <span className="hidden sm:inline">Playlist</span>
               <ExternalLink className="w-3 h-3 text-slate-400" />
@@ -1577,7 +1575,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 {/* Mini Day selector chips */}
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1 hidden sm:inline">
-                    {isEn ? 'Preview' : 'Ouvir'}:
+                    Preview:
                   </span>
                   {WEEK_DAYS.map((wDay) => {
                     const isCur = selectedPreviewDay === wDay.id;
@@ -1619,7 +1617,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                       target="_blank"
                       rel="noreferrer"
                       className="text-[10px] font-bold text-[#1DB954] hover:underline flex items-center gap-0.5"
-                      title="Abrir no Spotify"
+                      title="Open on Spotify"
                     >
                       <span>Spotify</span>
                       <ExternalLink className="w-2.5 h-2.5" />
@@ -1629,10 +1627,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                     type="button"
                     onClick={() => handleResetToDefaultTrack(selectedPreviewDay)}
                     className="text-[10px] text-slate-400 hover:text-emerald-400 flex items-center gap-0.5 ml-1"
-                    title="Restaurar padrão deste dia"
+                    title="Restore default for this day"
                   >
                     <RotateCcw className="w-2.5 h-2.5" />
-                    <span>Restaurar</span>
+                    <span>Restore</span>
                   </button>
                 </div>
               </div>
@@ -1643,9 +1641,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   <div className="flex items-center gap-2 truncate">
                     <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <span className="truncate text-[11px]">
-                      {isEn
-                        ? 'Audio link unavailable in embed. Click to restore verified curriculum audio.'
-                        : 'Link indisponível no catálogo. Clique para restaurar o áudio verificado.'}
+                      Audio link unavailable in embed. Click to restore verified curriculum audio.
                     </span>
                   </div>
                   <button
@@ -1654,7 +1650,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                     className="px-2.5 py-1 rounded bg-[#1DB954] text-[#000035] font-bold text-[11px] hover:bg-[#1ed760] transition shrink-0 flex items-center gap-1 cursor-pointer"
                   >
                     <RotateCcw className="w-3 h-3" />
-                    <span>{isEn ? 'Restore Audio' : 'Restaurar Áudio'}</span>
+                    <span>Restore Audio</span>
                   </button>
                 </div>
               ) : (
@@ -1719,9 +1715,9 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                                 ? 'bg-[#000035] text-white shadow-2xs'
                                 : 'text-slate-600 hover:text-[#000035]'
                             }`}
-                            title={isEn ? 'Podcast / Audio Talk' : 'Podcast / Conversa em Áudio'}
+                            title="Podcast / Audio Talk"
                           >
-                            <Radio className="w-3 h-3 text-[#1DB954]" />
+                            <Radio className="w-3.5 h-3.5 text-[#1DB954]" />
                             <span>Podcast</span>
                           </button>
                           <button
@@ -1734,9 +1730,9 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                                 ? 'bg-[#000035] text-white shadow-2xs'
                                 : 'text-slate-600 hover:text-[#000035]'
                             }`}
-                            title={isEn ? 'Music / Song' : 'Música / Canção'}
+                            title="Music / Song"
                           >
-                            <Disc className="w-3 h-3 text-amber-400" />
+                            <Disc className="w-3.5 h-3.5 text-amber-400" />
                             <span>Music</span>
                           </button>
                         </div>
@@ -1775,7 +1771,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                                 ? 'border-amber-300'
                                 : 'border-slate-300'
                             }`}
-                            title={isEn ? 'Press Enter or click Save to update student Spotify audio' : 'Pressione Enter ou clique em Salvar para atualizar o áudio do aluno'}
+                            title="Press Enter or click Save to update student Spotify audio"
                           />
                           {isValidSpot && (
                             <a
@@ -1783,7 +1779,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               target="_blank"
                               rel="noreferrer"
                               className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#1DB954] transition p-0.5 rounded cursor-pointer"
-                              title={isEn ? 'Open and test on Spotify' : 'Abrir e testar no Spotify'}
+                              title="Open and test on Spotify"
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
                             </a>
@@ -1808,11 +1804,11 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               ? 'bg-[#000035] text-emerald-400 border-[#000035]'
                               : 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-200'
                           }`}
-                          title={isEn ? 'Preview and test this audio in the player above' : 'Ouvir e testar este áudio no player acima'}
+                          title="Preview and test this audio in the player above"
                         >
                           <Headphones className="w-3.5 h-3.5 text-[#1DB954]" />
                           <span className="hidden sm:inline text-[10px]">
-                            {selectedPreviewDay === day.id && isMiniPlayerOpen ? 'Ouvindo' : 'Player'}
+                            {selectedPreviewDay === day.id && isMiniPlayerOpen ? 'Listening' : 'Player'}
                           </span>
                         </button>
 
@@ -1827,13 +1823,13 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                         ) : (
                           <div className="flex items-center gap-1 shrink-0">
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
-                              {isEn ? 'Custom' : 'Personalizado'}
+                              Custom
                             </span>
                             <button
                               type="button"
                               onClick={() => handleResetToDefaultTrack(day.id)}
                               className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-md transition cursor-pointer"
-                              title={isEn ? `Restore level default (${defaultTrack.title})` : `Restaurar padrão do nível (${defaultTrack.title})`}
+                              title={`Restore level default (${defaultTrack.title})`}
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
                             </button>
@@ -1848,7 +1844,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               setSpotValidationErrors((prev) => ({ ...prev, [day.id]: '' }));
                             }}
                             className="p-1.5 text-slate-300 hover:text-rose-500 transition rounded-md hover:bg-rose-50 cursor-pointer shrink-0"
-                            title={isEn ? 'Clear Spotify URL' : 'Limpar URL do Spotify'}
+                            title="Clear Spotify URL"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1860,21 +1856,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                           onClick={() => handleAssignExclusiveSpotify(day.id)}
                           disabled={assigningSpotifyDay === day.id}
                           className="px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer border border-[#1DB954]/50 bg-emerald-50 hover:bg-[#1DB954]/20 text-[#000035] disabled:opacity-50 shadow-2xs"
-                          title={
-                            isEn
-                              ? 'Assign next unseen, exclusive Spotify track for this student'
-                              : 'Atribuir próxima faixa exclusiva e inédita do currículo para este aluno'
-                          }
+                          title="Assign next unseen, exclusive Spotify track for this student"
                         >
                           {assigningSpotifyDay === day.id ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1DB954]" />
-                              <span className="hidden md:inline">Atribuindo...</span>
+                              <span className="hidden md:inline">Assigning...</span>
                             </>
                           ) : (
                             <>
                               <Sparkles className="w-3.5 h-3.5 text-[#1DB954]" />
-                              <span className="hidden md:inline">Faixa Exclusiva</span>
+                              <span className="hidden md:inline">Exclusive Track</span>
                             </>
                           )}
                         </button>
@@ -1890,17 +1882,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                               ? 'bg-[#1DB954]/70 text-[#000035]'
                               : 'bg-[#1DB954] hover:bg-[#1ed760] text-[#000035]'
                           }`}
-                          title={isEn ? 'Save and synchronize Spotify URL to student' : 'Salvar e sincronizar áudio na página do aluno'}
+                          title="Save and synchronize Spotify URL to student"
                         >
                           {isSavingThisDay ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>{isEn ? 'Saving...' : 'Salvando...'}</span>
+                              <span>Saving...</span>
                             </>
                           ) : isSaved ? (
                             <>
                               <Check className="w-3.5 h-3.5" />
-                              <span>{isEn ? 'Saved ✓' : 'Salvo ✓'}</span>
+                              <span>Saved ✓</span>
                             </>
                           ) : (
                             <>
