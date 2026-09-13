@@ -216,7 +216,7 @@ export default function App() {
       workingHoursEnd: '18:00',
       slotDurationMinutes: 30,
       availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-      timezone: 'America/Sao_Paulo',
+      timezone: 'America/Toronto',
     },
   });
 
@@ -1619,6 +1619,17 @@ export default function App() {
       ...(uid ? { [uid]: merged } : {}),
     }));
 
+    // Synchronize timezone to tutors list if updated
+    if (settings.timezone) {
+      setTutors((prev) =>
+        prev.map((t) =>
+          (t.email || '').toLowerCase().trim() === cleanEmail || (uid && (t as any).uid === uid)
+            ? { ...t, timezone: settings.timezone }
+            : t
+        )
+      );
+    }
+
     try {
       await fetch('/api/teacher-settings', {
         method: 'POST',
@@ -1790,6 +1801,21 @@ export default function App() {
           : acc
       )
     );
+
+    // Sync timezone to teacherMeetSettings if provided
+    if (updatedTutor.timezone) {
+      setTeacherMeetSettings((prev) => {
+        const cleanEmail = updatedTutor.email.toLowerCase().trim();
+        const existing = prev[cleanEmail];
+        if (existing) {
+          return {
+            ...prev,
+            [cleanEmail]: { ...existing, timezone: updatedTutor.timezone },
+          };
+        }
+        return prev;
+      });
+    }
 
     try {
       await fetch(`/api/tutors/${updatedTutor.id}`, {
@@ -2725,6 +2751,10 @@ export default function App() {
           teacherMeetSettings[teacherEmailForConfig?.toLowerCase().trim()] ||
           teacherMeetSettings[teacherEmailForConfig] ||
           (currentAccount?.uid ? teacherMeetSettings[currentAccount.uid] : undefined)
+        }
+        tutorProfile={
+          tutors.find((t) => (t.email || '').toLowerCase().trim() === teacherEmailForConfig?.toLowerCase().trim()) ||
+          (isTeacher ? currentTutorProfile : null)
         }
         onSave={handleSaveTeacherMeetSettings}
         currentLanguage="en"

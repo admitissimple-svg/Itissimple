@@ -59,6 +59,7 @@ export interface NativeFriendTutor {
   appliedAt?: string;
   meetUrl?: string;
   photoUrl?: string;
+  timezone?: string;
 }
 
 export interface AdminLandingContent {

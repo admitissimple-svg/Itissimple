@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { NativeFriendTutor, Language } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
+import { TIMEZONE_OPTIONS, DEFAULT_TEACHER_TIMEZONE } from '../utils/timezone';
 
 interface EditTutorProfileModalProps {
   isOpen: boolean;
@@ -213,6 +214,26 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
                   placeholder="e.g. Canada, United States, UK"
                   className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035]"
                 />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Timezone (Fuso Horário) *
+              </label>
+              <div className="relative">
+                <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  value={formData.timezone || DEFAULT_TEACHER_TIMEZONE}
+                  onChange={(e) => handleChange('timezone', e.target.value)}
+                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                >
+                  {TIMEZONE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} ({opt.offset})
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>

@@ -183,16 +183,28 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
     return true;
   });
 
-  const teacherEmailKey = currentAccount?.email || '';
-  const activeTeacherSettings = teacherMeetSettings[teacherEmailKey] || {
-    teacherEmail: teacherEmailKey,
-    meetLink: 'https://meet.google.com/new',
-    workingHoursStart: '08:00',
-    workingHoursEnd: '18:00',
-    slotDurationMinutes: 30,
-    availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-    timezone: 'America/Sao_Paulo',
-  };
+  const teacherEmailKey = (currentAccount?.email || '').toLowerCase().trim();
+  const rawSettings =
+    teacherMeetSettings[teacherEmailKey] ||
+    (currentAccount?.uid ? teacherMeetSettings[currentAccount.uid] : undefined);
+
+  const resolvedTutorTz =
+    tutorProfile?.timezone ||
+    (rawSettings?.timezone && rawSettings.timezone !== 'America/Sao_Paulo' ? rawSettings.timezone : undefined) ||
+    timeZone ||
+    DEFAULT_TEACHER_TIMEZONE;
+
+  const activeTeacherSettings: TeacherMeetSettings = rawSettings
+    ? { ...rawSettings, timezone: rawSettings.timezone || resolvedTutorTz }
+    : {
+        teacherEmail: teacherEmailKey,
+        meetLink: tutorProfile?.meetUrl || 'https://meet.google.com/new',
+        workingHoursStart: '08:00',
+        workingHoursEnd: '18:00',
+        slotDurationMinutes: 30,
+        availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+        timezone: resolvedTutorTz,
+      };
 
   return (
     <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-xs p-3.5 sm:p-5 space-y-4" id="teacher-schedule-control-table">
@@ -222,6 +234,10 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                 <span className="text-base">{tutorProfile.flag}</span>
                 <span className="text-xs text-[#9AB4FF] font-medium">
                   {tutorProfile.country} • {tutorProfile.accent}
+                </span>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#1C4C96]/60 text-[#F4CA54] border border-[#9AB4FF]/30 flex items-center gap-1">
+                  <Globe className="w-3 h-3 text-[#F4CA54]" />
+                  <span>{getTimezoneDisplayLabel(resolvedTutorTz, 'en')}</span>
                 </span>
               </div>
               <p className="text-xs text-white/90 line-clamp-1 mt-0.5 max-w-xl">
