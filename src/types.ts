@@ -58,8 +58,11 @@ export interface NativeFriendTutor {
   approvalStatus?: 'approved' | 'pending' | 'rejected';
   appliedAt?: string;
   meetUrl?: string;
+  meetLink?: string;
   photoUrl?: string;
   timezone?: string;
+  availability?: Record<string, string[]>;
+  availableHoursByDay?: Record<string, string[]>;
 }
 
 export interface AdminLandingContent {

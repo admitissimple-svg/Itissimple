@@ -9,10 +9,8 @@ import {
   MapPin,
   Globe,
   Sparkles,
-  ExternalLink,
-  Calendar,
 } from 'lucide-react';
-import { NativeFriendTutor, Language, DayOfWeek } from '../types';
+import { NativeFriendTutor, Language } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
 import {
   TIMEZONE_OPTIONS,
@@ -36,16 +34,6 @@ const COUNTRY_OPTIONS = [
   { name: 'Ireland', flag: '🇮🇪', code: 'IE' },
   { name: 'Australia', flag: '🇦🇺', code: 'AU' },
   { name: 'New Zealand', flag: '🇳🇿', code: 'NZ' },
-];
-
-const ALL_DAYS: { key: DayOfWeek; label: string; full: string }[] = [
-  { key: 'monday', label: 'MON', full: 'Monday' },
-  { key: 'tuesday', label: 'TUE', full: 'Tuesday' },
-  { key: 'wednesday', label: 'WED', full: 'Wednesday' },
-  { key: 'thursday', label: 'THU', full: 'Thursday' },
-  { key: 'friday', label: 'FRI', full: 'Friday' },
-  { key: 'saturday', label: 'SAT', full: 'Saturday' },
-  { key: 'sunday', label: 'SUN', full: 'Sunday' },
 ];
 
 export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
@@ -104,14 +92,6 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
     }));
   };
 
-  const toggleDay = (day: DayOfWeek) => {
-    const current = (formData.availableDays || []) as DayOfWeek[];
-    const next = current.includes(day)
-      ? current.filter((d) => d !== day)
-      : [...current, day];
-    setFormData((prev) => ({ ...prev, availableDays: next }));
-  };
-
   const currentUsdPrice = Number(formData.pricePerSessionUsd) || tutor.pricePerSessionUsd || 15;
   const calculatedBrlPrice = Math.round(currentUsdPrice * 5.5);
 
@@ -120,6 +100,10 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
     const updated: NativeFriendTutor = {
       ...(tutor as NativeFriendTutor),
       ...formData,
+      // Strictly preserve schedule and meet link from tutor / centralized settings
+      meetUrl: tutor.meetUrl || (tutor as any).meetLink || '',
+      availableDays: tutor.availableDays || [],
+      availability: tutor.availability || (tutor as any).availableHoursByDay,
       pricePerSessionUsd: currentUsdPrice,
       pricePerSessionBrl: calculatedBrlPrice,
       specialties: specialtiesText
@@ -155,7 +139,7 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
                 Edit My Public Profile & Presentation
               </h2>
               <p className="text-xs text-[#9AB4FF]">
-                Update your bio, photo, rate, Google Meet, and availability.
+                Update your bio, photo, hourly rate, specialties, and video presentation.
               </p>
             </div>
           </div>
@@ -191,7 +175,7 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
             />
           </div>
 
-          {/* 2. Personal & Public Presentation Details */}
+          {/* 2. Personal & Public Presentation Details (6 balanced fields across 2 columns) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -304,107 +288,49 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
             </div>
           </div>
 
-          {/* 3. Google Meet Link & Booking Availability */}
-          <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-4">
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Video className="w-3.5 h-3.5 text-[#1C4C96]" />
-                  <span>Google Meet Link (Link Permanente de Aula)</span>
-                </label>
-                {formData.meetUrl && formData.meetUrl.trim() !== '' && (
-                  <a
-                    href={formData.meetUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[11px] font-bold text-[#1C4C96] hover:underline flex items-center gap-1"
-                  >
-                    <span>Test link</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
+          {/* 3. Specialties, Video Presentation & Biography (Harmonic transition with clear section demarcation) */}
+          <div className="pt-3 border-t border-slate-200/80 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#1C4C96]" />
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  Specialties & Video Presentation
+                </h3>
               </div>
-              <div className="relative">
-                <Video className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <span className="text-[11px] text-slate-400 font-medium">
+                Showcased on your public student card
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-[#F4CA54]" />
+                  <span>Specialties (separated by comma)</span>
+                </label>
                 <input
-                  type="url"
-                  value={formData.meetUrl || ''}
-                  onChange={(e) => handleChange('meetUrl', e.target.value)}
-                  placeholder="https://meet.google.com/xxx-yyyy-zzz"
-                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                  type="text"
+                  value={specialtiesText}
+                  onChange={(e) => setSpecialtiesText(e.target.value)}
+                  placeholder="e.g. Daily Habits, Accent Polish, Business Confidence"
+                  className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
                 />
               </div>
-              <p className="text-[11px] text-slate-500">
-                Your permanent Google Meet link automatically attached to student bookings and calendar reminders.
-              </p>
-            </div>
 
-            {/* Available Days */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-200/80">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-[#1C4C96]" />
-                  <span>Available Days for Sessions (Dias de Atendimento)</span>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Video Introduction Link (YouTube / Vimeo / Loom)
                 </label>
-                <span className="text-[11px] text-slate-500 font-semibold">
-                  {(formData.availableDays || []).length} days active
-                </span>
-              </div>
-              <div className="grid grid-cols-7 gap-1.5">
-                {ALL_DAYS.map(({ key, label, full }) => {
-                  const isSelected = (formData.availableDays || []).includes(key);
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => toggleDay(key)}
-                      title={full}
-                      className={`py-2 text-xs font-black rounded-xl border transition cursor-pointer text-center ${
-                        isSelected
-                          ? 'bg-[#062863] text-white border-[#062863] shadow-xs'
-                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-[11px] text-slate-500">
-                Choose the days of the week on which students are allowed to book practice sessions.
-              </p>
-            </div>
-          </div>
-
-          {/* 4. Specialties & Video Intro */}
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-[#F4CA54]" />
-                <span>Specialties (separated by comma)</span>
-              </label>
-              <input
-                type="text"
-                value={specialtiesText}
-                onChange={(e) => setSpecialtiesText(e.target.value)}
-                placeholder="e.g. Daily Habits, Accent Polish, Business Confidence"
-                className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Video Introduction Link (YouTube / Vimeo / Loom)
-              </label>
-              <div className="relative">
-                <Video className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="url"
-                  value={formData.videoIntroUrl || ''}
-                  onChange={(e) => handleChange('videoIntroUrl', e.target.value)}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
-                />
+                <div className="relative">
+                  <Video className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="url"
+                    value={formData.videoIntroUrl || ''}
+                    onChange={(e) => handleChange('videoIntroUrl', e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
+                  />
+                </div>
               </div>
             </div>
 
@@ -428,7 +354,7 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 transition"
+              className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer"
             >
               Cancel
             </button>
@@ -446,3 +372,4 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
     </div>
   );
 };
+

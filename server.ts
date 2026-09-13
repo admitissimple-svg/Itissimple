@@ -1627,14 +1627,28 @@ app.put('/api/tutors/:id', (req, res) => {
   );
 
   if (existingIdx >= 0) {
+    const existingTutor = db.tutorsList[existingIdx];
+    const tEmail = (existingTutor.email || updatedData.email || '').toLowerCase();
+    const existingSettings = (db.teacherSettings && db.teacherSettings[tEmail]) || (db.meetSettings && db.meetSettings[tEmail]);
+
     db.tutorsList[existingIdx] = {
-      ...db.tutorsList[existingIdx],
+      ...existingTutor,
       ...updatedData,
-      id: db.tutorsList[existingIdx].id || tutorId,
+      id: existingTutor.id || tutorId,
+      // Strictly preserve centralized meetUrl, availableDays, and availability
+      meetUrl: updatedData.meetUrl || existingTutor.meetUrl || existingSettings?.meetLink || '',
+      availableDays:
+        (updatedData.availableDays && updatedData.availableDays.length > 0)
+          ? updatedData.availableDays
+          : (existingTutor.availableDays || existingSettings?.availableDays || []),
+      availability:
+        updatedData.availability ||
+        existingTutor.availability ||
+        existingSettings?.availability ||
+        existingSettings?.availableHoursByDay,
     };
     
     // Sync with db.teachers
-    const tEmail = (db.tutorsList[existingIdx].email || '').toLowerCase();
     const currentTutor = db.tutorsList[existingIdx];
     const teacherIdx = (db.teachers || []).findIndex((tc: any) => tc.email?.toLowerCase() === tEmail);
     if (teacherIdx >= 0) {

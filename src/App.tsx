@@ -1619,16 +1619,25 @@ export default function App() {
       ...(uid ? { [uid]: merged } : {}),
     }));
 
-    // Synchronize timezone to tutors list if updated
-    if (settings.timezone) {
-      setTutors((prev) =>
-        prev.map((t) =>
-          (t.email || '').toLowerCase().trim() === cleanEmail || (uid && (t as any).uid === uid)
-            ? { ...t, timezone: settings.timezone }
-            : t
-        )
-      );
-    }
+    // Synchronize timezone, meetLink, availableDays, and availability to tutors list if updated
+    setTutors((prev) =>
+      prev.map((t) =>
+        (t.email || '').toLowerCase().trim() === cleanEmail || (uid && (t as any).uid === uid)
+          ? {
+              ...t,
+              timezone: settings.timezone || t.timezone,
+              meetUrl: settings.meetLink || t.meetUrl,
+              meetLink: settings.meetLink || (t as any).meetLink,
+              availableDays:
+                settings.availableDays && settings.availableDays.length > 0
+                  ? settings.availableDays
+                  : t.availableDays,
+              availability: settings.availability || settings.availableHoursByDay || t.availability,
+              availableHoursByDay: settings.availableHoursByDay || settings.availability || (t as any).availableHoursByDay,
+            }
+          : t
+      )
+    );
 
     try {
       await fetch('/api/teacher-settings', {
@@ -1763,27 +1772,54 @@ export default function App() {
 
   // Handler: Save Native Friend Profile (from Teacher Dashboard or Modal)
   const handleSaveTutorProfile = async (updatedTutor: NativeFriendTutor) => {
+    const cleanEmail = (updatedTutor.email || '').toLowerCase().trim();
+    const existingMeetSettings =
+      teacherMeetSettings[cleanEmail] ||
+      (currentAccount?.uid ? teacherMeetSettings[currentAccount.uid] : undefined);
+
+    // Merge and preserve centralized meetUrl, availableDays, and availability
+    const mergedTutor: NativeFriendTutor = {
+      ...updatedTutor,
+      meetUrl:
+        existingMeetSettings?.meetLink ||
+        updatedTutor.meetUrl ||
+        '',
+      availableDays:
+        existingMeetSettings?.availableDays && existingMeetSettings.availableDays.length > 0
+          ? existingMeetSettings.availableDays
+          : updatedTutor.availableDays && updatedTutor.availableDays.length > 0
+          ? updatedTutor.availableDays
+          : [],
+      availability:
+        existingMeetSettings?.availability ||
+        existingMeetSettings?.availableHoursByDay ||
+        updatedTutor.availability,
+      availableHours:
+        existingMeetSettings?.availableHours ||
+        updatedTutor.availableHours,
+    };
+
     setTutors((prev) => {
       const exists = prev.some(
-        (t) => t.id === updatedTutor.id || t.email.toLowerCase() === updatedTutor.email.toLowerCase()
+        (t) => t.id === mergedTutor.id || t.email.toLowerCase() === mergedTutor.email.toLowerCase()
       );
       if (exists) {
         return prev.map((t) =>
-          t.id === updatedTutor.id || t.email.toLowerCase() === updatedTutor.email.toLowerCase()
-            ? updatedTutor
+          t.id === mergedTutor.id || t.email.toLowerCase() === mergedTutor.email.toLowerCase()
+            ? mergedTutor
             : t
         );
       }
-      return [...prev, updatedTutor];
+      return [...prev, mergedTutor];
     });
 
     // Update currentAccount if active user is this tutor
     setCurrentAccount((prev) => {
-      if (prev && prev.email.toLowerCase() === updatedTutor.email.toLowerCase()) {
+      if (prev && prev.email.toLowerCase() === mergedTutor.email.toLowerCase()) {
         return {
           ...prev,
-          name: updatedTutor.name,
-          picture: updatedTutor.avatar || prev.picture,
+          name: mergedTutor.name,
+          picture: mergedTutor.avatar || prev.picture,
         };
       }
       return prev;
@@ -1792,39 +1828,38 @@ export default function App() {
     // Update available accounts list
     setAvailableAccounts((prev) =>
       prev.map((acc) =>
-        acc.email.toLowerCase() === updatedTutor.email.toLowerCase()
+        acc.email.toLowerCase() === mergedTutor.email.toLowerCase()
           ? {
               ...acc,
-              name: updatedTutor.name,
-              picture: updatedTutor.avatar || acc.picture,
+              name: mergedTutor.name,
+              picture: mergedTutor.avatar || acc.picture,
             }
           : acc
       )
     );
 
-    // Sync timezone, meetLink, and availableDays to teacherMeetSettings if provided
-    setTeacherMeetSettings((prev) => {
-      const cleanEmail = updatedTutor.email.toLowerCase().trim();
-      const existing = prev[cleanEmail];
-      if (existing) {
-        return {
-          ...prev,
-          [cleanEmail]: {
-            ...existing,
-            ...(updatedTutor.timezone ? { timezone: updatedTutor.timezone } : {}),
-            ...(updatedTutor.meetUrl ? { meetLink: updatedTutor.meetUrl } : {}),
-            ...(updatedTutor.availableDays && updatedTutor.availableDays.length > 0 ? { availableDays: updatedTutor.availableDays } : {}),
-          },
-        };
-      }
-      return prev;
-    });
+    // Sync timezone to teacherMeetSettings if provided
+    if (mergedTutor.timezone) {
+      setTeacherMeetSettings((prev) => {
+        const existing = prev[cleanEmail];
+        if (existing) {
+          return {
+            ...prev,
+            [cleanEmail]: {
+              ...existing,
+              timezone: mergedTutor.timezone,
+            },
+          };
+        }
+        return prev;
+      });
+    }
 
     try {
-      await fetch(`/api/tutors/${updatedTutor.id}`, {
+      await fetch(`/api/tutors/${mergedTutor.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedTutor),
+        body: JSON.stringify(mergedTutor),
       });
     } catch {
       // local fallback
@@ -1933,10 +1968,25 @@ export default function App() {
   // Compute current tutor profile for Edit Profile Modal
   const currentTutorProfile: NativeFriendTutor = useMemo(() => {
     if (currentAccount && (currentAccount.role === 'teacher' || currentAccount.role === 'admin')) {
+      const emailClean = (currentAccount.email || '').toLowerCase().trim();
+      const settings =
+        teacherMeetSettings[emailClean] ||
+        (currentAccount.uid ? teacherMeetSettings[currentAccount.uid] : undefined);
       const found = tutors.find(
-        (t) => t.email.toLowerCase() === currentAccount.email.toLowerCase()
+        (t) => t.email.toLowerCase() === emailClean
       );
-      if (found) return found;
+      if (found) {
+        return {
+          ...found,
+          meetUrl: settings?.meetLink || found.meetUrl || '',
+          availableDays:
+            settings?.availableDays && settings.availableDays.length > 0
+              ? settings.availableDays
+              : found.availableDays || [],
+          availability: settings?.availability || settings?.availableHoursByDay || found.availability,
+          timezone: settings?.timezone || found.timezone,
+        };
+      }
 
       return {
         id: `tutor-${currentAccount.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
@@ -1956,8 +2006,10 @@ export default function App() {
         headline: 'Conversational Native Friend',
         bio: 'Hello! I am ready to guide you in living English every day through real conversation and practical routines.',
         specialties: ['Conversational Fluency', 'Daily Routines'],
-        availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
-        availableHours: ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'],
+        availableDays: settings?.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+        availableHours: settings?.availableHours || ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'],
+        availability: settings?.availability || settings?.availableHoursByDay,
+        meetUrl: settings?.meetLink || '',
         approvalStatus: 'pending',
       };
     }
@@ -1984,7 +2036,7 @@ export default function App() {
       availableHours: ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'],
       approvalStatus: 'approved',
     };
-  }, [tutors, currentAccount]);
+  }, [tutors, currentAccount, teacherMeetSettings]);
 
   // Count pending tutor approvals for Administrator
   const pendingApprovalsCount = useMemo(() => {
