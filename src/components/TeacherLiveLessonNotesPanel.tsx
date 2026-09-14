@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Check,
   Trash2,
-  User,
   Calendar,
   History,
   Lightbulb,
@@ -394,30 +393,15 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
       id="teacher-live-lesson-notes-panel"
     >
       {/* Header Banner */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-[#9AB4FF]/30 pb-4">
-        <div className="flex items-start gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-[#000035] text-white flex items-center justify-center shrink-0 border border-[#9AB4FF]/40 shadow-xs mt-0.5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#9AB4FF]/30 pb-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-[#000035] text-white flex items-center justify-center shrink-0 border border-[#9AB4FF]/40 shadow-xs">
             <BookOpen className="w-5 h-5 text-[#F4CA54]" />
           </div>
           <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-black text-base sm:text-lg text-[#000035] tracking-tight">
-                Live Session Real-Time Vocabulary
-              </h3>
-              <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-extrabold border border-emerald-300 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-emerald-600" />
-                Live In-Session Coaching
-              </span>
-              {(activeStudent || selectedStudentEmail) && (
-                <span className="px-2.5 py-0.5 rounded-full bg-[#1C4C96]/10 text-[#062863] text-[10px] font-extrabold border border-[#607EC9]/30 flex items-center gap-1">
-                  <User className="w-3 h-3 text-[#1C4C96]" />
-                  <span>Student: {activeStudent?.name || selectedStudentEmail}</span>
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-[#607EC9] mt-1">
-              Capture vocabulary, expressions, automatic simplified English definitions, and conversational examples in real time.
-            </p>
+            <h3 className="font-black text-base sm:text-lg text-[#000035] tracking-tight">
+              Live Session Real-Time Vocabulary
+            </h3>
           </div>
         </div>
 
