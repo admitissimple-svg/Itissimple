@@ -100,6 +100,7 @@ export async function saveStudentAssignmentsByUid(
     uid?: string;
     email?: string;
     level?: string;
+    weeklyCycle?: number;
     videoAssignments?: any[];
     spotifyAssignments?: any[];
     routines?: any;

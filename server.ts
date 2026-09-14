@@ -3195,12 +3195,19 @@ function distributeWeeklySpotifyForStudent(
   const assignedRecords: any[] = [];
   const assignedInWeekTrackIds = new Set<string>();
 
-  // All tracks from the level playlist in order
-  const allTracks = DAYS_SEQUENCE.map((d, i) => ({
-    day: d,
-    index: i + 1,
-    ...levelPlaylist.tracks[d],
-  }));
+  // All tracks from the level playlist in order, including extended track pool for multi-week cycles
+  const allTracks = [
+    ...DAYS_SEQUENCE.map((d, i) => ({
+      day: d,
+      index: i + 1,
+      ...levelPlaylist.tracks[d],
+    })),
+    ...(levelPlaylist.pool || []).map((p: any, i: number) => ({
+      day: p.dayOfWeek || 'monday',
+      index: 8 + i,
+      ...p,
+    })),
+  ];
 
   DAYS_SEQUENCE.forEach((dayKey, idx) => {
     const designatedTrack = levelPlaylist.tracks[dayKey];
@@ -3565,6 +3572,128 @@ app.get('/api/student-routines', (req, res) => {
     return res.json(merged);
   }
   res.json(db.routinesByDay || defaultRoutinesByDay);
+});
+
+/**
+ * Weekly Cycle Intelligence & Progression:
+ * Advances the student to a new weekly cycle ("Start New Week" / "Iniciar Nova Semana").
+ * - Registers all current week's videos and Spotify tracks in consumed history (watchedVideos / listenedTracks).
+ * - Generates 7 brand-new, non-repeating YouTube videos and Spotify tracks matching student level.
+ * - Resets weekly activity checklist for the fresh cycle.
+ * - Persists full state linked to student UID in Firestore and local db.
+ */
+app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], async (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.body.studentEmail as string) || (req.body.email as string) || '').toLowerCase().trim();
+  const uid = ((req.body.uid as string) || (req.body.studentUid as string) || '').trim();
+  const rawLevel = (req.body.level as string) || '';
+
+  const resolved = resolveStudentIdentifiers(db, studentEmail, uid);
+  const targetKeys = Array.from(new Set([resolved.uid, resolved.email, studentEmail, uid].filter(Boolean) as string[]));
+
+  if (targetKeys.length === 0) {
+    return res.status(400).json({ error: 'Missing student identifier (email or uid)' });
+  }
+
+  // 1. Move all currently assigned videos and tracks to consumed history
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+
+  targetKeys.forEach((k) => {
+    const existingVideos = db.studentVideoAssignments?.[k] || [];
+    if (Array.isArray(existingVideos)) {
+      if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
+      existingVideos.forEach((v: any) => {
+        const vid = extractServerYouTubeId(v.videoId || v.videoUrl);
+        if (vid && !db.studentWatchedVideos[k].includes(vid)) {
+          db.studentWatchedVideos[k].push(vid);
+        }
+      });
+    }
+
+    const existingTracks = db.studentSpotifyAssignments?.[k] || [];
+    if (Array.isArray(existingTracks)) {
+      if (!db.studentListenedTracks[k]) db.studentListenedTracks[k] = [];
+      existingTracks.forEach((t: any) => {
+        const tid = extractSpotifyTrackId(t.trackId || t.url || t.trackUrl);
+        if (tid && !db.studentListenedTracks[k].includes(tid)) {
+          db.studentListenedTracks[k].push(tid);
+        }
+      });
+    }
+
+    // Clear current assignments so fresh generation is triggered
+    if (db.studentVideoAssignments?.[k]) {
+      db.studentVideoAssignments[k] = [];
+    }
+    if (db.studentSpotifyAssignments?.[k]) {
+      db.studentSpotifyAssignments[k] = [];
+    }
+  });
+
+  // 2. Advance student weekly cycle count
+  const currentCycle =
+    db.userProfiles?.[resolved.email]?.weeklyCycle ||
+    db.students?.find((s: any) => s.email?.toLowerCase() === resolved.email || (resolved.uid && s.uid === resolved.uid))?.weeklyCycle ||
+    1;
+  const nextCycle = currentCycle + 1;
+
+  if (resolved.email && db.userProfiles?.[resolved.email]) {
+    db.userProfiles[resolved.email].weeklyCycle = nextCycle;
+  }
+  if (db.students) {
+    db.students = db.students.map((s: any) => {
+      if (s.email?.toLowerCase() === resolved.email || (resolved.uid && s.uid === resolved.uid)) {
+        return { ...s, weeklyCycle: nextCycle };
+      }
+      return s;
+    });
+  }
+
+  // 3. Reset weekly activity checks for the new week
+  if (!db.studentWeeklyChecks) db.studentWeeklyChecks = {};
+  targetKeys.forEach((k) => {
+    db.studentWeeklyChecks[k] = {};
+  });
+
+  // 4. Generate new weekly curriculum with guaranteed anti-repetition
+  const studentLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, resolved.email, resolved.uid)).key;
+  const newVideos = distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel);
+  const newTracks = distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel);
+
+  writeDb(db);
+
+  const routines =
+    (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) ||
+    (resolved.email && db.studentRoutinesMap?.[resolved.email]) ||
+    db.routinesByDay ||
+    defaultRoutinesByDay;
+
+  // 5. Cloud Firestore synchronization linked to UID
+  if (resolved.uid) {
+    saveStudentAssignmentsByUid(resolved.uid, {
+      uid: resolved.uid,
+      email: resolved.email,
+      level: studentLevel,
+      weeklyCycle: nextCycle,
+      videoAssignments: newVideos,
+      spotifyAssignments: newTracks,
+      routines,
+      watchedVideos: db.studentWatchedVideos[resolved.uid] || [],
+      listenedTracks: db.studentListenedTracks[resolved.uid] || [],
+      updatedAt: new Date().toISOString(),
+    }).catch((e) => console.warn('Firestore sync notice for student assignments:', e));
+  }
+  saveAppStateToFirestore(db).catch(() => {});
+
+  res.json({
+    success: true,
+    weeklyCycle: nextCycle,
+    message: 'New weekly cycle activated successfully',
+    routines,
+    videoAssignments: newVideos,
+    spotifyAssignments: newTracks,
+  });
 });
 
 // 5. Live Lessons Endpoints

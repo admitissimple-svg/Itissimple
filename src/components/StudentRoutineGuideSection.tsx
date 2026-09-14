@@ -24,6 +24,9 @@ import {
   ChevronDown,
   Layers,
   Video,
+  RotateCcw,
+  Star,
+  RefreshCw,
 } from 'lucide-react';
 import {
   DayOfWeek,
@@ -54,6 +57,7 @@ import {
   getDayShortLabel,
   getLastActivityOfTheDay,
   getEndOfDayReminderTime,
+  getTodayDayOfWeek,
 } from '../utils/notifications';
 
 interface YouTubePlaylistItem {
@@ -86,6 +90,8 @@ interface StudentRoutineGuideSectionProps {
   currentLanguage: Language;
   t: Translations;
   onAssignVideoToActivity?: (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => void;
+  onStartNewWeek?: () => Promise<boolean | void> | void;
+  weeklyCycle?: number;
 }
 
 export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProps> = ({
@@ -107,8 +113,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   currentLanguage,
   t,
   onAssignVideoToActivity,
+  onStartNewWeek,
+  weeklyCycle = 1,
 }) => {
   const isEn = currentLanguage === 'en';
+  const todayDay = getTodayDayOfWeek();
+  const [isNewWeekModalOpen, setIsNewWeekModalOpen] = useState(false);
+  const [isStartingNewWeek, setIsStartingNewWeek] = useState(false);
 
   // Playlists from active admin YouTube channel
   const [playlists, setPlaylists] = useState<YouTubePlaylistItem[]>([]);
@@ -469,9 +480,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   return (
     <div className="space-y-4" id="daily-routine-guide-section">
-      {/* 1. Pedagogical Header Banner with 2 Steps */}
-      <div className="bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] text-white rounded-3xl p-5 border border-[#1C4C96] shadow-md space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* 1. Header Banner with Week Counter & Start New Week */}
+      <div className="bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] text-white rounded-3xl p-5 border border-[#1C4C96] shadow-md">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center shrink-0 border border-[#9AB4FF]/40 shadow-xs">
               <Sparkles className="w-5 h-5 text-[#9AB4FF]" />
@@ -481,49 +492,44 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 <h2 className="text-base font-black text-white tracking-tight">
                   {isEn ? 'Daily Routine Guide' : 'Guia da Rotina Diária'}
                 </h2>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 bg-[#9AB4FF] text-[#000035] rounded-full uppercase">
-                  {isEn ? 'Step by Step' : 'Passo a Passo'}
-                </span>
               </div>
               <p className="text-xs text-[#9AB4FF]/85 mt-0.5">
                 {isEn
-                  ? 'Follow these 2 simple steps to build your custom English learning routine:'
-                  : 'Siga os 2 passos abaixo para personalizar o seu aprendizado de inglês:'}
+                  ? 'Your personalized daily English immersion routine and interactive practice'
+                  : 'Sua rotina diária personalizada de imersão e prática de inglês'}
               </p>
             </div>
           </div>
 
-          {/* Stepper Indicators */}
-          <div className="flex items-center gap-3 bg-[#000035]/60 px-4 py-2 rounded-2xl border border-[#607EC9]/40 self-start md:self-auto">
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-[#1C4C96] text-[#9AB4FF] font-black text-xs flex items-center justify-center border border-[#9AB4FF]/40">
-                1
-              </span>
-              <span className="text-xs font-bold text-white">
-                {isEn ? '1. Fill in your daily routine' : '1. Preencha sua rotina'}
+          {/* Right Side: Week Counter and Start New Week */}
+          <div className="flex items-center gap-2.5 self-start sm:self-auto shrink-0">
+            <div className="bg-[#000035]/90 px-3 py-1.5 rounded-2xl border border-[#9AB4FF]/40 flex items-center gap-1.5 shadow-xs">
+              <RotateCcw className="w-3.5 h-3.5 text-[#F4CA54]" />
+              <span className="text-xs font-black text-white">
+                {isEn ? `Week ${weeklyCycle}` : `Semana ${weeklyCycle}`}
               </span>
             </div>
-
-            <span className="text-[#607EC9] font-mono">--------</span>
-
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-[#9AB4FF] text-[#000035] font-black text-xs flex items-center justify-center">
-                2
-              </span>
-              <span className="text-xs font-bold text-[#9AB4FF]">
-                {isEn ? '2. Choose daily topic & practice' : '2. Escolha o tema & pratique diariamente'}
-              </span>
-            </div>
+            {onStartNewWeek && (
+              <button
+                type="button"
+                onClick={() => setIsNewWeekModalOpen(true)}
+                className="px-3.5 py-1.5 rounded-2xl bg-[#F4CA54] hover:bg-[#e0b840] text-[#000035] font-black text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs border border-[#F4CA54]/40"
+                title={isEn ? 'Start a fresh weekly cycle with brand new content' : 'Iniciar novo ciclo semanal com conteúdos inéditos'}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-[#000035]" />
+                <span>{isEn ? 'Start New Week' : 'Iniciar Nova Semana'}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* 2. Top Controls Row: Day Selector + Activities Timeline (Definitive 2-Column Layout) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
-        {/* Left: Day Selector */}
+        {/* Left: Day Selector with Today's Focus */}
         <div className="lg:col-span-4 bg-white rounded-3xl p-4 border border-[#607EC9]/30 shadow-xs flex flex-col justify-between space-y-2.5">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-black uppercase tracking-wider text-[#607EC9] flex items-center gap-1">
+            <span className="text-[10px] font-black uppercase tracking-wider text-[#607EC9] flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-[#1C4C96]" />
               <span>
                 {isEn
@@ -531,26 +537,48 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   : `Selecione o Dia (${getDayLabel(selectedDay, currentLanguage)})`}
               </span>
             </span>
+
+            {/* Today's Focus Pill Indicator */}
+            {selectedDay !== todayDay ? (
+              <button
+                type="button"
+                onClick={() => onSelectDay(todayDay)}
+                className="text-[10px] font-extrabold text-[#000035] bg-[#F4CA54] hover:bg-[#e0b840] px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition shadow-xs"
+                title={isEn ? "Jump directly to today's focus" : 'Ir diretamente para o foco de hoje'}
+              >
+                <Sparkles className="w-3 h-3 text-[#000035]" />
+                <span>{isEn ? "Today's Focus" : 'Foco de Hoje'}</span>
+              </button>
+            ) : (
+              <span className="text-[10px] font-extrabold text-[#000035] bg-[#F4CA54] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                <Sparkles className="w-3 h-3 text-[#000035]" />
+                <span>{isEn ? "Today's Focus" : 'Foco de Hoje'}</span>
+              </span>
+            )}
           </div>
 
-          {/* 7 Days Buttons Grid */}
+          {/* 7 Days Buttons Grid with explicit Today Badge */}
           <div className="grid grid-cols-7 gap-1">
             {DAYS_OF_WEEK.map((day) => {
               const isSelected = selectedDay === day;
+              const isToday = day === todayDay;
               const dayCount = (routinesByDay[day] || []).length;
               return (
                 <button
                   key={day}
                   type="button"
                   onClick={() => onSelectDay(day)}
-                  className={`py-2 px-1 rounded-xl text-center transition flex flex-col items-center justify-center cursor-pointer ${
+                  className={`py-2 px-1 rounded-xl text-center transition flex flex-col items-center justify-center cursor-pointer relative ${
                     isSelected
-                      ? 'bg-[#000035] text-white shadow-sm border border-[#1C4C96]'
+                      ? 'bg-[#000035] text-white shadow-sm border-2 border-[#1C4C96]'
+                      : isToday
+                      ? 'bg-amber-50/80 hover:bg-amber-100 text-[#000035] border-2 border-[#F4CA54]'
                       : 'bg-slate-50 hover:bg-[#9AB4FF]/20 text-[#000035] border border-slate-200'
                   }`}
                 >
-                  <span className="text-[10px] font-black uppercase">
+                  <span className="text-[10px] font-black uppercase flex items-center gap-0.5">
                     {getDayShortLabel(day, currentLanguage)}
+                    {isToday && <span className="w-1.5 h-1.5 rounded-full bg-[#F4CA54] inline-block" />}
                   </span>
                   <span
                     className={`text-[9px] font-bold ${
@@ -559,6 +587,11 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   >
                     {dayCount}
                   </span>
+                  {isToday && (
+                    <span className="text-[7px] font-black uppercase px-1 rounded-full bg-[#F4CA54] text-[#000035] leading-tight mt-0.5">
+                      {isEn ? 'Today' : 'Hoje'}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -568,18 +601,31 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-slate-100">
             <button
               type="button"
-              onClick={handleJumpWeekdays}
-              className="text-[#1C4C96] hover:underline font-bold cursor-pointer"
+              onClick={() => onSelectDay(todayDay)}
+              className={`font-black cursor-pointer hover:underline flex items-center gap-1 ${
+                selectedDay === todayDay ? 'text-[#000035]' : 'text-[#1C4C96]'
+              }`}
             >
-              {isEn ? 'Mon to Fri (Weekdays)' : 'Seg a Sex (Dias úteis)'}
+              <Star className="w-3 h-3 text-[#F4CA54] fill-[#F4CA54]" />
+              <span>{isEn ? `Today (${getDayShortLabel(todayDay, currentLanguage)})` : `Hoje (${getDayShortLabel(todayDay, currentLanguage)})`}</span>
             </button>
-            <button
-              type="button"
-              onClick={handleJumpWeekends}
-              className="text-[#607EC9] hover:underline font-bold cursor-pointer"
-            >
-              {isEn ? 'Sat & Sun (Weekends)' : 'Sáb e Dom (Fim de semana)'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleJumpWeekdays}
+                className="text-[#607EC9] hover:underline font-bold cursor-pointer"
+              >
+                {isEn ? 'Mon-Fri' : 'Seg-Sex'}
+              </button>
+              <span className="text-slate-300">•</span>
+              <button
+                type="button"
+                onClick={handleJumpWeekends}
+                className="text-[#607EC9] hover:underline font-bold cursor-pointer"
+              >
+                {isEn ? 'Sat-Sun' : 'Sáb-Dom'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1484,6 +1530,106 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           </div>
         </div>
       </div>
+
+      {/* Start New Week Confirmation Modal */}
+      {isNewWeekModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-[#607EC9]/40 space-y-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-[#000035] text-[#F4CA54] flex items-center justify-center shrink-0 border border-[#1C4C96]">
+                  <RotateCcw className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-[#000035]">
+                    {isEn ? `Start Week ${weeklyCycle + 1}` : `Iniciar Semana ${weeklyCycle + 1}`}
+                  </h3>
+                  <p className="text-xs text-[#607EC9] font-medium mt-0.5">
+                    {isEn ? 'Advance weekly cycle & reset focus' : 'Avançar ciclo semanal & renovar conteúdos'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsNewWeekModalOpen(false)}
+                disabled={isStartingNewWeek}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-[#000035] space-y-2">
+              <p className="font-bold flex items-center gap-1.5 text-[#1C4C96]">
+                <Sparkles className="w-4 h-4 text-[#F4CA54]" />
+                {isEn ? 'What happens when you start a new week?' : 'O que acontece ao iniciar uma nova semana?'}
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-slate-600 pl-1">
+                <li>
+                  {isEn
+                    ? 'Current week videos & audio tracks are archived in your history (no duplicate content).'
+                    : 'Vídeos e faixas atuais são arquivados no seu histórico pessoal (sem repetições).'}
+                </li>
+                <li>
+                  {isEn
+                    ? '7 brand new YouTube educational videos and 7 Spotify songs matching your level will be assigned.'
+                    : '7 novos vídeos do YouTube e 7 faixas do Spotify serão gerados conforme seu nível.'}
+                </li>
+                <li>
+                  {isEn
+                    ? 'The 7-day routine checklist is refreshed for the fresh cycle.'
+                    : 'O checklist de 7 dias é renovado para registrar sua evolução contínua.'}
+                </li>
+                <li>
+                  {isEn
+                    ? 'Automatically positions focus on today.'
+                    : 'Posicionamento automático imediato no dia de hoje.'}
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsNewWeekModalOpen(false)}
+                disabled={isStartingNewWeek}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                {isEn ? 'Cancel' : 'Cancelar'}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!onStartNewWeek) return;
+                  setIsStartingNewWeek(true);
+                  try {
+                    await onStartNewWeek();
+                    setIsNewWeekModalOpen(false);
+                  } catch (err) {
+                    console.warn('Error starting new week:', err);
+                  } finally {
+                    setIsStartingNewWeek(false);
+                  }
+                }}
+                disabled={isStartingNewWeek}
+                className="px-5 py-2 text-xs font-black bg-[#000035] hover:bg-[#062863] text-white rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer border border-[#1C4C96]"
+              >
+                {isStartingNewWeek ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-[#F4CA54]" />
+                    <span>{isEn ? 'Starting...' : 'Iniciando...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-[#F4CA54]" />
+                    <span>{isEn ? 'Yes, Start New Week' : 'Sim, Iniciar Nova Semana'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

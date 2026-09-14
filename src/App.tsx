@@ -29,6 +29,7 @@ import {
   DEFAULT_STUDENT_TIMEZONE,
   DEFAULT_TEACHER_TIMEZONE,
 } from './utils/timezone';
+import { getTodayDayOfWeek } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
 
 // Components
@@ -201,10 +202,14 @@ export default function App() {
     createDefaultStudentProfile(currentAccount)
   );
 
-  // 4. Routines State by Day
+  // 4. Routines State by Day (Auto-positions on today's focus)
   const [routinesByDay, setRoutinesByDay] = useState<Record<DayOfWeek, RoutineItem[]>>(defaultRoutinesByDay);
-  const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
-  const [selectedActivityId, setSelectedActivityId] = useState<string>('m1');
+  const [selectedDay, setSelectedDay] = useState<DayOfWeek>(() => getTodayDayOfWeek());
+  const [selectedActivityId, setSelectedActivityId] = useState<string>(() => {
+    const today = getTodayDayOfWeek();
+    const todayActs = defaultRoutinesByDay[today];
+    return todayActs && todayActs.length > 0 ? todayActs[0].id : 'm1';
+  });
 
   // 5. Live Lessons State
   const [lessons, setLessons] = useState<LiveLesson[]>([]);
@@ -493,7 +498,16 @@ export default function App() {
           // Apply this specific student's registered routine times
           const vidTime = loadedProfile?.routineVideoTime;
           const audTime = loadedProfile?.routineAudioTime;
-          setRoutinesByDay(applyProfileTimesToRoutines(baseRoutines, vidTime, audTime));
+          const finalRoutines = applyProfileTimesToRoutines(baseRoutines, vidTime, audTime);
+          setRoutinesByDay(finalRoutines);
+
+          // Auto-position on today's focus
+          const today = getTodayDayOfWeek();
+          setSelectedDay(today);
+          const todayItems = finalRoutines[today] || [];
+          if (todayItems.length > 0) {
+            setSelectedActivityId(todayItems[0].id);
+          }
         } catch (err) {
           console.warn('Could not fetch student data:', err);
         }
@@ -891,6 +905,64 @@ export default function App() {
       // local fallback
     }
   };
+
+  // Handler: Start New Week (Rotates assignments, moves consumed to history, increments weeklyCycle, resets week checks)
+  const handleStartNewWeek = useCallback(async () => {
+    const studentEmail = currentAccount?.email || userProfile?.email || '';
+    const uid = currentAccount?.uid || userProfile?.id || '';
+    try {
+      const res = await fetch('/api/student-routines/start-new-week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail,
+          uid,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.routines) {
+          const vidTime = userProfile?.routineVideoTime;
+          const audTime = userProfile?.routineAudioTime;
+          const finalRoutines = applyProfileTimesToRoutines(data.routines, vidTime, audTime);
+          setRoutinesByDay(finalRoutines);
+        }
+        if (data.weeklyCycle !== undefined) {
+          setUserProfile((prev) => ({
+            ...prev,
+            weeklyCycle: data.weeklyCycle,
+          }));
+        }
+
+        // Automatic positioning on Today
+        const today = getTodayDayOfWeek();
+        setSelectedDay(today);
+        if (data.routines && data.routines[today] && data.routines[today].length > 0) {
+          setSelectedActivityId(data.routines[today][0].id);
+        }
+
+        setNotifications((prev) => [
+          {
+            id: `new-week-${Date.now()}`,
+            title: currentLanguage === 'en'
+              ? `🎉 Week ${data.weeklyCycle || (userProfile?.weeklyCycle || 1) + 1} Started!`
+              : `🎉 Semana ${data.weeklyCycle || (userProfile?.weeklyCycle || 1) + 1} Iniciada!`,
+            message: currentLanguage === 'en'
+              ? 'Fresh curated YouTube videos and Spotify audios have been assigned. Content from prior weeks is archived to prevent repeats.'
+              : 'Novos vídeos do YouTube e áudios do Spotify foram atribuídos. Conteúdos de semanas anteriores foram arquivados para evitar repetições.',
+            type: 'success',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+        return true;
+      }
+    } catch (err) {
+      console.warn('Could not start new week:', err);
+    }
+    return false;
+  }, [currentAccount?.email, currentAccount?.uid, userProfile?.email, userProfile?.id, userProfile?.routineVideoTime, userProfile?.routineAudioTime, userProfile?.weeklyCycle, currentLanguage]);
 
   // Handler: Teacher saves video & Spotify for activity
   const handleTeacherSaveVideos = async (
@@ -2643,6 +2715,8 @@ export default function App() {
                   currentLanguage={currentLanguage}
                   t={t}
                   onAssignVideoToActivity={handleAssignVideoToActivity}
+                  weeklyCycle={userProfile?.weeklyCycle || 1}
+                  onStartNewWeek={handleStartNewWeek}
                 />
 
                 {/* Section 3: Weekly Activity (Image 3) */}
@@ -2658,6 +2732,7 @@ export default function App() {
                   onUpdateUserProfile={(partial) => {
                     handleSaveStudentProfile({ ...userProfile, ...partial });
                   }}
+                  onStartNewWeek={handleStartNewWeek}
                 />
               </div>
             )}

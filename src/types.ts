@@ -201,6 +201,7 @@ export interface UserProfile {
   lastActiveDate?: string;
   languagePreference?: Language;
   weeklyNativeLessonsTarget?: number;
+  weeklyCycle?: number;
   dailyJournalEntries?: DailyJournalEntry[];
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
 }
@@ -213,6 +214,7 @@ export interface StudentProfile {
   contractedLessons?: number;
   completedLessonsCount?: number;
   goal?: string;
+  weeklyCycle?: number;
   activeSince?: string;
   createdAt?: string;
 }
