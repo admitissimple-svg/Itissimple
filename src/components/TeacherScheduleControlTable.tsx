@@ -4,7 +4,6 @@ import {
   Clock,
   Video,
   User,
-  CheckCircle,
   AlertTriangle,
   Settings,
   CalendarPlus,
@@ -208,9 +207,9 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
 
   return (
     <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-xs p-3.5 sm:p-5 space-y-4" id="teacher-schedule-control-table">
-      {/* 🌟 Native Friend Profile & Approval Status Header Card */}
+      {/* 🌟 Native Friend Profile Card */}
       {tutorProfile && (
-        <div className="bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] rounded-2xl p-4 sm:p-5 text-white border border-[#9AB4FF]/40 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] rounded-2xl p-4 sm:p-5 text-white border border-[#9AB4FF]/40 shadow-sm flex items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
             <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border-2 border-[#F4CA54] shrink-0 bg-white/10 shadow-md flex items-center justify-center">
               {tutorProfile.avatar && tutorProfile.avatar.trim() !== '' ? (
@@ -231,57 +230,17 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                 <h2 className="text-base sm:text-lg font-black text-white">
                   {tutorProfile.name}
                 </h2>
-                <span className="text-base">{tutorProfile.flag}</span>
-                <span className="text-xs text-[#9AB4FF] font-medium">
-                  {tutorProfile.country} • {tutorProfile.accent}
-                </span>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#1C4C96]/60 text-[#F4CA54] border border-[#9AB4FF]/30 flex items-center gap-1">
                   <Globe className="w-3 h-3 text-[#F4CA54]" />
                   <span>{getTimezoneDisplayLabel(resolvedTutorTz, 'en')}</span>
                 </span>
               </div>
-              <p className="text-xs text-white/90 line-clamp-1 mt-0.5 max-w-xl">
-                {tutorProfile.headline || tutorProfile.bio}
-              </p>
-              <div className="flex items-center gap-3 mt-1.5 text-xs text-[#9AB4FF]">
-                <span className="font-bold text-[#F4CA54]">
-                  ${tutorProfile.pricePerSessionUsd}/lesson (R$ {tutorProfile.pricePerSessionBrl})
-                </span>
-                <span>•</span>
-                <span>{tutorProfile.email}</span>
-              </div>
+              {(tutorProfile.headline || tutorProfile.bio) && (
+                <p className="text-xs text-white/90 line-clamp-1 mt-0.5 max-w-xl">
+                  {tutorProfile.headline || tutorProfile.bio}
+                </p>
+              )}
             </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2.5 w-full md:w-auto shrink-0">
-            {/* Approval Status Badge */}
-            {tutorProfile.approvalStatus === 'approved' ? (
-              <div className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400 text-emerald-200 text-xs font-bold flex items-center gap-1.5">
-                <CheckCircle className="w-4 h-4 text-emerald-400" />
-                <span>Profile Approved & Active</span>
-              </div>
-            ) : tutorProfile.approvalStatus === 'rejected' ? (
-              <div className="px-3 py-1.5 rounded-xl bg-rose-500/20 border border-rose-400 text-rose-200 text-xs font-bold flex items-center gap-1.5">
-                <X className="w-4 h-4 text-rose-400" />
-                <span>Registration Declined</span>
-              </div>
-            ) : (
-              <div className="px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-400 text-amber-200 text-xs font-bold flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
-                <span>Awaiting Administrator Approval</span>
-              </div>
-            )}
-
-            {onOpenEditProfile && (
-              <button
-                type="button"
-                onClick={onOpenEditProfile}
-                className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-[#000035] font-black text-xs transition cursor-pointer shadow-xs flex items-center gap-1.5"
-              >
-                <Edit3 className="w-3.5 h-3.5 text-[#1C4C96]" />
-                <span>Edit My Profile</span>
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -319,14 +278,14 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
             </button>
           )}
 
-          {!tutorProfile && onOpenEditProfile && (
+          {onOpenEditProfile && (
             <button
               type="button"
               onClick={onOpenEditProfile}
-              className="px-3 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs border border-[#9AB4FF]/40"
+              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-[#000035] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs border border-[#607EC9]/40"
             >
-              <Edit3 className="w-3.5 h-3.5 text-[#9AB4FF]" />
-              <span>Edit Profile</span>
+              <Edit3 className="w-3.5 h-3.5 text-[#1C4C96]" />
+              <span>Edit My Profile</span>
             </button>
           )}
 
