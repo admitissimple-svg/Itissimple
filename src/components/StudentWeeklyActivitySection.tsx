@@ -308,54 +308,23 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
 
   return (
     <div className="space-y-4" id="weekly-activity-section">
-      {/* 1. Header Banner */}
-      <div className="bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] text-white rounded-3xl p-5 border border-[#1C4C96] shadow-md">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center shrink-0 border border-[#9AB4FF]/40 shadow-xs">
-            <BookOpen className="w-5 h-5 text-[#9AB4FF]" />
-          </div>
-          <div>
-            <h2 className="text-base font-black text-white tracking-tight">
-              {isEn ? 'Weekly Activity' : 'Atividade Semanal'}
-            </h2>
-            <p className="text-xs text-[#9AB4FF]/85 mt-0.5">
-              {isEn
-                ? 'Review your vocabulary, practice interactive exercises, and track your weekly S-path fluency.'
-                : 'Revise seu vocabulário, pratique exercícios interativos e acompanhe o avanço do seu S da fluência.'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 2. Top Card: Memorization Activity — Routine Vocabulary */}
+      {/* 1. Memorization Activity Card */}
       <div className="bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] text-white rounded-3xl p-5 sm:p-6 border border-[#1C4C96] shadow-md space-y-5">
         {/* Banner Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#607EC9]/40 pb-4">
-          <div className="flex items-start gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-[#1C4C96] text-white flex items-center justify-center shrink-0 border border-[#9AB4FF]/50 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#607EC9]/40 pb-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-[#1C4C96] text-white flex items-center justify-center shrink-0 border border-[#9AB4FF]/50 shadow-xs">
               <BookOpen className="w-5 h-5 text-[#9AB4FF]" />
             </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm sm:text-base font-black text-white tracking-tight">
-                  {isEn
-                    ? 'Memorization Activity — Routine Vocabulary'
-                    : 'Atividade de Memorização — Vocabulário da Rotina'}
-                </h3>
-                <span className="text-[10px] font-extrabold px-2.5 py-0.5 bg-[#000035]/60 text-[#9AB4FF] border border-[#9AB4FF]/40 rounded-full uppercase tracking-wider">
-                  {isEn ? 'Weekly Memorization Review' : 'Revisão Semanal de Memorização'}
-                </span>
-              </div>
-              <p className="text-xs text-[#9AB4FF]/85 leading-relaxed max-w-2xl">
-                {isEn
-                  ? 'All words and expressions you typed during your Monday-to-Sunday routines are gathered here into light, engaging memorization exercises, phrases, and text.'
-                  : 'Todas as palavras e expressões que você digitou durante suas rotinas de segunda a domingo estão reunidas aqui em exercícios leves de fixação, frases e texto.'}
-              </p>
+            <div>
+              <h3 className="text-sm sm:text-base font-black text-white tracking-tight">
+                {isEn ? 'Memorization Activity' : 'Atividade de Memorização'}
+              </h3>
             </div>
           </div>
 
           {/* Right Action Buttons */}
-          <div className="flex items-center gap-2.5 shrink-0 self-start md:self-auto">
+          <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-auto">
             <button
               type="button"
               onClick={onOpenDictionaryModal}
