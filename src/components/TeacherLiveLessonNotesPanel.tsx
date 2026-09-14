@@ -485,16 +485,13 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
 
           {/* Real-Time Vocabulary Table Section */}
           <div className="p-4 sm:p-5 bg-white rounded-2xl border-2 border-[#9AB4FF]/40 shadow-xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-200">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
               <div className="flex items-center gap-2">
                 <BookOpen className="w-5 h-5 text-[#1C4C96]" />
                 <span className="font-black text-sm text-[#000035] tracking-wider uppercase">
                   Real-Time Vocabulary Table ({vocabList.length})
                 </span>
               </div>
-              <span className="text-[11px] text-slate-500 font-medium">
-                Type any word below and press <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-[10px] font-bold">Enter</kbd> or <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-[10px] font-bold">Tab</kbd> for instant simplified English definition and example sentence
-              </span>
             </div>
 
             {/* Quick Word Input Bar */}
