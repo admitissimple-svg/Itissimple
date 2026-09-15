@@ -78,9 +78,27 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
       },
       "required": ["teacherEmail"]
+    },
+    "AppState": {
+      "title": "AppState",
+      "description": "Server synchronization state document across application instances",
+      "type": "object",
+      "properties": {
+        "teachers": { "type": "array", "description": "Teacher accounts" },
+        "students": { "type": "array", "description": "Student accounts" },
+        "tutorsList": { "type": "array", "description": "Tutors listing" },
+        "liveLessons": { "type": "array", "description": "Scheduled live lessons" },
+        "routinesByDay": { "type": "object", "description": "Weekly routines by day" },
+        "userProfiles": { "type": "object", "description": "Saved user profiles" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last synchronization timestamp" }
+      }
     }
   },
   "firestore": {
+    "/app_state/{docId}": {
+      "schema": "AppState",
+      "description": "Application state document for server synchronization"
+    },
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profiles partitioned by user UID"
