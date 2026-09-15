@@ -69,6 +69,8 @@ interface AppDb {
   dictionary: Record<string, any>;
   studentWeeklyChecks: Record<string, Record<string, boolean>>;
   weeklyNativeTargets?: Record<string, number>;
+  weeklyStudyDaysTargets?: Record<string, number>;
+  weeklyStudyDays?: Record<string, string[]>;
   studentDictionaryMap?: Record<string, any[]>;
   authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
   transactions?: any[];
@@ -3587,12 +3589,30 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
   const studentEmail = ((req.body.studentEmail as string) || (req.body.email as string) || '').toLowerCase().trim();
   const uid = ((req.body.uid as string) || (req.body.studentUid as string) || '').trim();
   const rawLevel = (req.body.level as string) || '';
+  const weeklyStudyDaysTarget =
+    typeof req.body.weeklyStudyDaysTarget === 'number' && req.body.weeklyStudyDaysTarget >= 1 && req.body.weeklyStudyDaysTarget <= 7
+      ? req.body.weeklyStudyDaysTarget
+      : undefined;
+  const weeklyStudyDays = Array.isArray(req.body.weeklyStudyDays) ? req.body.weeklyStudyDays : undefined;
 
   const resolved = resolveStudentIdentifiers(db, studentEmail, uid);
   const targetKeys = Array.from(new Set([resolved.uid, resolved.email, studentEmail, uid].filter(Boolean) as string[]));
 
   if (targetKeys.length === 0) {
     return res.status(400).json({ error: 'Missing student identifier (email or uid)' });
+  }
+
+  // Persist weeklyStudyDaysTarget and weeklyStudyDays if provided
+  if (!db.weeklyStudyDaysTargets) db.weeklyStudyDaysTargets = {};
+  if (!db.weeklyStudyDays) db.weeklyStudyDays = {};
+  targetKeys.forEach((k) => {
+    if (weeklyStudyDaysTarget) db.weeklyStudyDaysTargets[k] = weeklyStudyDaysTarget;
+    if (weeklyStudyDays) db.weeklyStudyDays[k] = weeklyStudyDays;
+  });
+
+  if (resolved.email && db.userProfiles?.[resolved.email]) {
+    if (weeklyStudyDaysTarget) db.userProfiles[resolved.email].weeklyStudyDaysTarget = weeklyStudyDaysTarget;
+    if (weeklyStudyDays) db.userProfiles[resolved.email].weeklyStudyDays = weeklyStudyDays;
   }
 
   // 1. Move all currently assigned videos and tracks to consumed history
@@ -3644,7 +3664,12 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
   if (db.students) {
     db.students = db.students.map((s: any) => {
       if (s.email?.toLowerCase() === resolved.email || (resolved.uid && s.uid === resolved.uid)) {
-        return { ...s, weeklyCycle: nextCycle };
+        return {
+          ...s,
+          weeklyCycle: nextCycle,
+          weeklyStudyDaysTarget: weeklyStudyDaysTarget || s.weeklyStudyDaysTarget,
+          weeklyStudyDays: weeklyStudyDays || s.weeklyStudyDays,
+        };
       }
       return s;
     });
@@ -3676,6 +3701,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
       email: resolved.email,
       level: studentLevel,
       weeklyCycle: nextCycle,
+      weeklyStudyDaysTarget: weeklyStudyDaysTarget || db.weeklyStudyDaysTargets?.[resolved.uid] || 7,
+      weeklyStudyDays: weeklyStudyDays || db.weeklyStudyDays?.[resolved.uid] || [],
       videoAssignments: newVideos,
       spotifyAssignments: newTracks,
       routines,
@@ -3689,6 +3716,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
   res.json({
     success: true,
     weeklyCycle: nextCycle,
+    weeklyStudyDaysTarget: weeklyStudyDaysTarget || db.weeklyStudyDaysTargets?.[resolved.email] || 7,
+    weeklyStudyDays: weeklyStudyDays || db.weeklyStudyDays?.[resolved.email] || [],
     message: 'New weekly cycle activated successfully',
     routines,
     videoAssignments: newVideos,
@@ -5013,6 +5042,104 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
 
   let chosenVideo: any = null;
 
+  // If requesting to repeat previous video
+  if (playlistId === 'repeat_previous_video') {
+    const daysOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const currentIdx = daysOrder.indexOf(targetDay);
+
+    // 1. Search earlier days in this week's assignments
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      const prevDay = daysOrder[i];
+      const prevAssign = userAssignments.find((a: any) => a.day === prevDay && (a.videoId || a.videoUrl));
+      if (prevAssign) {
+        const pVidId = extractServerYouTubeId(prevAssign.videoId || prevAssign.videoUrl);
+        chosenVideo = {
+          videoId: pVidId,
+          url: prevAssign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
+          title: prevAssign.videoTitle || prevAssign.title || `Repeated Video (${prevDay})`,
+          duration: prevAssign.duration || '5-10 min',
+          instructions: `Repeated from ${prevDay}`,
+        };
+        break;
+      }
+    }
+
+    // 2. Search routines if not in assignments
+    if (!chosenVideo) {
+      const routineObj =
+        (cleanEmail && db.studentRoutinesMap?.[cleanEmail]) ||
+        (uid && db.studentRoutinesMap?.[uid]) ||
+        db.routinesByDay ||
+        defaultRoutinesByDay;
+      for (let i = currentIdx - 1; i >= 0; i--) {
+        const prevDay = daysOrder[i];
+        const dayActs = routineObj[prevDay] || [];
+        for (const act of dayActs) {
+          const v = act.teacherVideos?.[0];
+          if (v && (v.videoId || v.url)) {
+            const pVidId = extractServerYouTubeId(v.videoId || v.url);
+            chosenVideo = {
+              videoId: pVidId,
+              url: v.url || `https://www.youtube.com/watch?v=${pVidId}`,
+              title: v.title || `Repeated Video (${prevDay})`,
+              duration: v.duration || '5-10 min',
+              instructions: `Repeated from ${prevDay}`,
+            };
+            break;
+          }
+        }
+        if (chosenVideo) break;
+      }
+    }
+
+    // 3. If today is Monday or earlier days had no video, check previous week days backwards
+    if (!chosenVideo) {
+      for (let i = daysOrder.length - 1; i > currentIdx; i--) {
+        const d = daysOrder[i];
+        const prevAssign = userAssignments.find((a: any) => a.day === d && (a.videoId || a.videoUrl));
+        if (prevAssign) {
+          const pVidId = extractServerYouTubeId(prevAssign.videoId || prevAssign.videoUrl);
+          chosenVideo = {
+            videoId: pVidId,
+            url: prevAssign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
+            title: prevAssign.videoTitle || prevAssign.title || `Repeated Video (${d})`,
+            duration: prevAssign.duration || '5-10 min',
+            instructions: `Repeated from ${d}`,
+          };
+          break;
+        }
+      }
+    }
+
+    // 4. Fallback to userWatched last entry
+    if (!chosenVideo && userWatched.length > 0) {
+      const lastWatchedId = userWatched[userWatched.length - 1];
+      chosenVideo = {
+        videoId: lastWatchedId,
+        url: `https://www.youtube.com/watch?v=${lastWatchedId}`,
+        title: 'Repeated Previous Video',
+        duration: '5-10 min',
+        instructions: 'Repeated from watched history',
+      };
+    }
+
+    // 5. Fallback to curriculum previous day
+    if (!chosenVideo) {
+      const prevDayIdx = (currentIdx - 1 + 7) % 7;
+      const prevDay = daysOrder[prevDayIdx];
+      const fallbackVid = levelCurriculum.videos[prevDay];
+      if (fallbackVid) {
+        chosenVideo = {
+          videoId: fallbackVid.videoId,
+          url: fallbackVid.url,
+          title: fallbackVid.title,
+          duration: fallbackVid.duration || '5-10 min',
+          instructions: `Repeated from ${prevDay}`,
+        };
+      }
+    }
+  }
+
   // If a custom videoUrl was provided explicitly
   if (videoUrl) {
     const manualId = extractServerYouTubeId(videoUrl);
@@ -5072,8 +5199,8 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
       chosenVideo.teacherTipPt ||
       `Vídeo exclusivo do dia. Assista com atenção e anote 5 novas palavras.`,
     addedAt: new Date().toISOString(),
-    playlistId: playlist?.id || levelCurriculum.playlistId,
-    playlistTitle: playlist?.title || levelCurriculum.playlistTitle,
+    playlistId: playlistId === 'repeat_previous_video' ? 'repeat_previous_video' : (playlist?.id || levelCurriculum.playlistId),
+    playlistTitle: playlistId === 'repeat_previous_video' ? 'Repeat Previous Video' : (playlist?.title || levelCurriculum.playlistTitle),
   };
 
   const assignmentRecord = {
@@ -5282,7 +5409,7 @@ app.get('/api/routines/weekly-checks', (req, res) => {
   const db = readDb();
   const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
   if (!studentEmail) {
-    return res.json({ checks: {}, weeklyNativeLessonsTarget: 1 });
+    return res.json({ checks: {}, weeklyNativeLessonsTarget: 1, weeklyStudyDaysTarget: 7, weeklyStudyDays: [] });
   }
   const checks = (db.studentWeeklyChecks && db.studentWeeklyChecks[studentEmail]) || {};
   const userProf = (db.userProfiles && db.userProfiles[studentEmail]) || {};
@@ -5290,12 +5417,20 @@ app.get('/api/routines/weekly-checks', (req, res) => {
     (db.weeklyNativeTargets && db.weeklyNativeTargets[studentEmail]) ||
     userProf.weeklyNativeLessonsTarget ||
     1;
-  res.json({ checks, weeklyNativeLessonsTarget });
+  const weeklyStudyDaysTarget =
+    (db.weeklyStudyDaysTargets && db.weeklyStudyDaysTargets[studentEmail]) ||
+    userProf.weeklyStudyDaysTarget ||
+    7;
+  const weeklyStudyDays =
+    (db.weeklyStudyDays && db.weeklyStudyDays[studentEmail]) ||
+    userProf.weeklyStudyDays ||
+    ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  res.json({ checks, weeklyNativeLessonsTarget, weeklyStudyDaysTarget, weeklyStudyDays });
 });
 
 app.post('/api/routines/weekly-checks', (req, res) => {
   const db = readDb();
-  const { studentEmail, checks, weeklyNativeLessonsTarget } = req.body;
+  const { studentEmail, checks, weeklyNativeLessonsTarget, weeklyStudyDaysTarget, weeklyStudyDays } = req.body;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   if (cleanEmail) {
     if (checks && typeof checks === 'object') {
@@ -5313,6 +5448,24 @@ app.post('/api/routines/weekly-checks', (req, res) => {
         db.userProfiles[cleanEmail].weeklyNativeLessonsTarget = weeklyNativeLessonsTarget;
       }
     }
+    if (typeof weeklyStudyDaysTarget === 'number' && weeklyStudyDaysTarget >= 1 && weeklyStudyDaysTarget <= 7) {
+      if (!db.weeklyStudyDaysTargets) {
+        db.weeklyStudyDaysTargets = {};
+      }
+      db.weeklyStudyDaysTargets[cleanEmail] = weeklyStudyDaysTarget;
+      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail].weeklyStudyDaysTarget = weeklyStudyDaysTarget;
+      }
+    }
+    if (Array.isArray(weeklyStudyDays)) {
+      if (!db.weeklyStudyDays) {
+        db.weeklyStudyDays = {};
+      }
+      db.weeklyStudyDays[cleanEmail] = weeklyStudyDays;
+      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail].weeklyStudyDays = weeklyStudyDays;
+      }
+    }
     writeDb(db);
   }
   const savedChecks = (db.studentWeeklyChecks && db.studentWeeklyChecks[cleanEmail]) || {};
@@ -5320,7 +5473,21 @@ app.post('/api/routines/weekly-checks', (req, res) => {
     (db.weeklyNativeTargets && db.weeklyNativeTargets[cleanEmail]) ||
     (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyNativeLessonsTarget) ||
     1;
-  res.json({ success: true, checks: savedChecks, weeklyNativeLessonsTarget: savedTarget });
+  const savedStudyTarget =
+    (db.weeklyStudyDaysTargets && db.weeklyStudyDaysTargets[cleanEmail]) ||
+    (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyStudyDaysTarget) ||
+    7;
+  const savedStudyDays =
+    (db.weeklyStudyDays && db.weeklyStudyDays[cleanEmail]) ||
+    (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyStudyDays) ||
+    [];
+  res.json({
+    success: true,
+    checks: savedChecks,
+    weeklyNativeLessonsTarget: savedTarget,
+    weeklyStudyDaysTarget: savedStudyTarget,
+    weeklyStudyDays: savedStudyDays,
+  });
 });
 
 // 8. Homework Endpoints

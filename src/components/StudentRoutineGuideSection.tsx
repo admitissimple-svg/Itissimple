@@ -27,7 +27,9 @@ import {
   RotateCcw,
   Star,
   RefreshCw,
+  Target,
 } from 'lucide-react';
+import { StartNewWeekModal } from './StartNewWeekModal';
 import {
   DayOfWeek,
   Language,
@@ -90,7 +92,7 @@ interface StudentRoutineGuideSectionProps {
   currentLanguage: Language;
   t: Translations;
   onAssignVideoToActivity?: (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => void;
-  onStartNewWeek?: () => Promise<boolean | void> | void;
+  onStartNewWeek?: (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => Promise<boolean | void> | void;
   weeklyCycle?: number;
 }
 
@@ -440,6 +442,137 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       return;
     }
 
+    // Behavior for "Repeat Previous Video" / "Repetir Vídeo Anterior"
+    if (playlistId === 'repeat_previous_video') {
+      setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: false }));
+      setSuggestingUrlActivityId(null);
+      setLoadingPlaylistAssignId(activityId);
+      setPlaylistFeedback(null);
+
+      // 1. Search prior study days in the week from routinesByDay
+      const daysOrder: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const currentIdx = daysOrder.indexOf(selectedDay);
+      let prevVideo: TeacherAssignedVideo | null = null;
+      let prevDayName = '';
+
+      for (let i = currentIdx - 1; i >= 0; i--) {
+        const d = daysOrder[i];
+        const dayActs = routinesByDay[d] || [];
+        for (const a of dayActs) {
+          const v = a.teacherVideos?.[0];
+          if (v && (v.url || v.videoId)) {
+            prevVideo = v;
+            prevDayName = getDayLabel(d, currentLanguage);
+            break;
+          }
+        }
+        if (prevVideo) break;
+      }
+
+      // Check later days backwards (e.g. from Sunday) if current day is Monday
+      if (!prevVideo) {
+        for (let i = daysOrder.length - 1; i > currentIdx; i--) {
+          const d = daysOrder[i];
+          const dayActs = routinesByDay[d] || [];
+          for (const a of dayActs) {
+            const v = a.teacherVideos?.[0];
+            if (v && (v.url || v.videoId)) {
+              prevVideo = v;
+              prevDayName = getDayLabel(d, currentLanguage);
+              break;
+            }
+          }
+          if (prevVideo) break;
+        }
+      }
+
+      // Fallback: curriculum default for previous day
+      if (!prevVideo) {
+        const prevDayIdx = (currentIdx - 1 + 7) % 7;
+        const prevDayKey = daysOrder[prevDayIdx];
+        const normLevel = normalizeStudentLevel(userProfile?.level || 'beginner');
+        const fallbackCurriculumVid = getDailyYouTubeVideoForStudent(normLevel, prevDayKey);
+        if (fallbackCurriculumVid) {
+          prevVideo = {
+            id: `vid-${selectedDay}-repeat-${Date.now()}`,
+            url: fallbackCurriculumVid.url,
+            videoId: fallbackCurriculumVid.videoId,
+            title: fallbackCurriculumVid.title,
+            duration: fallbackCurriculumVid.duration || '5-10 min',
+            instructions: isEn ? `Repeated video practice from ${getDayLabel(prevDayKey, 'en')}.` : `Prática de repetição do vídeo de ${getDayLabel(prevDayKey, 'pt')}.`,
+            addedAt: new Date().toISOString(),
+          };
+          prevDayName = getDayLabel(prevDayKey, currentLanguage);
+        }
+      }
+
+      const studentEmail = userProfile?.email || 'aluno@itssimple.com';
+      try {
+        const res = await fetch('/api/student-video-assignments/assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentEmail,
+            playlistId: 'repeat_previous_video',
+            activityId,
+            day: selectedDay,
+            videoUrl: prevVideo?.url,
+          }),
+        });
+
+        const data = await res.json();
+        const finalVideo: TeacherAssignedVideo = data.video || prevVideo || {
+          id: `vid-${selectedDay}-repeat-${Date.now()}`,
+          url: prevVideo?.url || 'https://www.youtube.com/watch?v=V1bFr2KGq1g',
+          videoId: extractYouTubeVideoId(prevVideo?.url || '') || 'V1bFr2KGq1g',
+          title: prevVideo?.title || 'Daily English Video Practice',
+          duration: prevVideo?.duration || '5-10 min',
+          instructions: isEn ? 'Repeated previous video' : 'Vídeo anterior repetido',
+          addedAt: new Date().toISOString(),
+        };
+
+        const repeatedWithMeta: TeacherAssignedVideo = {
+          ...finalVideo,
+          playlistId: 'repeat_previous_video',
+          playlistTitle: isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior',
+        } as any;
+
+        if (onAssignVideoToActivity) {
+          onAssignVideoToActivity(activityId, repeatedWithMeta, selectedDay);
+        }
+
+        setPlaylistFeedback({
+          activityId,
+          type: 'success',
+          message: isEn
+            ? `🔁 Previous video repeated (${prevDayName || 'prior day'})!`
+            : `🔁 Vídeo anterior repetido com sucesso (${prevDayName || 'dia anterior'})!`,
+        });
+        setTimeout(() => setPlaylistFeedback(null), 4500);
+        onSelectActivity(activityId);
+      } catch (err) {
+        console.warn('Error repeating previous video:', err);
+        if (prevVideo && onAssignVideoToActivity) {
+          const repeatedWithMeta: TeacherAssignedVideo = {
+            ...prevVideo,
+            playlistId: 'repeat_previous_video',
+            playlistTitle: isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior',
+          } as any;
+          onAssignVideoToActivity(activityId, repeatedWithMeta, selectedDay);
+          setPlaylistFeedback({
+            activityId,
+            type: 'success',
+            message: isEn ? '🔁 Previous video repeated!' : '🔁 Vídeo anterior repetido com sucesso!',
+          });
+          setTimeout(() => setPlaylistFeedback(null), 4000);
+          onSelectActivity(activityId);
+        }
+      } finally {
+        setLoadingPlaylistAssignId(null);
+      }
+      return;
+    }
+
     // Reset custom suggestion mode if switching to a predefined topic
     setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: false }));
     setSuggestingUrlActivityId(null);
@@ -629,6 +762,17 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 {isEn ? `Week ${weeklyCycle}` : `Semana ${weeklyCycle}`}
               </span>
             </div>
+            {userProfile?.weeklyStudyDaysTarget && (
+              <div
+                className="bg-[#062863] px-2.5 py-1.5 rounded-2xl border border-[#607EC9]/40 flex items-center gap-1 shadow-xs"
+                title={isEn ? `Weekly Study Goal: ${userProfile.weeklyStudyDaysTarget} days/week` : `Meta Semanal: ${userProfile.weeklyStudyDaysTarget} dias/semana`}
+              >
+                <Target className="w-3.5 h-3.5 text-[#F4CA54]" />
+                <span className="text-[11px] font-bold text-[#F4CA54]">
+                  {userProfile.weeklyStudyDaysTarget}{isEn ? 'd/wk' : 'd/sem'}
+                </span>
+              </div>
+            )}
             {onStartNewWeek && (
               <button
                 type="button"
@@ -863,6 +1007,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
                 if (isCustomSuggestion) {
                   currentPlaylistId = 'custom_suggestion';
+                } else if (
+                  (assignedVid as any)?.playlistId === 'repeat_previous_video' ||
+                  (assignedVid as any)?.playlistTitle === 'Repeat Previous Video' ||
+                  (assignedVid as any)?.playlistTitle === 'Repetir Vídeo Anterior' ||
+                  act.activityName === 'Repeat Previous Video' ||
+                  act.activityName === 'Repetir Vídeo Anterior'
+                ) {
+                  currentPlaylistId = 'repeat_previous_video';
                 } else {
                   if (!currentPlaylistId && (assignedVid as any)?.playlistTitle && playlists.length > 0) {
                     const foundPl = playlists.find(
@@ -1034,6 +1186,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                                 {pl.title}
                               </option>
                             ))}
+                            <option value="repeat_previous_video" className="text-[#000035] bg-white font-semibold">
+                              {isEn ? '🔁 Repeat Previous Video' : '🔁 Repetir Vídeo Anterior'}
+                            </option>
                             <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
                               {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
                             </option>
@@ -1787,105 +1942,25 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         </div>
       </div>
 
-      {/* Start New Week Confirmation Modal */}
-      {isNewWeekModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-[#607EC9]/40 space-y-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#000035] text-[#F4CA54] flex items-center justify-center shrink-0 border border-[#1C4C96]">
-                  <RotateCcw className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-[#000035]">
-                    {isEn ? `Start Week ${weeklyCycle + 1}` : `Iniciar Semana ${weeklyCycle + 1}`}
-                  </h3>
-                  <p className="text-xs text-[#607EC9] font-medium mt-0.5">
-                    {isEn ? 'Advance weekly cycle & reset focus' : 'Avançar ciclo semanal & renovar conteúdos'}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsNewWeekModalOpen(false)}
-                disabled={isStartingNewWeek}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-[#000035] space-y-2">
-              <p className="font-bold flex items-center gap-1.5 text-[#1C4C96]">
-                <Sparkles className="w-4 h-4 text-[#F4CA54]" />
-                {isEn ? 'What happens when you start a new week?' : 'O que acontece ao iniciar uma nova semana?'}
-              </p>
-              <ul className="list-disc list-inside space-y-1 text-slate-600 pl-1">
-                <li>
-                  {isEn
-                    ? 'Current week videos & audio tracks are archived in your history (no duplicate content).'
-                    : 'Vídeos e faixas atuais são arquivados no seu histórico pessoal (sem repetições).'}
-                </li>
-                <li>
-                  {isEn
-                    ? '7 brand new YouTube educational videos and 7 Spotify songs matching your level will be assigned.'
-                    : '7 novos vídeos do YouTube e 7 faixas do Spotify serão gerados conforme seu nível.'}
-                </li>
-                <li>
-                  {isEn
-                    ? 'The 7-day routine checklist is refreshed for the fresh cycle.'
-                    : 'O checklist de 7 dias é renovado para registrar sua evolução contínua.'}
-                </li>
-                <li>
-                  {isEn
-                    ? 'Automatically positions focus on today.'
-                    : 'Posicionamento automático imediato no dia de hoje.'}
-                </li>
-              </ul>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsNewWeekModalOpen(false)}
-                disabled={isStartingNewWeek}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              >
-                {isEn ? 'Cancel' : 'Cancelar'}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!onStartNewWeek) return;
-                  setIsStartingNewWeek(true);
-                  try {
-                    await onStartNewWeek();
-                    setIsNewWeekModalOpen(false);
-                  } catch (err) {
-                    console.warn('Error starting new week:', err);
-                  } finally {
-                    setIsStartingNewWeek(false);
-                  }
-                }}
-                disabled={isStartingNewWeek}
-                className="px-5 py-2 text-xs font-black bg-[#000035] hover:bg-[#062863] text-white rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer border border-[#1C4C96]"
-              >
-                {isStartingNewWeek ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin text-[#F4CA54]" />
-                    <span>{isEn ? 'Starting...' : 'Iniciando...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 text-[#F4CA54]" />
-                    <span>{isEn ? 'Yes, Start New Week' : 'Sim, Iniciar Nova Semana'}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Start New Week Configuration Modal */}
+      <StartNewWeekModal
+        isOpen={isNewWeekModalOpen}
+        onClose={() => setIsNewWeekModalOpen(false)}
+        onConfirm={async (studyDaysTarget, selectedDays) => {
+          if (!onStartNewWeek) return;
+          setIsStartingNewWeek(true);
+          try {
+            await onStartNewWeek(studyDaysTarget, selectedDays);
+          } finally {
+            setIsStartingNewWeek(false);
+          }
+        }}
+        currentCycle={weeklyCycle || userProfile?.weeklyCycle || 1}
+        currentLanguage={currentLanguage}
+        initialStudyDaysTarget={userProfile?.weeklyStudyDaysTarget || 7}
+        initialSelectedDays={userProfile?.weeklyStudyDays}
+        weeklyNativeLessonsTarget={userProfile?.weeklyNativeLessonsTarget || 1}
+      />
     </div>
   );
 };

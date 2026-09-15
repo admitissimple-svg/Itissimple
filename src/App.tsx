@@ -907,9 +907,12 @@ export default function App() {
   };
 
   // Handler: Start New Week (Rotates assignments, moves consumed to history, increments weeklyCycle, resets week checks)
-  const handleStartNewWeek = useCallback(async () => {
+  const handleStartNewWeek = useCallback(async (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => {
     const studentEmail = currentAccount?.email || userProfile?.email || '';
     const uid = currentAccount?.uid || userProfile?.id || '';
+    const targetDays = studyDaysTarget || userProfile?.weeklyStudyDaysTarget || 7;
+    const chosenDays = selectedDays || userProfile?.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
     try {
       const res = await fetch('/api/student-routines/start-new-week', {
         method: 'POST',
@@ -917,6 +920,8 @@ export default function App() {
         body: JSON.stringify({
           studentEmail,
           uid,
+          weeklyStudyDaysTarget: targetDays,
+          weeklyStudyDays: chosenDays,
         }),
       });
       if (res.ok) {
@@ -927,12 +932,30 @@ export default function App() {
           const finalRoutines = applyProfileTimesToRoutines(data.routines, vidTime, audTime);
           setRoutinesByDay(finalRoutines);
         }
-        if (data.weeklyCycle !== undefined) {
-          setUserProfile((prev) => ({
-            ...prev,
-            weeklyCycle: data.weeklyCycle,
-          }));
-        }
+
+        const effectiveCycle = data.weeklyCycle !== undefined ? data.weeklyCycle : (userProfile?.weeklyCycle || 1) + 1;
+        const effectiveStudyTarget = data.weeklyStudyDaysTarget || targetDays;
+        const effectiveStudyDays = data.weeklyStudyDays || chosenDays;
+
+        setUserProfile((prev) => ({
+          ...prev,
+          weeklyCycle: effectiveCycle,
+          weeklyStudyDaysTarget: effectiveStudyTarget,
+          weeklyStudyDays: effectiveStudyDays,
+        }));
+
+        // Persist weekly checks and study targets via weekly-checks endpoint as well
+        fetch('/api/routines/weekly-checks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentEmail,
+            checks: {},
+            weeklyNativeLessonsTarget: userProfile?.weeklyNativeLessonsTarget || 1,
+            weeklyStudyDaysTarget: effectiveStudyTarget,
+            weeklyStudyDays: effectiveStudyDays,
+          }),
+        }).catch(() => {});
 
         // Automatic positioning on Today
         const today = getTodayDayOfWeek();
@@ -945,11 +968,11 @@ export default function App() {
           {
             id: `new-week-${Date.now()}`,
             title: currentLanguage === 'en'
-              ? `🎉 Week ${data.weeklyCycle || (userProfile?.weeklyCycle || 1) + 1} Started!`
-              : `🎉 Semana ${data.weeklyCycle || (userProfile?.weeklyCycle || 1) + 1} Iniciada!`,
+              ? `🎉 Week ${effectiveCycle} Started!`
+              : `🎉 Semana ${effectiveCycle} Iniciada!`,
             message: currentLanguage === 'en'
-              ? 'Fresh curated YouTube videos and Spotify audios have been assigned. Content from prior weeks is archived to prevent repeats.'
-              : 'Novos vídeos do YouTube e áudios do Spotify foram atribuídos. Conteúdos de semanas anteriores foram arquivados para evitar repetições.',
+              ? `Study goal calibrated to ${effectiveStudyTarget} days/week. Fresh curated YouTube videos and Spotify audios have been assigned.`
+              : `Meta de estudos calibrada para ${effectiveStudyTarget} dias/semana. Novos vídeos do YouTube e áudios do Spotify foram atribuídos.`,
             type: 'success',
             timestamp: new Date().toISOString(),
             read: false,
@@ -962,7 +985,7 @@ export default function App() {
       console.warn('Could not start new week:', err);
     }
     return false;
-  }, [currentAccount?.email, currentAccount?.uid, userProfile?.email, userProfile?.id, userProfile?.routineVideoTime, userProfile?.routineAudioTime, userProfile?.weeklyCycle, currentLanguage]);
+  }, [currentAccount?.email, currentAccount?.uid, userProfile?.email, userProfile?.id, userProfile?.routineVideoTime, userProfile?.routineAudioTime, userProfile?.weeklyCycle, userProfile?.weeklyStudyDaysTarget, userProfile?.weeklyStudyDays, userProfile?.weeklyNativeLessonsTarget, currentLanguage]);
 
   // Handler: Teacher saves video & Spotify for activity
   const handleTeacherSaveVideos = async (

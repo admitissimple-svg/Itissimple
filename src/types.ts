@@ -202,6 +202,8 @@ export interface UserProfile {
   lastActiveDate?: string;
   languagePreference?: Language;
   weeklyNativeLessonsTarget?: number;
+  weeklyStudyDaysTarget?: number;
+  weeklyStudyDays?: DayOfWeek[];
   weeklyCycle?: number;
   dailyJournalEntries?: DailyJournalEntry[];
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
@@ -216,6 +218,8 @@ export interface StudentProfile {
   completedLessonsCount?: number;
   goal?: string;
   weeklyCycle?: number;
+  weeklyStudyDaysTarget?: number;
+  weeklyStudyDays?: DayOfWeek[];
   activeSince?: string;
   createdAt?: string;
 }

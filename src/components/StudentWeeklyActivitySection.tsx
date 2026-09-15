@@ -14,6 +14,7 @@ import {
   RotateCcw,
   RefreshCw,
   X,
+  Target,
 } from 'lucide-react';
 import {
   DayOfWeek,
@@ -25,6 +26,7 @@ import {
 } from '../types';
 import { Translations, getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from '../utils/notifications';
+import { StartNewWeekModal } from './StartNewWeekModal';
 
 interface StudentWeeklyActivitySectionProps {
   homework: WeeklyHomeworkData | null;
@@ -36,7 +38,7 @@ interface StudentWeeklyActivitySectionProps {
   dictionaryEntries?: StudentDictionaryEntry[];
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   onUpdateUserProfile?: (updated: Partial<UserProfile>) => void;
-  onStartNewWeek?: () => Promise<boolean | void> | void;
+  onStartNewWeek?: (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => Promise<boolean | void> | void;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
@@ -286,13 +288,18 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     return counts;
   }, [weeklyChecks]);
 
+  const weeklyStudyDaysTarget =
+    userProfile?.weeklyStudyDaysTarget && userProfile.weeklyStudyDaysTarget >= 1 && userProfile.weeklyStudyDaysTarget <= 7
+      ? userProfile.weeklyStudyDaysTarget
+      : 7;
+
   // Pillar completion ratios (0.0 to 1.0 capped)
-  // Daily habits (Video, Audio, Memorization) have a 7-day weekly base.
-  // Chat with Native Friend uses the student's dynamic weekly target (e.g. 1 or 2 sessions/week).
-  const videoRatio = Math.min(1, (checkedCounts.video_day || 0) / 7);
-  const audioRatio = Math.min(1, (checkedCounts.audio_day || 0) / 7);
+  // Daily habits (Video, Audio, Memorization) use the student's configured weekly study days goal (e.g. 2, 3, 5, 7 days/week) as the 100% divisor.
+  // Chat with Native Friend uses the student's dynamic weekly target (contracted live lessons), 100% independent!
+  const videoRatio = Math.min(1, (checkedCounts.video_day || 0) / Math.max(1, weeklyStudyDaysTarget));
+  const audioRatio = Math.min(1, (checkedCounts.audio_day || 0) / Math.max(1, weeklyStudyDaysTarget));
   const nativeRatio = Math.min(1, (checkedCounts.tutor_live || 0) / Math.max(1, weeklyNativeTarget));
-  const memoRatio = Math.min(1, (checkedCounts.memorization || 0) / 7);
+  const memoRatio = Math.min(1, (checkedCounts.memorization || 0) / Math.max(1, weeklyStudyDaysTarget));
 
   // Evolution of the Week progress percentage
   // Each of the 4 routine pillars has equal weight (25%).
@@ -588,6 +595,9 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#1C4C96] text-[#F4CA54] border border-[#F4CA54]/40 uppercase">
                   {isEn ? `Week ${userProfile?.weeklyCycle || 1}` : `Semana ${userProfile?.weeklyCycle || 1}`}
                 </span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#062863] text-[#9AB4FF] border border-[#9AB4FF]/30">
+                  {isEn ? `Goal: ${weeklyStudyDaysTarget} days/week` : `Meta: ${weeklyStudyDaysTarget} dias/semana`}
+                </span>
                 {onStartNewWeek && (
                   <button
                     type="button"
@@ -652,7 +662,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                         <h4 className="text-xs sm:text-sm font-black text-white truncate">
                           {isEn ? row.titleEn : row.titlePt}
                         </h4>
-                        {row.id === 'tutor_live' && (
+                        {row.id === 'tutor_live' ? (
                           <div className="inline-flex items-center gap-1.5 flex-wrap">
                             <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#000035]/80 border border-[#9AB4FF]/30 text-[10px] text-[#9AB4FF] shadow-xs">
                               <span className="text-[#9AB4FF]/70 text-[9px] font-semibold uppercase">{isEn ? 'Goal:' : 'Meta:'}</span>
@@ -678,6 +688,19 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                             ) : (
                               <span className="text-[10px] text-[#9AB4FF]/75 font-bold">
                                 ({(checkedCounts.tutor_live || 0)}/{weeklyNativeTarget} {isEn ? 'completed' : 'concluída' + (weeklyNativeTarget > 1 ? 's' : '')})
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1.5 flex-wrap">
+                            {(checkedCounts[row.id] || 0) >= weeklyStudyDaysTarget ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[9px] font-extrabold uppercase tracking-wide">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                                <span>{isEn ? 'Goal met' : 'Meta atingida'} ({(checkedCounts[row.id] || 0)}/{weeklyStudyDaysTarget})</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[#9AB4FF]/75 font-bold">
+                                ({(checkedCounts[row.id] || 0)}/{weeklyStudyDaysTarget} {isEn ? (weeklyStudyDaysTarget === 1 ? 'day' : 'days') : (weeklyStudyDaysTarget === 1 ? 'dia' : 'dias')})
                               </span>
                             )}
                           </div>
@@ -716,100 +739,25 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         </div>
       </div>
 
-      {/* Start New Week Confirmation Modal */}
-      {isNewWeekModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-[#607EC9]/40 space-y-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-[#000035] text-[#F4CA54] flex items-center justify-center shrink-0 border border-[#1C4C96]">
-                  <RotateCcw className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-[#000035]">
-                    {isEn ? `Start Week ${(userProfile?.weeklyCycle || 1) + 1}` : `Iniciar Semana ${(userProfile?.weeklyCycle || 1) + 1}`}
-                  </h3>
-                  <p className="text-xs text-[#607EC9] font-medium mt-0.5">
-                    {isEn ? 'Advance weekly cycle & reset checklist' : 'Avançar ciclo semanal & renovar checklist'}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsNewWeekModalOpen(false)}
-                disabled={isStartingNewWeek}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-[#000035] space-y-2">
-              <p className="font-bold flex items-center gap-1.5 text-[#1C4C96]">
-                <Sparkles className="w-4 h-4 text-[#F4CA54]" />
-                {isEn ? 'What happens when you start a new week?' : 'O que acontece ao iniciar uma nova semana?'}
-              </p>
-              <ul className="list-disc list-inside space-y-1 text-slate-600 pl-1">
-                <li>
-                  {isEn
-                    ? 'Current week videos and audio tracks are saved to consumed history (zero repeats).'
-                    : 'Vídeos e áudios desta semana são arquivados no seu histórico (sem repetições).'}
-                </li>
-                <li>
-                  {isEn
-                    ? '7 new YouTube videos and 7 Spotify audios matching your level are immediately distributed.'
-                    : '7 novos vídeos do YouTube e 7 faixas do Spotify são distribuídos conforme seu nível.'}
-                </li>
-                <li>
-                  {isEn
-                    ? 'Your 7-day checklist is refreshed to begin your next weekly streak.'
-                    : 'Seu checklist de 7 dias é renovado para registrar sua nova semana de hábitos.'}
-                </li>
-              </ul>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsNewWeekModalOpen(false)}
-                disabled={isStartingNewWeek}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              >
-                {isEn ? 'Cancel' : 'Cancelar'}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!onStartNewWeek) return;
-                  setIsStartingNewWeek(true);
-                  try {
-                    await onStartNewWeek();
-                    setIsNewWeekModalOpen(false);
-                  } catch (err) {
-                    console.warn('Error starting new week:', err);
-                  } finally {
-                    setIsStartingNewWeek(false);
-                  }
-                }}
-                disabled={isStartingNewWeek}
-                className="px-5 py-2 text-xs font-black bg-[#000035] hover:bg-[#062863] text-white rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer border border-[#1C4C96]"
-              >
-                {isStartingNewWeek ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin text-[#F4CA54]" />
-                    <span>{isEn ? 'Starting...' : 'Iniciando...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 text-[#F4CA54]" />
-                    <span>{isEn ? 'Yes, Start New Week' : 'Sim, Iniciar Nova Semana'}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Start New Week Configuration Modal */}
+      <StartNewWeekModal
+        isOpen={isNewWeekModalOpen}
+        onClose={() => setIsNewWeekModalOpen(false)}
+        onConfirm={async (studyDaysTarget, selectedDays) => {
+          if (!onStartNewWeek) return;
+          setIsStartingNewWeek(true);
+          try {
+            await onStartNewWeek(studyDaysTarget, selectedDays);
+          } finally {
+            setIsStartingNewWeek(false);
+          }
+        }}
+        currentCycle={userProfile?.weeklyCycle || 1}
+        currentLanguage={currentLanguage}
+        initialStudyDaysTarget={weeklyStudyDaysTarget}
+        initialSelectedDays={userProfile?.weeklyStudyDays}
+        weeklyNativeLessonsTarget={weeklyNativeTarget}
+      />
     </div>
   );
 };
