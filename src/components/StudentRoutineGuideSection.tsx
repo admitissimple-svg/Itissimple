@@ -130,6 +130,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     type: 'success' | 'warning' | 'error';
   } | null>(null);
 
+  // Custom YouTube video suggestion states
+  const [customSuggestionActivities, setCustomSuggestionActivities] = useState<Record<string, boolean>>({});
+  const [suggestingUrlActivityId, setSuggestingUrlActivityId] = useState<string | null>(null);
+  const [suggestingUrlValues, setSuggestingUrlValues] = useState<Record<string, string>>({});
+  const [isSavingSuggestionId, setIsSavingSuggestionId] = useState<string | null>(null);
+
   // Fetch active playlists dynamically
   useEffect(() => {
     let isMounted = true;
@@ -341,15 +347,30 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0)?.teacherVideos?.[0] ||
     null;
 
-  const rawVideoUrl = assignedVideo?.videoId || assignedVideo?.url || dailyYouTubeVideo.url;
-  const validVidId = extractYouTubeVideoId(rawVideoUrl) || dailyYouTubeVideo.videoId || 'OT1YRzt1f8A';
+  const isActiveActivityCustomSuggestion =
+    Boolean(activeActivity && customSuggestionActivities[activeActivity.id]) ||
+    (assignedVideo as any)?.playlistId === 'custom_suggestion' ||
+    (assignedVideo as any)?.isCustomSuggestion === true ||
+    activeActivity?.activityName === 'Your Suggestion' ||
+    activeActivity?.activityName === 'Sua Sugestão' ||
+    (assignedVideo as any)?.playlistTitle === 'Your Suggestion' ||
+    (assignedVideo as any)?.playlistTitle === 'Sua Sugestão';
+
+  // Rule 2a: Do NOT auto-fill any URL when "Your Suggestion" is selected without a saved video URL
+  const isCustomWithoutVideo =
+    isActiveActivityCustomSuggestion && (!assignedVideo?.url || !assignedVideo?.videoId);
+
+  const rawVideoUrl = assignedVideo?.videoId || assignedVideo?.url || (isCustomWithoutVideo ? '' : dailyYouTubeVideo.url);
+  const validVidId = isCustomWithoutVideo
+    ? ''
+    : extractYouTubeVideoId(rawVideoUrl) || dailyYouTubeVideo.videoId || 'OT1YRzt1f8A';
   const defaultVideoTitle =
     assignedVideo?.title ||
     dailyYouTubeVideo.title ||
     (activeActivity
       ? `English Routine: ${getActivityDisplayName(activeActivity.activityName, currentLanguage)}`
       : 'English Routine Video');
-  const embedUrl = getYouTubeEmbedUrl(validVidId);
+  const embedUrl = validVidId ? getYouTubeEmbedUrl(validVidId) : '';
 
   const rawAssignedSpotify =
     currentDayActivities.find((act) => act && act.teacherSpotify && act.teacherSpotify.url)?.teacherSpotify ||
@@ -391,6 +412,37 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   // Topic / Playlist selection & auto video injection handler
   const handleSelectPlaylistForActivity = async (activityId: string, playlistId: string) => {
     if (!playlistId) return;
+
+    // Exclusive behavior for "Your Suggestion" / "Sua Sugestão"
+    if (playlistId === 'custom_suggestion') {
+      setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: true }));
+      setSuggestingUrlActivityId(activityId);
+
+      // Rule 2a: Do NOT auto-fill any URL; keep existing custom URL if already set, else empty
+      const targetAct = currentDayList.find((a) => a.id === activityId);
+      const existingCustomVid = targetAct?.teacherVideos?.[0];
+      const isAlreadyCustom =
+        (existingCustomVid as any)?.isCustomSuggestion ||
+        (existingCustomVid as any)?.playlistId === 'custom_suggestion';
+
+      setSuggestingUrlValues((prev) => ({
+        ...prev,
+        [activityId]: isAlreadyCustom ? (existingCustomVid?.url || '') : '',
+      }));
+
+      setPlaylistFeedback({
+        activityId,
+        type: 'success',
+        message: isEn ? '💡 Paste your YouTube link below' : '💡 Cole seu link do YouTube abaixo',
+      });
+      setTimeout(() => setPlaylistFeedback(null), 3500);
+      onSelectActivity(activityId);
+      return;
+    }
+
+    // Reset custom suggestion mode if switching to a predefined topic
+    setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: false }));
+    setSuggestingUrlActivityId(null);
     setLoadingPlaylistAssignId(activityId);
     setPlaylistFeedback(null);
 
@@ -443,6 +495,74 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       });
     } finally {
       setLoadingPlaylistAssignId(null);
+    }
+  };
+
+  // Handler: Save / Confirm custom YouTube video URL suggested by student
+  const handleSaveCustomVideoSuggestion = async (activityId: string) => {
+    const rawUrl = (suggestingUrlValues[activityId] || '').trim();
+    if (!rawUrl) {
+      setPlaylistFeedback({
+        activityId,
+        type: 'warning',
+        message: isEn ? 'Please paste a YouTube URL.' : 'Por favor, informe a URL do YouTube.',
+      });
+      setTimeout(() => setPlaylistFeedback(null), 3000);
+      return;
+    }
+
+    const vidId = extractYouTubeVideoId(rawUrl);
+    if (!vidId) {
+      setPlaylistFeedback({
+        activityId,
+        type: 'error',
+        message: isEn ? 'Invalid YouTube link. Please verify.' : 'Link do YouTube inválido. Verifique o endereço.',
+      });
+      setTimeout(() => setPlaylistFeedback(null), 3500);
+      return;
+    }
+
+    setIsSavingSuggestionId(activityId);
+    setPlaylistFeedback(null);
+
+    const canonicalUrl = `https://www.youtube.com/watch?v=${vidId}`;
+    const suggestionTitle = isEn ? 'Your Suggestion' : 'Sua Sugestão';
+    const customVideo: TeacherAssignedVideo = {
+      id: `custom-suggest-${Date.now()}`,
+      videoId: vidId,
+      title: suggestionTitle,
+      url: canonicalUrl,
+      instructions: isEn ? 'Student suggested video for this routine' : 'Vídeo sugerido pelo aluno para esta rotina',
+      playlistTitle: suggestionTitle,
+      playlistId: 'custom_suggestion',
+      isCustomSuggestion: true,
+      addedAt: new Date().toISOString(),
+    };
+
+    try {
+      if (onAssignVideoToActivity) {
+        onAssignVideoToActivity(activityId, customVideo, selectedDay);
+      }
+
+      setSuggestingUrlActivityId(null);
+      setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: true }));
+      setSuggestingUrlValues((prev) => ({ ...prev, [activityId]: canonicalUrl }));
+      setPlaylistFeedback({
+        activityId,
+        type: 'success',
+        message: isEn ? '✨ Suggested video saved!' : '✨ Sugestão de vídeo salva com sucesso!',
+      });
+      setTimeout(() => setPlaylistFeedback(null), 4000);
+      onSelectActivity(activityId);
+    } catch (err) {
+      console.warn('Error saving custom video suggestion:', err);
+      setPlaylistFeedback({
+        activityId,
+        type: 'error',
+        message: isEn ? 'Error saving video suggestion.' : 'Erro ao salvar sugestão de vídeo.',
+      });
+    } finally {
+      setIsSavingSuggestionId(null);
     }
   };
 
@@ -695,7 +815,17 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 const isSelected = act.id === activeActivity?.id;
                 const wordsCount = act.learnedWords ? act.learnedWords.length : 0;
 
+                const isCustomSuggestion =
+                  Boolean(customSuggestionActivities[act.id]) ||
+                  (act.teacherVideos?.[0] as any)?.playlistId === 'custom_suggestion' ||
+                  (act.teacherVideos?.[0] as any)?.isCustomSuggestion === true ||
+                  act.activityName === 'Your Suggestion' ||
+                  act.activityName === 'Sua Sugestão' ||
+                  (act.teacherVideos?.[0] as any)?.playlistTitle === 'Your Suggestion' ||
+                  (act.teacherVideos?.[0] as any)?.playlistTitle === 'Sua Sugestão';
+
                 const isVideoAct =
+                  isCustomSuggestion ||
                   (act.teacherVideos && act.teacherVideos.length > 0) ||
                   act.id.endsWith('1') ||
                   act.activityName?.toLowerCase().includes('vídeo') ||
@@ -731,36 +861,40 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 const assignedVid = act.teacherVideos?.[0];
                 let currentPlaylistId = (assignedVid as any)?.playlistId || '';
 
-                if (!currentPlaylistId && (assignedVid as any)?.playlistTitle && playlists.length > 0) {
-                  const foundPl = playlists.find(
-                    (pl) => pl.title?.toLowerCase().trim() === (assignedVid as any).playlistTitle?.toLowerCase().trim()
-                  );
-                  if (foundPl) currentPlaylistId = foundPl.id;
-                }
-
-                if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
-                  const foundPl = playlists.find(
-                    (pl) =>
-                      pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim() ||
-                      pl.id === act.activityName
-                  );
-                  if (foundPl) currentPlaylistId = foundPl.id;
-                }
-
-                if (!currentPlaylistId && assignedVid && playlists.length > 0) {
-                  const vidId = extractYouTubeVideoId(assignedVid.videoId || assignedVid.url || '');
-                  if (vidId) {
-                    const foundPl = playlists.find((pl) =>
-                      pl.videos?.some((v) => extractYouTubeVideoId(v.videoId || v.url || v.id || '') === vidId)
+                if (isCustomSuggestion) {
+                  currentPlaylistId = 'custom_suggestion';
+                } else {
+                  if (!currentPlaylistId && (assignedVid as any)?.playlistTitle && playlists.length > 0) {
+                    const foundPl = playlists.find(
+                      (pl) => pl.title?.toLowerCase().trim() === (assignedVid as any).playlistTitle?.toLowerCase().trim()
                     );
                     if (foundPl) currentPlaylistId = foundPl.id;
                   }
-                }
 
-                if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
-                  const lowerName = act.activityName.toLowerCase();
-                  const foundPl = playlists.find((pl) => lowerName.includes(pl.title.toLowerCase()));
-                  if (foundPl) currentPlaylistId = foundPl.id;
+                  if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
+                    const foundPl = playlists.find(
+                      (pl) =>
+                        pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim() ||
+                        pl.id === act.activityName
+                    );
+                    if (foundPl) currentPlaylistId = foundPl.id;
+                  }
+
+                  if (!currentPlaylistId && assignedVid && playlists.length > 0) {
+                    const vidId = extractYouTubeVideoId(assignedVid.videoId || assignedVid.url || '');
+                    if (vidId) {
+                      const foundPl = playlists.find((pl) =>
+                        pl.videos?.some((v) => extractYouTubeVideoId(v.videoId || v.url || v.id || '') === vidId)
+                      );
+                      if (foundPl) currentPlaylistId = foundPl.id;
+                    }
+                  }
+
+                  if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
+                    const lowerName = act.activityName.toLowerCase();
+                    const foundPl = playlists.find((pl) => lowerName.includes(pl.title.toLowerCase()));
+                    if (foundPl) currentPlaylistId = foundPl.id;
+                  }
                 }
 
                 return (
@@ -900,6 +1034,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                                 {pl.title}
                               </option>
                             ))}
+                            <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
+                              {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
+                            </option>
                           </select>
                           <ChevronDown
                             className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${
@@ -911,6 +1048,111 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                         <span className="text-xs font-bold truncate max-w-[160px] sm:max-w-[220px]" title={act.activityName}>
                           {getActivityDisplayName(act.activityName, currentLanguage)}
                         </span>
+                      )}
+
+                      {/* Custom Suggestion URL Input & Confirmation Controls */}
+                      {isCustomSuggestion && (
+                        <div
+                          className="inline-flex items-center gap-1.5 min-w-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {suggestingUrlActivityId === act.id || !assignedVid?.url ? (
+                            <div className="inline-flex items-center gap-1.5 min-w-0">
+                              <div className="relative w-44 sm:w-60 md:w-72">
+                                <Youtube className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-red-500 pointer-events-none shrink-0" />
+                                <input
+                                  type="url"
+                                  value={
+                                    suggestingUrlValues[act.id] !== undefined
+                                      ? suggestingUrlValues[act.id]
+                                      : (assignedVid?.url || '')
+                                  }
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setSuggestingUrlValues((prev) => ({ ...prev, [act.id]: val }));
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleSaveCustomVideoSuggestion(act.id);
+                                    } else if (e.key === 'Escape') {
+                                      setSuggestingUrlActivityId(null);
+                                    }
+                                  }}
+                                  placeholder={isEn ? 'Paste YouTube link (https://...)' : 'Cole o link do YouTube (https://...)'}
+                                  className={`w-full text-xs py-1 pl-8 pr-2 rounded-xl border focus:outline-hidden transition shadow-2xs font-mono ${
+                                    isSelected
+                                      ? 'bg-[#062863] text-white border-[#607EC9] placeholder-slate-400 focus:border-[#9AB4FF]'
+                                      : 'bg-white text-[#000035] border-slate-300 placeholder-slate-400 focus:border-[#1C4C96]'
+                                  }`}
+                                  autoFocus
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveCustomVideoSuggestion(act.id)}
+                                disabled={isSavingSuggestionId === act.id}
+                                className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
+                                title={isEn ? 'Save YouTube URL' : 'Salvar link do YouTube'}
+                              >
+                                {isSavingSuggestionId === act.id ? (
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Check className="w-3 h-3" />
+                                )}
+                                <span>{isEn ? 'Save' : 'Salvar'}</span>
+                              </button>
+                              {assignedVid?.url && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSuggestingUrlActivityId(null)}
+                                  className={`p-1 rounded-lg transition cursor-pointer shrink-0 ${
+                                    isSelected ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-slate-600'
+                                  }`}
+                                  title={isEn ? 'Cancel' : 'Cancelar'}
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-1.5 shrink-0">
+                              <a
+                                href={assignedVid.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={`inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded-lg border transition truncate max-w-[130px] sm:max-w-[180px] ${
+                                  isSelected
+                                    ? 'bg-white/10 text-[#9AB4FF] border-[#607EC9]/40 hover:bg-white/20'
+                                    : 'bg-slate-100 text-[#1C4C96] border-slate-200 hover:bg-slate-200'
+                                }`}
+                                title={assignedVid.url}
+                              >
+                                <Youtube className="w-3 h-3 text-red-500 shrink-0" />
+                                <span className="truncate">{assignedVid.url}</span>
+                                <ExternalLink className="w-2.5 h-2.5 opacity-60 shrink-0" />
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSuggestingUrlActivityId(act.id);
+                                  setSuggestingUrlValues((prev) => ({
+                                    ...prev,
+                                    [act.id]: assignedVid.url || '',
+                                  }));
+                                }}
+                                className={`p-1 rounded-lg transition cursor-pointer shrink-0 ${
+                                  isSelected
+                                    ? 'text-[#9AB4FF] hover:bg-white/10 hover:text-white'
+                                    : 'text-[#1C4C96] hover:bg-slate-200'
+                                }`}
+                                title={isEn ? 'Edit suggested YouTube link' : 'Editar link sugerido do YouTube'}
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
 
@@ -1002,6 +1244,20 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
               />
+            ) : isCustomWithoutVideo ? (
+              <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-2 p-6 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-red-500/20 text-red-400 flex items-center justify-center mb-1">
+                  <Youtube className="w-6 h-6" />
+                </div>
+                <p className="text-xs font-bold text-slate-100">
+                  {isEn ? 'Waiting for your YouTube suggestion' : 'Aguardando sua sugestão de vídeo do YouTube'}
+                </p>
+                <p className="text-[11px] text-slate-400 max-w-xs">
+                  {isEn
+                    ? 'Paste your YouTube link in the activity row above and click Save to embed it.'
+                    : 'Cole o link do YouTube na linha da atividade acima e clique em Salvar.'}
+                </p>
+              </div>
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-2">
                 <Play className="w-10 h-10 text-[#9AB4FF]" />

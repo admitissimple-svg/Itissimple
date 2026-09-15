@@ -132,6 +132,7 @@ export interface TeacherAssignedVideo {
   addedAt?: string;
   playlistId?: string;
   playlistTitle?: string;
+  isCustomSuggestion?: boolean;
 }
 
 export interface TeacherAssignedSpotify {

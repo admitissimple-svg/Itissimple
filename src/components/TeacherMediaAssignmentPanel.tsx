@@ -430,6 +430,16 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     const assignedVid = itemWithVid?.teacherVideos?.[0];
     if ((assignedVid as any)?.playlistId) return (assignedVid as any).playlistId;
 
+    if (
+      (assignedVid as any)?.isCustomSuggestion ||
+      (assignedVid as any)?.playlistTitle === 'Your Suggestion' ||
+      (assignedVid as any)?.playlistTitle === 'Sua Sugestão' ||
+      itemWithVid?.activityName === 'Your Suggestion' ||
+      itemWithVid?.activityName === 'Sua Sugestão'
+    ) {
+      return 'custom_suggestion';
+    }
+
     if ((assignedVid as any)?.playlistTitle && playlists.length > 0) {
       const pl = playlists.find(
         (p) => p.title?.toLowerCase().trim() === (assignedVid as any).playlistTitle?.toLowerCase().trim()
@@ -465,6 +475,37 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // Handler: Change playlist topic for a specific day from teacher view
   const handleDayPlaylistChange = (dayId: DayOfWeek, newPlId: string) => {
     setDayPlaylistIds((prev) => ({ ...prev, [dayId]: newPlId }));
+
+    if (newPlId === 'custom_suggestion') {
+      const topicTitle = isEn ? 'Your Suggestion' : 'Sua Sugestão';
+      const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+      const targetActivity =
+        dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+        dayItems.find(
+          (i) =>
+            i &&
+            (i.id.endsWith('1') ||
+              i.activityName?.toLowerCase().includes('vídeo') ||
+              i.activityName?.toLowerCase().includes('video') ||
+              playlists.some((p) => p.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+        ) ||
+        dayItems[0];
+
+      if (targetActivity) {
+        setStudentRoutines((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev };
+          if (updated[dayId]) {
+            updated[dayId] = updated[dayId].map((item) =>
+              item.id === targetActivity.id ? { ...item, activityName: topicTitle } : item
+            );
+          }
+          return updated;
+        });
+      }
+      return;
+    }
+
     const pl = playlists.find((p) => p.id === newPlId);
     if (!pl) return;
 
@@ -1321,9 +1362,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                                 {pl.title}
                               </option>
                             ))}
+                            <option value="custom_suggestion">
+                              💡 {isEn ? 'Your Suggestion (Student)' : 'Sua Sugestão (Aluno)'}
+                            </option>
                           </select>
                           <ChevronDown className="w-3.5 h-3.5 pointer-events-none absolute right-2 text-[#1C4C96]" />
                         </div>
+                        {currentDayPlId === 'custom_suggestion' && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0">
+                            💡 {isEn ? 'Student' : 'Aluno'}
+                          </span>
+                        )}
                       </div>
                     </td>
 
