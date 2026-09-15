@@ -22,6 +22,7 @@ import {
   Volume2,
   Info,
   ShieldCheck,
+  Calendar,
 } from 'lucide-react';
 import {
   RoutineItem,
@@ -225,11 +226,16 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         if (activeStudentEmail) profileParams.append('email', activeStudentEmail);
         if (activeStudentUid) profileParams.append('uid', activeStudentUid);
 
-        const [routinesRes, assignmentsRes, spotAssignRes, profileRes] = await Promise.all([
+        const weeklyChecksPromise = activeStudentEmail
+          ? fetch(`/api/routines/weekly-checks?studentEmail=${encodeURIComponent(activeStudentEmail)}`).catch(() => null)
+          : Promise.resolve(null);
+
+        const [routinesRes, assignmentsRes, spotAssignRes, profileRes, weeklyChecksRes] = await Promise.all([
           fetch(`/api/student-routines?${params.toString()}`).catch(() => null),
           fetch(`/api/student-video-assignments?${params.toString()}`).catch(() => null),
           fetch(`/api/student-spotify-assignments?${params.toString()}`).catch(() => null),
           fetch(`/api/user-profile?${profileParams.toString()}`).catch(() => null),
+          weeklyChecksPromise,
         ]);
 
         if (routinesRes && routinesRes.ok) {
@@ -247,6 +253,23 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
         if (profileRes && profileRes.ok) {
           const profData = await profileRes.json();
           profileData = profData?.profile || profData?.user || null;
+        }
+        if (weeklyChecksRes && weeklyChecksRes.ok) {
+          const checksData = await weeklyChecksRes.json();
+          if (checksData?.weeklyStudyDays && Array.isArray(checksData.weeklyStudyDays) && checksData.weeklyStudyDays.length > 0) {
+            profileData = {
+              ...(profileData || {}),
+              weeklyStudyDays: checksData.weeklyStudyDays,
+              weeklyStudyDaysTarget: checksData.weeklyStudyDaysTarget || checksData.weeklyStudyDays.length,
+            };
+          }
+        }
+        if (selectedStudent?.weeklyStudyDays && (!profileData?.weeklyStudyDays || profileData.weeklyStudyDays.length === 0)) {
+          profileData = {
+            ...(profileData || {}),
+            weeklyStudyDays: selectedStudent.weeklyStudyDays,
+            weeklyStudyDaysTarget: selectedStudent.weeklyStudyDaysTarget || selectedStudent.weeklyStudyDays.length,
+          };
         }
       }
 
@@ -410,6 +433,58 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     loadStudentMediaData();
   }, [loadStudentMediaData]);
 
+  // Dynamically resolve active study days configured by student
+  const activeStudyDays: DayOfWeek[] = React.useMemo(() => {
+    const rawDays =
+      (studentProfile?.weeklyStudyDays && Array.isArray(studentProfile.weeklyStudyDays) && studentProfile.weeklyStudyDays.length > 0)
+        ? studentProfile.weeklyStudyDays
+        : (studentProfile?.selectedStudyDays && Array.isArray(studentProfile.selectedStudyDays) && studentProfile.selectedStudyDays.length > 0)
+        ? studentProfile.selectedStudyDays
+        : (selectedStudent?.weeklyStudyDays && Array.isArray(selectedStudent.weeklyStudyDays) && selectedStudent.weeklyStudyDays.length > 0)
+        ? selectedStudent.weeklyStudyDays
+        : null;
+
+    if (rawDays && rawDays.length > 0) {
+      const validSet = new Set(rawDays.map((d: string) => String(d).toLowerCase().trim()));
+      const filtered = WEEK_DAYS.filter((d) => validSet.has(d.id)).map((d) => d.id);
+      if (filtered.length > 0) return filtered;
+    }
+
+    return WEEK_DAYS.map((d) => d.id);
+  }, [studentProfile, selectedStudent]);
+
+  const activeWeekDays = React.useMemo(() => {
+    return WEEK_DAYS.filter((d) => activeStudyDays.includes(d.id));
+  }, [activeStudyDays]);
+
+  // Retrieve previous active day according to student study calendar
+  const getPreviousActiveDay = React.useCallback(
+    (currentDayId: DayOfWeek): DayOfWeek => {
+      const activeDaysInOrder = WEEK_DAYS.filter((d) => activeStudyDays.includes(d.id)).map((d) => d.id);
+      const effectiveActiveDays = activeDaysInOrder.length > 0 ? activeDaysInOrder : WEEK_DAYS.map((d) => d.id);
+      const currentActiveIdx = effectiveActiveDays.indexOf(currentDayId);
+
+      if (currentActiveIdx > 0) {
+        return effectiveActiveDays[currentActiveIdx - 1];
+      } else if (currentActiveIdx === 0 && effectiveActiveDays.length > 1) {
+        return effectiveActiveDays[effectiveActiveDays.length - 1];
+      } else {
+        const calOrder = WEEK_DAYS.map((d) => d.id);
+        const currentCalIdx = calOrder.indexOf(currentDayId);
+        const preceding = effectiveActiveDays.filter((d) => calOrder.indexOf(d) < currentCalIdx);
+        return preceding.length > 0 ? preceding[preceding.length - 1] : (effectiveActiveDays[effectiveActiveDays.length - 1] || 'monday');
+      }
+    },
+    [activeStudyDays]
+  );
+
+  // Keep selected preview day aligned with active study days
+  React.useEffect(() => {
+    if (activeStudyDays.length > 0 && !activeStudyDays.includes(selectedPreviewDay)) {
+      setSelectedPreviewDay(activeStudyDays[0]);
+    }
+  }, [activeStudyDays, selectedPreviewDay]);
+
   // Helper: Retrieve active playlist topic ID for a specific day
   const getDayPlaylistId = (dayId: DayOfWeek): string => {
     if (dayPlaylistIds[dayId]) return dayPlaylistIds[dayId]!;
@@ -436,6 +511,34 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       (assignedVid as any)?.playlistTitle === 'Sua Sugestão' ||
       itemWithVid?.activityName === 'Your Suggestion' ||
       itemWithVid?.activityName === 'Sua Sugestão'
+    ) {
+      return 'custom_suggestion';
+    }
+
+    if (
+      (assignedVid as any)?.playlistId === 'repeat_previous_video' ||
+      (assignedVid as any)?.playlistTitle === 'Repeat Previous Video' ||
+      (assignedVid as any)?.playlistTitle === 'Repetir Vídeo Anterior' ||
+      itemWithVid?.activityName === 'Repeat Previous Video' ||
+      itemWithVid?.activityName === 'Repetir Vídeo Anterior'
+    ) {
+      return 'repeat_previous_video';
+    }
+
+    const dayAssigns = (studentAssignments || []).filter((a: any) => a && (a.day === dayId || a.dayOfWeek === dayId));
+    const latestAssign = dayAssigns.length > 0 ? dayAssigns[dayAssigns.length - 1] : null;
+    if (
+      latestAssign?.playlistId === 'repeat_previous_video' ||
+      latestAssign?.playlistTitle?.toLowerCase().includes('repeat') ||
+      latestAssign?.playlistTitle?.toLowerCase().includes('repetir')
+    ) {
+      return 'repeat_previous_video';
+    }
+    if (
+      latestAssign?.playlistId === 'custom_suggestion' ||
+      latestAssign?.isCustomSuggestion ||
+      latestAssign?.playlistTitle === 'Your Suggestion' ||
+      latestAssign?.playlistTitle === 'Sua Sugestão'
     ) {
       return 'custom_suggestion';
     }
@@ -501,6 +604,120 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             );
           }
           return updated;
+        });
+
+        if (activeStudentEmail || activeStudentUid) {
+          fetch('/api/routines/teacher-video', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              studentEmail: activeStudentEmail,
+              studentUid: activeStudentUid,
+              teacherUid: currentAccount?.uid,
+              teacherEmail: currentAccount?.email,
+              activityId: targetActivity.id,
+              activityName: topicTitle,
+              playlistTitle: topicTitle,
+              playlistId: 'custom_suggestion',
+              videos: targetActivity.teacherVideos || [],
+              days: [dayId],
+              day: dayId,
+            }),
+          }).catch(() => {});
+        }
+      }
+      return;
+    }
+
+    if (newPlId === 'repeat_previous_video') {
+      const prevActiveDay = getPreviousActiveDay(dayId);
+      const prevUrl = youtubeUrls[prevActiveDay] || '';
+      const prevVidId = extractYouTubeVideoId(prevUrl);
+      const topicTitle = isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior';
+      const prevDayLabel = WEEK_DAYS.find((w) => w.id === prevActiveDay)?.name || prevActiveDay;
+
+      if (prevUrl) {
+        setYoutubeUrls((prev) => ({ ...prev, [dayId]: prevUrl }));
+      }
+
+      const dayItems = (studentRoutines && studentRoutines[dayId]) || (routinesByDay && routinesByDay[dayId]) || [];
+      const targetActivity =
+        dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
+        dayItems.find(
+          (i) =>
+            i &&
+            (i.id.endsWith('1') ||
+              i.activityName?.toLowerCase().includes('vídeo') ||
+              i.activityName?.toLowerCase().includes('video') ||
+              playlists.some((p) => p.title?.toLowerCase().trim() === i.activityName?.toLowerCase().trim()))
+        ) ||
+        dayItems[0];
+
+      if (targetActivity) {
+        const repeatedVideo: TeacherAssignedVideo = {
+          id: `vid-${dayId}-repeat-${Date.now()}`,
+          url: prevUrl || 'https://www.youtube.com/watch?v=V1bFr2KGq1g',
+          videoId: prevVidId || 'V1bFr2KGq1g',
+          title: `Repeated Video (${prevDayLabel})`,
+          duration: '5-10 min',
+          instructions: `Repeated from ${prevDayLabel}`,
+          addedAt: new Date().toISOString(),
+          playlistId: 'repeat_previous_video',
+          playlistTitle: topicTitle,
+        } as any;
+
+        setStudentRoutines((prev) => {
+          if (!prev) return prev;
+          const updated = { ...prev };
+          if (updated[dayId]) {
+            updated[dayId] = updated[dayId].map((item) =>
+              item.id === targetActivity.id
+                ? {
+                    ...item,
+                    activityName: topicTitle,
+                    teacherVideos: [repeatedVideo],
+                    teacherNotes: `Repeated from ${prevDayLabel}`,
+                  }
+                : item
+            );
+          }
+          return updated;
+        });
+
+        if (activeStudentEmail || activeStudentUid) {
+          fetch('/api/student-video-assignments/assign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              studentEmail: activeStudentEmail,
+              studentUid: activeStudentUid,
+              teacherUid: currentAccount?.uid,
+              teacherEmail: currentAccount?.email,
+              playlistId: 'repeat_previous_video',
+              activityId: targetActivity.id,
+              day: dayId,
+              videoUrl: prevUrl,
+            }),
+          }).catch(() => {});
+        }
+
+        if (onTeacherSaveVideos) {
+          onTeacherSaveVideos(
+            targetActivity.id,
+            [repeatedVideo],
+            `Repeated from ${prevDayLabel}`,
+            false,
+            [dayId],
+            undefined,
+            activeStudentEmail,
+            activeStudentUid,
+            topicTitle
+          );
+        }
+
+        setAssignFeedback({
+          type: 'success',
+          message: `🔁 ${isEn ? `Previous video from ${prevDayLabel} assigned for ${dayId.toUpperCase()}` : `Vídeo anterior de ${prevDayLabel} atribuído para ${dayId.toUpperCase()}`}`,
         });
       }
       return;
@@ -830,14 +1047,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     handleSaveSpotifyDay(dayId, defaultTrack.url, 'music');
   };
 
-  // Handler: Reset all 7 days to verified curriculum tracks with one click
+  // Handler: Reset active study days to verified curriculum tracks with one click
   const handleResetAllDays = async () => {
     setIsResettingAll(true);
     try {
       const updatedUrls: Record<DayOfWeek, string> = { ...spotifyUrls };
       const updatedTypes: Record<DayOfWeek, 'podcast' | 'music'> = { ...spotifyTypes };
 
-      for (const day of WEEK_DAYS) {
+      for (const day of activeWeekDays) {
         const defTrack = getDailySpotifyTrackForStudent(currentNormalizedLevel, day.id);
         updatedUrls[day.id] = defTrack.url;
         updatedTypes[day.id] = 'music';
@@ -851,7 +1068,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       });
       setAssignFeedback({
         type: 'success',
-        message: 'All 7 days restored and synchronized to verified curriculum audio!',
+        message: `All ${activeWeekDays.length} active days restored and synchronized to verified curriculum audio!`,
       });
     } catch (err) {
       console.error('Error resetting all days:', err);
@@ -1035,7 +1252,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     }
   };
 
-  // Handler: Distribute full 7-day exclusive sequential YouTube videos for student
+  // Handler: Distribute exclusive sequential YouTube videos for student active study days
   const handleDistributeWeekYouTube = async () => {
     if (!activeStudentEmail && !activeStudentUid) {
       setAssignFeedback({ type: 'warning', message: 'Select a student to distribute weekly videos.' });
@@ -1053,13 +1270,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           teacherUid: currentAccount?.uid,
           teacherEmail: currentAccount?.email,
           level: currentNormalizedLevel,
+          days: activeWeekDays.map((d) => d.id),
         }),
       });
       const data = await res.json();
       if (data.success) {
         setAssignFeedback({
           type: 'success',
-          message: '✨ Complete week of 7 exclusive YouTube videos assigned successfully!',
+          message: `✨ Week of ${activeWeekDays.length} exclusive YouTube ${activeWeekDays.length === 1 ? 'video' : 'videos'} assigned successfully!`,
         });
         await loadStudentMediaData();
       } else {
@@ -1075,7 +1293,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     }
   };
 
-  // Handler: Distribute full 7-day exclusive sequential Spotify tracks for student
+  // Handler: Distribute exclusive sequential Spotify tracks for student active study days
   const handleDistributeWeekSpotify = async () => {
     if (!activeStudentEmail && !activeStudentUid) {
       setAssignFeedback({ type: 'warning', message: 'Select a student to distribute weekly tracks.' });
@@ -1093,13 +1311,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           teacherUid: currentAccount?.uid,
           teacherEmail: currentAccount?.email,
           level: currentNormalizedLevel,
+          days: activeWeekDays.map((d) => d.id),
         }),
       });
       const data = await res.json();
       if (data.success) {
         setAssignFeedback({
           type: 'success',
-          message: '✨ Complete week of 7 exclusive Spotify tracks distributed successfully!',
+          message: `✨ Week of ${activeWeekDays.length} exclusive Spotify ${activeWeekDays.length === 1 ? 'track' : 'tracks'} distributed successfully!`,
         });
         await loadStudentMediaData();
       } else {
@@ -1158,6 +1377,13 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                     <span>LEVEL: {currentLevelConfig.levelLabelEn.toUpperCase()}</span>
                   </span>
                 )}
+                <span className="text-[9px] px-2 py-0.5 rounded bg-indigo-900/90 text-indigo-200 font-bold border border-indigo-400/40 flex items-center gap-1">
+                  <Calendar className="w-2.5 h-2.5 text-amber-300" />
+                  <span>
+                    STUDY PLAN: {activeWeekDays.length} {activeWeekDays.length === 1 ? 'DAY' : 'DAYS'}/WEEK (
+                    {activeWeekDays.map((d) => d.name.slice(0, 3)).join(', ')})
+                  </span>
+                </span>
               </div>
               <div className="text-sm font-black text-white">
                 {selectedStudent ? `${selectedStudent.name} (${selectedStudent.email})` : activeStudentEmail}
@@ -1173,14 +1399,14 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             ) : (
               <span className="flex items-center gap-1.5 text-emerald-300">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Mirrored in real time with student page</span>
+                <span>Mirrored with {activeWeekDays.length} active study days</span>
               </span>
             )}
           </div>
         </div>
       )}
 
-      {/* TABLE 1: Assign YouTube Videos (Matching attached image 3) */}
+      {/* TABLE 1: Assign YouTube Videos (Filtered to student active study days) */}
       <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-xs overflow-hidden">
         <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
@@ -1188,11 +1414,16 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               <Youtube className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-black text-sm text-[#000035] uppercase tracking-wider">
-                Assign YouTube Videos
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-black text-sm text-[#000035] uppercase tracking-wider">
+                  Assign YouTube Videos
+                </h3>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                  {activeWeekDays.length} {activeWeekDays.length === 1 ? 'Active Day' : 'Active Days'}
+                </span>
+              </div>
               <p className="text-[11px] text-slate-500 font-normal">
-                Paste daily YouTube links or assign exclusive unseen videos from curated playlists
+                Displaying only the {activeWeekDays.length} active study days configured by student
               </p>
             </div>
           </div>
@@ -1258,7 +1489,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 onClick={handleDistributeWeekYouTube}
                 disabled={isDistributingYtWeek}
                 className="px-2.5 py-1 rounded-lg text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-2xs"
-                title="Distribute 7 exclusive unseen videos for the entire week"
+                title={`Distribute exclusive unseen videos for the student's ${activeWeekDays.length} active study days`}
               >
                 {isDistributingYtWeek ? (
                   <>
@@ -1268,7 +1499,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 ) : (
                   <>
                     <Sparkles className="w-3 h-3 text-amber-300" />
-                    <span>Distribute Week (7 Videos)</span>
+                    <span>Distribute Week ({activeWeekDays.length} {activeWeekDays.length === 1 ? 'Video' : 'Videos'})</span>
                   </>
                 )}
               </button>
@@ -1309,13 +1540,13 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-[#000035] text-white uppercase text-[10px] font-black tracking-wider">
-                <th className="p-3 w-28 border-b border-[#062863]">Week day</th>
+                <th className="p-3 w-32 border-b border-[#062863]">Week day</th>
                 <th className="p-3 w-80 border-b border-[#062863]">Activity Moment & Playlist Topic</th>
                 <th className="p-3 border-b border-[#062863]">Youtube video url</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {WEEK_DAYS.map((day) => {
+              {activeWeekDays.map((day, idx) => {
                 const isSaved = savedDayFeedback[`yt-${day.id}`];
                 const currentUrl = youtubeUrls[day.id] || '';
                 const isAssigningThisDay = assignLoadingDay === day.id;
@@ -1323,6 +1554,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                 const currentVidId = extractYouTubeVideoId(currentUrl);
                 const isValidYt = Boolean(currentVidId);
                 const currentDayPlId = getDayPlaylistId(day.id);
+                const isCustomSuggestion = currentDayPlId === 'custom_suggestion';
+                const isRepeatPrevious = currentDayPlId === 'repeat_previous_video';
+                const prevActiveDay = getPreviousActiveDay(day.id);
+                const prevDayLabel = WEEK_DAYS.find((w) => w.id === prevActiveDay)?.name || prevActiveDay;
                 const dayItems = (studentRoutines && studentRoutines[day.id]) || (routinesByDay && routinesByDay[day.id]) || [];
                 const targetActivity =
                   dayItems.find((i) => i && i.teacherVideos && i.teacherVideos.length > 0) ||
@@ -1340,7 +1575,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   <tr key={day.id} className="hover:bg-slate-50/70 transition">
                     {/* Day column */}
                     <td className="p-3 font-bold text-[#000035] whitespace-nowrap">
-                      {day.name}
+                      <div>{day.name}</div>
+                      <div className="text-[10px] text-[#1C4C96] font-semibold">
+                        Day {idx + 1} of {activeWeekDays.length}
+                      </div>
                     </td>
 
                     {/* Activity Moment & Playlist Topic column */}
@@ -1365,12 +1603,20 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             <option value="custom_suggestion">
                               💡 {isEn ? 'Your Suggestion (Student)' : 'Sua Sugestão (Aluno)'}
                             </option>
+                            <option value="repeat_previous_video">
+                              🔁 {isEn ? `Repeat Previous (${prevDayLabel.slice(0, 3)})` : `Repetir Anterior (${prevDayLabel.slice(0, 3)})`}
+                            </option>
                           </select>
                           <ChevronDown className="w-3.5 h-3.5 pointer-events-none absolute right-2 text-[#1C4C96]" />
                         </div>
-                        {currentDayPlId === 'custom_suggestion' && (
+                        {isCustomSuggestion && (
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0">
-                            💡 {isEn ? 'Student' : 'Aluno'}
+                            💡 {isEn ? 'Suggestion' : 'Sugestão'}
+                          </span>
+                        )}
+                        {isRepeatPrevious && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 shrink-0" title={`Repeats video from ${prevDayLabel}`}>
+                            🔁 {prevDayLabel.slice(0, 3)}
                           </span>
                         )}
                       </div>
@@ -1495,6 +1741,9 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               <h3 className="font-black text-xs sm:text-sm text-[#000035] uppercase tracking-wider">
                 Spotify Audio Assignment
               </h3>
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                {activeWeekDays.length} {activeWeekDays.length === 1 ? 'Active Day' : 'Active Days'}
+              </span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30 flex items-center gap-1">
                 <Music className="w-2.5 h-2.5 text-[#1DB954]" />
                 <span>{currentLevelConfig.levelLabelEn}</span>
@@ -1523,10 +1772,10 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               onClick={handleResetAllDays}
               disabled={isResettingAll}
               className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
-              title="Restore all 7 days to verified curriculum tracks"
+              title={`Restore student's ${activeWeekDays.length} active days to verified curriculum tracks`}
             >
               <RotateCcw className={`w-3 h-3 text-emerald-600 ${isResettingAll ? 'animate-spin' : ''}`} />
-              <span>{isResettingAll ? 'Restoring...' : 'Restore 7 Days'}</span>
+              <span>{isResettingAll ? 'Restoring...' : `Restore ${activeWeekDays.length} Days`}</span>
             </button>
 
             {/* Spotify unseen counter badge */}
@@ -1572,7 +1821,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               onClick={handleDistributeWeekSpotify}
               disabled={isDistributingSpotWeek}
               className="px-2.5 py-1 rounded-lg text-xs font-bold bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-2xs"
-              title="Distribute 7 exclusive unseen tracks for the entire week"
+              title={`Distribute exclusive unseen tracks for the student's ${activeWeekDays.length} active study days`}
             >
               {isDistributingSpotWeek ? (
                 <>
@@ -1582,7 +1831,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               ) : (
                 <>
                   <Sparkles className="w-3 h-3" />
-                  <span>Distribute Week (7 Audios)</span>
+                  <span>Distribute Week ({activeWeekDays.length} {activeWeekDays.length === 1 ? 'Audio' : 'Audios'})</span>
                 </>
               )}
             </button>
@@ -1626,7 +1875,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1 hidden sm:inline">
                     Preview:
                   </span>
-                  {WEEK_DAYS.map((wDay) => {
+                  {activeWeekDays.map((wDay) => {
                     const isCur = selectedPreviewDay === wDay.id;
                     const wDayUrl = spotifyUrls[wDay.id] || '';
                     const wDayVal = parseSpotifyUrl(wDayUrl);
@@ -1730,7 +1979,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {WEEK_DAYS.map((day, idx) => {
+              {activeWeekDays.map((day, idx) => {
                 const isSaved = savedDayFeedback[`spot-${day.id}`];
                 const isSavingThisDay = savingSpotDay === day.id;
                 const currentUrl = spotifyUrls[day.id] || '';
@@ -1745,7 +1994,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                     <td className="p-3 font-bold text-[#000035] whitespace-nowrap">
                       <div>{day.name}</div>
                       <div className="text-[10px] text-slate-400 font-normal">
-                        {isEn ? `Track ${idx + 1}/7` : `Faixa ${idx + 1}/7`}
+                        {isEn ? `Track ${idx + 1}/${activeWeekDays.length}` : `Faixa ${idx + 1}/${activeWeekDays.length}`}
                       </div>
                     </td>
 

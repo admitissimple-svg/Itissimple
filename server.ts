@@ -2840,6 +2840,28 @@ app.get('/api/user-profile', (req, res) => {
     writeDb(db);
   }
 
+  if (profile) {
+    const studentPlanDays =
+      (db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+        ? db.weeklyStudyDays[email]
+        : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+        ? db.weeklyStudyDays[uid]
+        : profile.weeklyStudyDays || profile.selectedStudyDays || undefined;
+    if (studentPlanDays) {
+      profile.weeklyStudyDays = studentPlanDays;
+      profile.selectedStudyDays = studentPlanDays;
+    }
+    const studyTarget =
+      (db.weeklyStudyDaysTargets?.[email] !== undefined)
+        ? db.weeklyStudyDaysTargets[email]
+        : (uid && db.weeklyStudyDaysTargets?.[uid] !== undefined)
+        ? db.weeklyStudyDaysTargets[uid]
+        : profile.weeklyStudyDaysTarget || undefined;
+    if (studyTarget !== undefined) {
+      profile.weeklyStudyDaysTarget = studyTarget;
+    }
+  }
+
   res.json({ success: true, profile });
 });
 
@@ -3156,7 +3178,8 @@ function distributeWeeklySpotifyForStudent(
   uid: string,
   rawLevel?: string,
   teacherUid?: string,
-  teacherEmail?: string
+  teacherEmail?: string,
+  activeDays?: string[]
 ): any[] {
   const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
   const levelPlaylist = SPOTIFY_LEVEL_PLAYLISTS[normLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
@@ -3183,6 +3206,23 @@ function distributeWeeklySpotifyForStudent(
       }
     });
   }
+
+  // Resolve active study days for this student
+  const studentConfiguredDays: string[] =
+    (activeDays && Array.isArray(activeDays) && activeDays.length > 0)
+      ? activeDays
+      : (email && db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+      ? db.weeklyStudyDays[email]
+      : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+      ? db.weeklyStudyDays[uid]
+      : (email && db.userProfiles?.[email]?.weeklyStudyDays && db.userProfiles[email].weeklyStudyDays.length > 0)
+      ? db.userProfiles[email].weeklyStudyDays
+      : (email && db.userProfiles?.[email]?.selectedStudyDays && db.userProfiles[email].selectedStudyDays.length > 0)
+      ? db.userProfiles[email].selectedStudyDays
+      : DAYS_SEQUENCE;
+
+  const targetDays = DAYS_SEQUENCE.filter((d) => studentConfiguredDays.includes(d));
+  const daysToDistribute = targetDays.length > 0 ? targetDays : DAYS_SEQUENCE;
 
   // Consumed tracks: already listened by this student
   const consumedTrackIds = new Set<string>();
@@ -3211,7 +3251,7 @@ function distributeWeeklySpotifyForStudent(
     })),
   ];
 
-  DAYS_SEQUENCE.forEach((dayKey, idx) => {
+  daysToDistribute.forEach((dayKey, idx) => {
     const designatedTrack = levelPlaylist.tracks[dayKey];
     let chosenTrack = designatedTrack;
     const designatedTrackId = extractSpotifyTrackId(designatedTrack?.url || (designatedTrack as any)?.trackId);
@@ -3337,7 +3377,8 @@ function distributeWeeklyYouTubeForStudent(
   uid: string,
   rawLevel?: string,
   teacherUid?: string,
-  teacherEmail?: string
+  teacherEmail?: string,
+  activeDays?: string[]
 ): any[] {
   const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
   const levelPlaylist = YOUTUBE_LEVEL_PLAYLISTS[normLevel] || YOUTUBE_LEVEL_PLAYLISTS.beginner;
@@ -3364,6 +3405,23 @@ function distributeWeeklyYouTubeForStudent(
     });
   }
 
+  // Resolve active study days for this student
+  const studentConfiguredDays: string[] =
+    (activeDays && Array.isArray(activeDays) && activeDays.length > 0)
+      ? activeDays
+      : (email && db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+      ? db.weeklyStudyDays[email]
+      : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+      ? db.weeklyStudyDays[uid]
+      : (email && db.userProfiles?.[email]?.weeklyStudyDays && db.userProfiles[email].weeklyStudyDays.length > 0)
+      ? db.userProfiles[email].weeklyStudyDays
+      : (email && db.userProfiles?.[email]?.selectedStudyDays && db.userProfiles[email].selectedStudyDays.length > 0)
+      ? db.userProfiles[email].selectedStudyDays
+      : DAYS_SEQUENCE;
+
+  const targetDays = DAYS_SEQUENCE.filter((d) => studentConfiguredDays.includes(d));
+  const daysToDistribute = targetDays.length > 0 ? targetDays : DAYS_SEQUENCE;
+
   // Consumed videos: already watched by this student
   const consumedVideoIds = new Set<string>();
   targetKeys.forEach((k) => {
@@ -3383,7 +3441,7 @@ function distributeWeeklyYouTubeForStudent(
     ...(levelPlaylist.pool || []),
   ].filter(Boolean);
 
-  DAYS_SEQUENCE.forEach((dayKey, idx) => {
+  daysToDistribute.forEach((dayKey, idx) => {
     const designatedVideo = levelPlaylist.videos[dayKey];
     let chosenVideo = designatedVideo;
     const designatedVidId = extractServerYouTubeId(designatedVideo?.videoId || designatedVideo?.url);
@@ -3554,12 +3612,24 @@ app.get('/api/student-routines', (req, res) => {
   let dbChanged = false;
   if (resolved.email || resolved.uid) {
     const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, resolved.email, resolved.uid)).key;
-    if (videoAssigns.length < 7 || hasRepeatingVideoBug) {
-      distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel);
+    const studentPlanDays: string[] =
+      (resolved.email && db.weeklyStudyDays?.[resolved.email] && db.weeklyStudyDays[resolved.email].length > 0)
+        ? db.weeklyStudyDays[resolved.email]
+        : (resolved.uid && db.weeklyStudyDays?.[resolved.uid] && db.weeklyStudyDays[resolved.uid].length > 0)
+        ? db.weeklyStudyDays[resolved.uid]
+        : (resolved.email && db.userProfiles?.[resolved.email]?.weeklyStudyDays && db.userProfiles[resolved.email].weeklyStudyDays.length > 0)
+        ? db.userProfiles[resolved.email].weeklyStudyDays
+        : (resolved.email && db.userProfiles?.[resolved.email]?.selectedStudyDays && db.userProfiles[resolved.email].selectedStudyDays.length > 0)
+        ? db.userProfiles[resolved.email].selectedStudyDays
+        : DAYS_SEQUENCE;
+    const expectedDaysCount = Math.max(1, studentPlanDays.length);
+
+    if (videoAssigns.length < expectedDaysCount || hasRepeatingVideoBug) {
+      distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;
     }
-    if (spotifyAssigns.length < 7 || hasRepeatingSpotifyBug) {
-      distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel);
+    if (spotifyAssigns.length < expectedDaysCount || hasRepeatingSpotifyBug) {
+      distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;
     }
     if (dbChanged) {
@@ -4869,10 +4939,10 @@ app.post('/api/student-spotify-assignments/assign', (req, res) => {
   });
 });
 
-// Endpoint to distribute complete 7-day exclusive sequential tracks for student (Monday to Sunday)
+// Endpoint to distribute exclusive sequential tracks for student active days (or Monday to Sunday)
 app.post('/api/student-spotify-assignments/distribute-week', (req, res) => {
   const db = readDb();
-  const { studentEmail, studentUid, teacherUid, teacherEmail, level } = req.body;
+  const { studentEmail, studentUid, teacherUid, teacherEmail, level, days } = req.body;
   const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
 
   if (!cleanEmail && !uid) {
@@ -4885,7 +4955,8 @@ app.post('/api/student-spotify-assignments/distribute-week', (req, res) => {
     uid,
     level,
     teacherUid,
-    teacherEmail
+    teacherEmail,
+    Array.isArray(days) ? days : undefined
   );
 
   writeDb(db);
@@ -4895,7 +4966,7 @@ app.post('/api/student-spotify-assignments/distribute-week', (req, res) => {
     assignments,
     studentEmail: cleanEmail,
     studentUid: uid,
-    message: 'Semana completa de 7 faixas exclusivas do Spotify distribuída com sucesso!',
+    message: `Semana de ${assignments.length} faixas exclusivas do Spotify distribuída com sucesso!`,
   });
 });
 
@@ -5002,9 +5073,21 @@ app.get('/api/student-video-assignments', (req, res) => {
   );
   const hasRepeatingBug = assignments.length > 1 && uniqueVideoIds.size === 1;
 
-  if (assignments.length < 7 || hasRepeatingBug) {
+  const studentPlanDays: string[] =
+    (email && db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+      ? db.weeklyStudyDays[email]
+      : (resolvedUid && db.weeklyStudyDays?.[resolvedUid] && db.weeklyStudyDays[resolvedUid].length > 0)
+      ? db.weeklyStudyDays[resolvedUid]
+      : (email && db.userProfiles?.[email]?.weeklyStudyDays && db.userProfiles[email].weeklyStudyDays.length > 0)
+      ? db.userProfiles[email].weeklyStudyDays
+      : (email && db.userProfiles?.[email]?.selectedStudyDays && db.userProfiles[email].selectedStudyDays.length > 0)
+      ? db.userProfiles[email].selectedStudyDays
+      : DAYS_SEQUENCE;
+  const expectedDaysCount = Math.max(1, studentPlanDays.length);
+
+  if (assignments.length < expectedDaysCount || hasRepeatingBug) {
     if (email || resolvedUid) {
-      assignments = distributeWeeklyYouTubeForStudent(db, email, resolvedUid, studentLevel);
+      assignments = distributeWeeklyYouTubeForStudent(db, email, resolvedUid, studentLevel, undefined, undefined, studentPlanDays);
       writeDb(db);
     }
   }
@@ -5357,10 +5440,10 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
   });
 });
 
-// Endpoint to distribute complete 7-day exclusive sequential YouTube videos for student (Monday to Sunday)
+// Endpoint to distribute exclusive sequential YouTube videos for student active days (or Monday to Sunday)
 app.post('/api/student-video-assignments/distribute-week', (req, res) => {
   const db = readDb();
-  const { studentEmail, studentUid, teacherUid, teacherEmail, level } = req.body;
+  const { studentEmail, studentUid, teacherUid, teacherEmail, level, days } = req.body;
   const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
 
   if (!cleanEmail && !uid) {
@@ -5373,7 +5456,8 @@ app.post('/api/student-video-assignments/distribute-week', (req, res) => {
     uid,
     level,
     teacherUid,
-    teacherEmail
+    teacherEmail,
+    Array.isArray(days) ? days : undefined
   );
 
   writeDb(db);
@@ -5383,7 +5467,7 @@ app.post('/api/student-video-assignments/distribute-week', (req, res) => {
     assignments,
     studentEmail: cleanEmail,
     studentUid: uid,
-    message: 'Semana completa de 7 vídeos exclusivos do YouTube atribuída com sucesso!',
+    message: `Semana de ${assignments.length} vídeos exclusivos do YouTube atribuída com sucesso!`,
   });
 });
 
