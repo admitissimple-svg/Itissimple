@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Sparkles,
   Calendar,
@@ -246,8 +246,38 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [isCheckingSentence, setIsCheckingSentence] = useState<boolean>(false);
 
   // Quick jump helpers
-  const handleJumpWeekdays = () => onSelectDay('monday');
-  const handleJumpWeekends = () => onSelectDay('saturday');
+  const activeStudyDays: DayOfWeek[] = useMemo(() => {
+    if (userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0) {
+      return userProfile.weeklyStudyDays;
+    }
+    return DAYS_OF_WEEK;
+  }, [userProfile?.weeklyStudyDays]);
+
+  // Ensure selectedDay is always one of the active study days in the student's plan
+  useEffect(() => {
+    if (userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0) {
+      if (!userProfile.weeklyStudyDays.includes(selectedDay)) {
+        const fallback = userProfile.weeklyStudyDays.includes(todayDay)
+          ? todayDay
+          : userProfile.weeklyStudyDays[0];
+        if (fallback) onSelectDay(fallback);
+      }
+    }
+  }, [userProfile?.weeklyStudyDays, selectedDay, todayDay, onSelectDay]);
+
+  const handleJumpWeekdays = () => {
+    const weekday = activeStudyDays.find((d) =>
+      ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].includes(d)
+    );
+    if (weekday) onSelectDay(weekday);
+    else if (activeStudyDays[0]) onSelectDay(activeStudyDays[0]);
+  };
+
+  const handleJumpWeekends = () => {
+    const weekend = activeStudyDays.find((d) => ['saturday', 'sunday'].includes(d));
+    if (weekend) onSelectDay(weekend);
+    else if (activeStudyDays.length > 0) onSelectDay(activeStudyDays[activeStudyDays.length - 1]);
+  };
 
   // Calculate routine words for current day
   const allLearnedWordsToday: string[] = [];
@@ -449,30 +479,43 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       setLoadingPlaylistAssignId(activityId);
       setPlaylistFeedback(null);
 
-      // 1. Search prior study days in the week from routinesByDay
-      const daysOrder: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-      const currentIdx = daysOrder.indexOf(selectedDay);
-      let prevVideo: TeacherAssignedVideo | null = null;
-      let prevDayName = '';
+      // Search prior active study day from the student's study plan
+      const calendarOrder: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const activeDaysInOrder = calendarOrder.filter((d) => activeStudyDays.includes(d));
+      const effectiveActive = activeDaysInOrder.length > 0 ? activeDaysInOrder : calendarOrder;
+      const currentActiveIdx = effectiveActive.indexOf(selectedDay);
 
-      for (let i = currentIdx - 1; i >= 0; i--) {
-        const d = daysOrder[i];
-        const dayActs = routinesByDay[d] || [];
-        for (const a of dayActs) {
-          const v = a.teacherVideos?.[0];
-          if (v && (v.url || v.videoId)) {
-            prevVideo = v;
-            prevDayName = getDayLabel(d, currentLanguage);
-            break;
-          }
-        }
-        if (prevVideo) break;
+      let targetPrevActiveDay: DayOfWeek;
+      if (currentActiveIdx > 0) {
+        // Immediately previous active study day in the student's weekly plan
+        targetPrevActiveDay = effectiveActive[currentActiveIdx - 1];
+      } else if (currentActiveIdx === 0 && effectiveActive.length > 1) {
+        // First active study day: wrap to the last active day of the plan
+        targetPrevActiveDay = effectiveActive[effectiveActive.length - 1];
+      } else {
+        const selCalIdx = calendarOrder.indexOf(selectedDay);
+        const preceding = effectiveActive.filter((d) => calendarOrder.indexOf(d) < selCalIdx);
+        targetPrevActiveDay = preceding.length > 0 ? preceding[preceding.length - 1] : (effectiveActive[effectiveActive.length - 1] || 'monday');
       }
 
-      // Check later days backwards (e.g. from Sunday) if current day is Monday
+      let prevVideo: TeacherAssignedVideo | null = null;
+      let prevDayName = getDayLabel(targetPrevActiveDay, currentLanguage);
+
+      // 1. Search prior study day from targetPrevActiveDay in routinesByDay
+      const targetActs = routinesByDay[targetPrevActiveDay] || [];
+      for (const a of targetActs) {
+        const v = a.teacherVideos?.[0];
+        if (v && (v.url || v.videoId)) {
+          prevVideo = v;
+          prevDayName = getDayLabel(targetPrevActiveDay, currentLanguage);
+          break;
+        }
+      }
+
+      // 2. Search other active days in reverse order if targetPrevActiveDay has no video yet
       if (!prevVideo) {
-        for (let i = daysOrder.length - 1; i > currentIdx; i--) {
-          const d = daysOrder[i];
+        const otherActiveDays = [...effectiveActive].filter((d) => d !== selectedDay && d !== targetPrevActiveDay).reverse();
+        for (const d of otherActiveDays) {
           const dayActs = routinesByDay[d] || [];
           for (const a of dayActs) {
             const v = a.teacherVideos?.[0];
@@ -486,12 +529,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         }
       }
 
-      // Fallback: curriculum default for previous day
+      // 3. Fallback: curriculum default for targetPrevActiveDay
       if (!prevVideo) {
-        const prevDayIdx = (currentIdx - 1 + 7) % 7;
-        const prevDayKey = daysOrder[prevDayIdx];
         const normLevel = normalizeStudentLevel(userProfile?.level || 'beginner');
-        const fallbackCurriculumVid = getDailyYouTubeVideoForStudent(normLevel, prevDayKey);
+        const fallbackCurriculumVid = getDailyYouTubeVideoForStudent(normLevel, targetPrevActiveDay);
         if (fallbackCurriculumVid) {
           prevVideo = {
             id: `vid-${selectedDay}-repeat-${Date.now()}`,
@@ -499,10 +540,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             videoId: fallbackCurriculumVid.videoId,
             title: fallbackCurriculumVid.title,
             duration: fallbackCurriculumVid.duration || '5-10 min',
-            instructions: isEn ? `Repeated video practice from ${getDayLabel(prevDayKey, 'en')}.` : `Prática de repetição do vídeo de ${getDayLabel(prevDayKey, 'pt')}.`,
+            instructions: isEn
+              ? `Repeated video practice from ${getDayLabel(targetPrevActiveDay, 'en')}.`
+              : `Prática de repetição do vídeo de ${getDayLabel(targetPrevActiveDay, 'pt')}.`,
             addedAt: new Date().toISOString(),
           };
-          prevDayName = getDayLabel(prevDayKey, currentLanguage);
+          prevDayName = getDayLabel(targetPrevActiveDay, currentLanguage);
         }
       }
 
@@ -803,30 +846,62 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             </span>
 
             {/* Today's Focus Pill Indicator */}
-            {selectedDay !== todayDay ? (
-              <button
-                type="button"
-                onClick={() => onSelectDay(todayDay)}
-                className="text-[10px] font-extrabold text-[#000035] bg-[#F4CA54] hover:bg-[#e0b840] px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition shadow-xs"
-                title={isEn ? "Jump directly to today's focus" : 'Ir diretamente para o foco de hoje'}
-              >
-                <Sparkles className="w-3 h-3 text-[#000035]" />
-                <span>{isEn ? "Today's Focus" : 'Foco de Hoje'}</span>
-              </button>
+            {activeStudyDays.includes(todayDay) ? (
+              selectedDay !== todayDay ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectDay(todayDay)}
+                  className="text-[10px] font-extrabold text-[#000035] bg-[#F4CA54] hover:bg-[#e0b840] px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition shadow-xs"
+                  title={isEn ? "Jump directly to today's focus" : 'Ir diretamente para o foco de hoje'}
+                >
+                  <Sparkles className="w-3 h-3 text-[#000035]" />
+                  <span>{isEn ? "Today's Focus" : 'Foco de Hoje'}</span>
+                </button>
+              ) : (
+                <span className="text-[10px] font-extrabold text-[#000035] bg-[#F4CA54] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                  <Sparkles className="w-3 h-3 text-[#000035]" />
+                  <span>{isEn ? "Today's Focus" : 'Foco de Hoje'}</span>
+                </span>
+              )
             ) : (
-              <span className="text-[10px] font-extrabold text-[#000035] bg-[#F4CA54] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
-                <Sparkles className="w-3 h-3 text-[#000035]" />
-                <span>{isEn ? "Today's Focus" : 'Foco de Hoje'}</span>
+              <span
+                className="text-[10px] font-extrabold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full flex items-center gap-1"
+                title={isEn ? 'Rest day in your study plan' : 'Dia de descanso no seu plano'}
+              >
+                <span>{isEn ? 'Rest Day' : 'Dia de Descanso'}</span>
               </span>
             )}
           </div>
 
-          {/* 7 Days Buttons Grid with explicit Today Badge */}
+          {/* 7 Days Buttons Grid with active student plan filter */}
           <div className="grid grid-cols-7 gap-1">
             {DAYS_OF_WEEK.map((day) => {
               const isSelected = selectedDay === day;
               const isToday = day === todayDay;
+              const isActiveInPlan = activeStudyDays.includes(day);
               const dayCount = (routinesByDay[day] || []).length;
+
+              if (!isActiveInPlan) {
+                return (
+                  <div
+                    key={day}
+                    className="py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center opacity-30 bg-slate-100 text-slate-400 border border-dashed border-slate-300 cursor-not-allowed select-none transition"
+                    title={
+                      isEn
+                        ? `Day not in your weekly study plan (${getDayLabel(day, 'en')})`
+                        : `Dia não selecionado no seu plano semanal (${getDayLabel(day, 'pt')})`
+                    }
+                  >
+                    <span className="text-[10px] font-black uppercase text-slate-400">
+                      {getDayShortLabel(day, currentLanguage)}
+                    </span>
+                    <span className="text-[8px] font-bold text-slate-400 mt-0.5">
+                      {isEn ? 'Off' : 'Folga'}
+                    </span>
+                  </div>
+                );
+              }
+
               return (
                 <button
                   key={day}

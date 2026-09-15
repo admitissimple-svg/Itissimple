@@ -3675,11 +3675,35 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
     });
   }
 
-  // 3. Reset weekly activity checks for the new week
+  // 3. Reset weekly activity checks and routine completion flags for the new week
   if (!db.studentWeeklyChecks) db.studentWeeklyChecks = {};
   targetKeys.forEach((k) => {
     db.studentWeeklyChecks[k] = {};
+    if (db.studentRoutinesMap?.[k]) {
+      Object.keys(db.studentRoutinesMap[k]).forEach((dayKey) => {
+        const dayActs = db.studentRoutinesMap[k][dayKey];
+        if (Array.isArray(dayActs)) {
+          dayActs.forEach((act: any) => {
+            act.completed = false;
+            act.completedToday = false;
+          });
+        }
+      });
+    }
   });
+
+  // Reset global default routines completion flags
+  if (db.routinesByDay) {
+    Object.keys(db.routinesByDay).forEach((dayKey) => {
+      const dayActs = db.routinesByDay[dayKey];
+      if (Array.isArray(dayActs)) {
+        dayActs.forEach((act: any) => {
+          act.completed = false;
+          act.completedToday = false;
+        });
+      }
+    });
+  }
 
   // 4. Generate new weekly curriculum with guaranteed anti-repetition
   const studentLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, resolved.email, resolved.uid)).key;
@@ -3688,11 +3712,20 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
 
   writeDb(db);
 
-  const routines =
+  const rawRoutines =
     (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) ||
     (resolved.email && db.studentRoutinesMap?.[resolved.email]) ||
     db.routinesByDay ||
     defaultRoutinesByDay;
+
+  const routines: any = {};
+  Object.keys(rawRoutines).forEach((d) => {
+    routines[d] = (rawRoutines[d] || []).map((act: any) => ({
+      ...act,
+      completed: false,
+      completedToday: false,
+    }));
+  });
 
   // 5. Cloud Firestore synchronization linked to UID
   if (resolved.uid) {
@@ -5044,66 +5077,80 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
 
   // If requesting to repeat previous video
   if (playlistId === 'repeat_previous_video') {
-    const daysOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-    const currentIdx = daysOrder.indexOf(targetDay);
+    const calendarDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const studentPlanDays: string[] =
+      (cleanEmail && db.weeklyStudyDays?.[cleanEmail] && db.weeklyStudyDays[cleanEmail].length > 0)
+        ? db.weeklyStudyDays[cleanEmail]
+        : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+        ? db.weeklyStudyDays[uid]
+        : (cleanEmail && db.userProfiles?.[cleanEmail]?.weeklyStudyDays && db.userProfiles[cleanEmail].weeklyStudyDays.length > 0)
+        ? db.userProfiles[cleanEmail].weeklyStudyDays
+        : calendarDays;
 
-    // 1. Search earlier days in this week's assignments
-    for (let i = currentIdx - 1; i >= 0; i--) {
-      const prevDay = daysOrder[i];
-      const prevAssign = userAssignments.find((a: any) => a.day === prevDay && (a.videoId || a.videoUrl));
-      if (prevAssign) {
-        const pVidId = extractServerYouTubeId(prevAssign.videoId || prevAssign.videoUrl);
-        chosenVideo = {
-          videoId: pVidId,
-          url: prevAssign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
-          title: prevAssign.videoTitle || prevAssign.title || `Repeated Video (${prevDay})`,
-          duration: prevAssign.duration || '5-10 min',
-          instructions: `Repeated from ${prevDay}`,
-        };
-        break;
-      }
+    const activeDaysInOrder = calendarDays.filter((d) => studentPlanDays.includes(d));
+    const effectiveActiveDays = activeDaysInOrder.length > 0 ? activeDaysInOrder : calendarDays;
+    const currentActiveIdx = effectiveActiveDays.indexOf(targetDay);
+
+    let targetPrevDay = targetDay;
+    if (currentActiveIdx > 0) {
+      targetPrevDay = effectiveActiveDays[currentActiveIdx - 1];
+    } else if (currentActiveIdx === 0 && effectiveActiveDays.length > 1) {
+      targetPrevDay = effectiveActiveDays[effectiveActiveDays.length - 1];
+    } else {
+      const currentCalIdx = calendarDays.indexOf(targetDay);
+      const preceding = effectiveActiveDays.filter((d) => calendarDays.indexOf(d) < currentCalIdx);
+      targetPrevDay = preceding.length > 0 ? preceding[preceding.length - 1] : (effectiveActiveDays[effectiveActiveDays.length - 1] || 'monday');
     }
 
-    // 2. Search routines if not in assignments
+    // 1. Search designated target previous active study day in assignments
+    const prevAssign = userAssignments.find((a: any) => a.day === targetPrevDay && (a.videoId || a.videoUrl));
+    if (prevAssign) {
+      const pVidId = extractServerYouTubeId(prevAssign.videoId || prevAssign.videoUrl);
+      chosenVideo = {
+        videoId: pVidId,
+        url: prevAssign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
+        title: prevAssign.videoTitle || prevAssign.title || `Repeated Video (${targetPrevDay})`,
+        duration: prevAssign.duration || '5-10 min',
+        instructions: `Repeated from ${targetPrevDay}`,
+      };
+    }
+
+    // 2. Search designated target previous active study day in routines
     if (!chosenVideo) {
       const routineObj =
         (cleanEmail && db.studentRoutinesMap?.[cleanEmail]) ||
         (uid && db.studentRoutinesMap?.[uid]) ||
         db.routinesByDay ||
         defaultRoutinesByDay;
-      for (let i = currentIdx - 1; i >= 0; i--) {
-        const prevDay = daysOrder[i];
-        const dayActs = routineObj[prevDay] || [];
-        for (const act of dayActs) {
-          const v = act.teacherVideos?.[0];
-          if (v && (v.videoId || v.url)) {
-            const pVidId = extractServerYouTubeId(v.videoId || v.url);
-            chosenVideo = {
-              videoId: pVidId,
-              url: v.url || `https://www.youtube.com/watch?v=${pVidId}`,
-              title: v.title || `Repeated Video (${prevDay})`,
-              duration: v.duration || '5-10 min',
-              instructions: `Repeated from ${prevDay}`,
-            };
-            break;
-          }
+      const dayActs = routineObj[targetPrevDay] || [];
+      for (const act of dayActs) {
+        const v = act.teacherVideos?.[0];
+        if (v && (v.videoId || v.url)) {
+          const pVidId = extractServerYouTubeId(v.videoId || v.url);
+          chosenVideo = {
+            videoId: pVidId,
+            url: v.url || `https://www.youtube.com/watch?v=${pVidId}`,
+            title: v.title || `Repeated Video (${targetPrevDay})`,
+            duration: v.duration || '5-10 min',
+            instructions: `Repeated from ${targetPrevDay}`,
+          };
+          break;
         }
-        if (chosenVideo) break;
       }
     }
 
-    // 3. If today is Monday or earlier days had no video, check previous week days backwards
+    // 3. Fallback search across any remaining active days in reverse order
     if (!chosenVideo) {
-      for (let i = daysOrder.length - 1; i > currentIdx; i--) {
-        const d = daysOrder[i];
-        const prevAssign = userAssignments.find((a: any) => a.day === d && (a.videoId || a.videoUrl));
-        if (prevAssign) {
-          const pVidId = extractServerYouTubeId(prevAssign.videoId || prevAssign.videoUrl);
+      const otherActiveDays = [...effectiveActiveDays].filter((d) => d !== targetDay && d !== targetPrevDay).reverse();
+      for (const d of otherActiveDays) {
+        const assign = userAssignments.find((a: any) => a.day === d && (a.videoId || a.videoUrl));
+        if (assign) {
+          const pVidId = extractServerYouTubeId(assign.videoId || assign.videoUrl);
           chosenVideo = {
             videoId: pVidId,
-            url: prevAssign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
-            title: prevAssign.videoTitle || prevAssign.title || `Repeated Video (${d})`,
-            duration: prevAssign.duration || '5-10 min',
+            url: assign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
+            title: assign.videoTitle || assign.title || `Repeated Video (${d})`,
+            duration: assign.duration || '5-10 min',
             instructions: `Repeated from ${d}`,
           };
           break;
@@ -5123,18 +5170,16 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
       };
     }
 
-    // 5. Fallback to curriculum previous day
+    // 5. Fallback to curriculum of target previous active day
     if (!chosenVideo) {
-      const prevDayIdx = (currentIdx - 1 + 7) % 7;
-      const prevDay = daysOrder[prevDayIdx];
-      const fallbackVid = levelCurriculum.videos[prevDay];
+      const fallbackVid = levelCurriculum.videos[targetPrevDay] || levelCurriculum.videos.monday;
       if (fallbackVid) {
         chosenVideo = {
           videoId: fallbackVid.videoId,
           url: fallbackVid.url,
           title: fallbackVid.title,
           duration: fallbackVid.duration || '5-10 min',
-          instructions: `Repeated from ${prevDay}`,
+          instructions: `Repeated from ${targetPrevDay}`,
         };
       }
     }

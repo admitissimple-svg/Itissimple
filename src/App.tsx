@@ -957,11 +957,12 @@ export default function App() {
           }),
         }).catch(() => {});
 
-        // Automatic positioning on Today
+        // Automatic positioning on Today if in active study plan, otherwise first active study day
         const today = getTodayDayOfWeek();
-        setSelectedDay(today);
-        if (data.routines && data.routines[today] && data.routines[today].length > 0) {
-          setSelectedActivityId(data.routines[today][0].id);
+        const effectiveDay = chosenDays.includes(today) ? today : (chosenDays[0] || 'monday');
+        setSelectedDay(effectiveDay);
+        if (data.routines && data.routines[effectiveDay] && data.routines[effectiveDay].length > 0) {
+          setSelectedActivityId(data.routines[effectiveDay][0].id);
         }
 
         setNotifications((prev) => [
@@ -2744,6 +2745,7 @@ export default function App() {
 
                 {/* Section 3: Weekly Activity (Image 3) */}
                 <StudentWeeklyActivitySection
+                  key={`weekly-activity-${userProfile?.weeklyCycle || 1}`}
                   homework={weeklyHomework}
                   routinesByDay={routinesByDay}
                   userProfile={userProfile}
@@ -2755,7 +2757,6 @@ export default function App() {
                   onUpdateUserProfile={(partial) => {
                     handleSaveStudentProfile({ ...userProfile, ...partial });
                   }}
-                  onStartNewWeek={handleStartNewWeek}
                 />
               </div>
             )}

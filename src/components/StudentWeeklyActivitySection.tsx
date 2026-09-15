@@ -11,7 +11,6 @@ import {
   Users,
   ChevronRight,
   Flame,
-  RotateCcw,
   RefreshCw,
   X,
   Target,
@@ -26,7 +25,6 @@ import {
 } from '../types';
 import { Translations, getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from '../utils/notifications';
-import { StartNewWeekModal } from './StartNewWeekModal';
 
 interface StudentWeeklyActivitySectionProps {
   homework: WeeklyHomeworkData | null;
@@ -38,7 +36,6 @@ interface StudentWeeklyActivitySectionProps {
   dictionaryEntries?: StudentDictionaryEntry[];
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   onUpdateUserProfile?: (updated: Partial<UserProfile>) => void;
-  onStartNewWeek?: (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => Promise<boolean | void> | void;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
@@ -100,14 +97,19 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   dictionaryEntries,
   wordsFromRoutines,
   onUpdateUserProfile,
-  onStartNewWeek,
 }) => {
   const isEn = currentLanguage === 'en';
   const t = getTranslations(currentLanguage);
   const studentEmail = userProfile?.email || '';
   const todayDay = getTodayDayOfWeek();
-  const [isNewWeekModalOpen, setIsNewWeekModalOpen] = useState(false);
-  const [isStartingNewWeek, setIsStartingNewWeek] = useState(false);
+
+  // Active study days from student's single source of truth plan
+  const activeStudyDays: DayOfWeek[] = useMemo(() => {
+    if (userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0) {
+      return userProfile.weeklyStudyDays;
+    }
+    return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  }, [userProfile?.weeklyStudyDays]);
 
   // Local state for dictionary entries loaded directly from server database
   const [loadedDictEntries, setLoadedDictEntries] = useState<StudentDictionaryEntry[]>([]);
@@ -205,6 +207,11 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   // Starts with no markings (0%) and persists in backend server database for multi-device sync
   const [weeklyChecks, setWeeklyChecks] = useState<Record<string, boolean>>({});
 
+  // Reset weekly checks immediately when a new week begins
+  useEffect(() => {
+    setWeeklyChecks({});
+  }, [userProfile?.weeklyCycle]);
+
   // Fetch weekly checks and weekly native target from server API for multi-device sync
   useEffect(() => {
     let isMounted = true;
@@ -214,6 +221,8 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         if (isMounted && data) {
           if (data.checks) {
             setWeeklyChecks(data.checks);
+          } else {
+            setWeeklyChecks({});
           }
           if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
             setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
@@ -226,7 +235,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     return () => {
       isMounted = false;
     };
-  }, [studentEmail]);
+  }, [studentEmail, userProfile?.weeklyCycle]);
 
   const handleTargetChange = (newTarget: number) => {
     const safeTarget = Math.max(1, Math.min(7, newTarget));
@@ -248,6 +257,9 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   };
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
+    // Only allow marking days configured in the student's study plan (tutor_live remains independent)
+    if (stepId !== 'tutor_live' && !activeStudyDays.includes(dayKey)) return;
+
     const key = `${stepId}_${dayKey}`;
     setWeeklyChecks((prev) => {
       const updated = {
@@ -595,33 +607,34 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#1C4C96] text-[#F4CA54] border border-[#F4CA54]/40 uppercase">
                   {isEn ? `Week ${userProfile?.weeklyCycle || 1}` : `Semana ${userProfile?.weeklyCycle || 1}`}
                 </span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#062863] text-[#9AB4FF] border border-[#9AB4FF]/30">
-                  {isEn ? `Goal: ${weeklyStudyDaysTarget} days/week` : `Meta: ${weeklyStudyDaysTarget} dias/semana`}
+                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-[#062863] text-[#9AB4FF] border border-[#9AB4FF]/30 flex items-center gap-1 shadow-xs">
+                  <Target className="w-3 h-3 text-[#9AB4FF]" />
+                  <span>{isEn ? `Goal: ${weeklyStudyDaysTarget} days/week` : `Meta: ${weeklyStudyDaysTarget} dias/semana`}</span>
                 </span>
-                {onStartNewWeek && (
-                  <button
-                    type="button"
-                    onClick={() => setIsNewWeekModalOpen(true)}
-                    className="px-2.5 py-1 rounded-xl bg-[#F4CA54] hover:bg-[#e0b840] text-[#000035] font-black text-[10px] transition flex items-center gap-1 cursor-pointer shadow-xs border border-[#F4CA54]/40"
-                    title={isEn ? 'Start a fresh weekly cycle with brand new content' : 'Iniciar novo ciclo semanal com conteúdos inéditos'}
-                  >
-                    <RotateCcw className="w-3 h-3 text-[#000035]" />
-                    <span>{isEn ? 'Start New Week' : 'Iniciar Nova Semana'}</span>
-                  </button>
-                )}
               </div>
 
-              {/* 7 Days Header Pill with Today focus */}
+              {/* 7 Days Header Pill with Today focus & Study Plan Highlights */}
               <div className="grid grid-cols-7 gap-1 bg-[#062863] px-2 py-1 rounded-xl border border-[#1C4C96] text-center">
                 {WEEK_DAYS.map((d) => {
                   const isToday = d.key === todayDay;
+                  const isDayInPlan = activeStudyDays.includes(d.key);
                   return (
                     <span
                       key={d.key}
                       className={`text-[9px] font-mono font-black uppercase w-6 flex flex-col items-center ${
-                        isToday ? 'text-[#F4CA54]' : 'text-[#9AB4FF]'
+                        !isDayInPlan
+                          ? 'opacity-30 text-slate-400'
+                          : isToday
+                          ? 'text-[#F4CA54]'
+                          : 'text-[#9AB4FF]'
                       }`}
-                      title={isToday ? (isEn ? "Today's Focus" : 'Foco de Hoje') : undefined}
+                      title={
+                        isToday
+                          ? isEn ? "Today's Focus" : 'Foco de Hoje'
+                          : !isDayInPlan
+                          ? isEn ? 'Rest Day' : 'Dia de Descanso'
+                          : undefined
+                      }
                     >
                       <span>{d.label}</span>
                       {isToday && <span className="w-1 h-1 rounded-full bg-[#F4CA54] mt-0.5" />}
@@ -711,7 +724,26 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                     {/* 7 Interactive Day Check Circles */}
                     <div className="grid grid-cols-7 gap-1 shrink-0 self-end sm:self-auto">
                       {WEEK_DAYS.map((d) => {
+                        const isDayInPlan = activeStudyDays.includes(d.key);
+                        const isInteractive = row.id === 'tutor_live' || isDayInPlan;
                         const isChecked = Boolean(weeklyChecks[`${row.id}_${d.key}`]);
+
+                        if (!isInteractive) {
+                          return (
+                            <div
+                              key={d.key}
+                              className="w-6 h-6 rounded-full flex items-center justify-center opacity-25 cursor-not-allowed select-none"
+                              title={
+                                isEn
+                                  ? `Day not in study plan (${d.label})`
+                                  : `Dia fora do plano de estudos (${d.label})`
+                              }
+                            >
+                              <div className="w-4 h-4 rounded-full border border-[#607EC9]/40 bg-[#000035]/20" />
+                            </div>
+                          );
+                        }
+
                         return (
                           <button
                             key={d.key}
@@ -738,26 +770,6 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
           </div>
         </div>
       </div>
-
-      {/* Start New Week Configuration Modal */}
-      <StartNewWeekModal
-        isOpen={isNewWeekModalOpen}
-        onClose={() => setIsNewWeekModalOpen(false)}
-        onConfirm={async (studyDaysTarget, selectedDays) => {
-          if (!onStartNewWeek) return;
-          setIsStartingNewWeek(true);
-          try {
-            await onStartNewWeek(studyDaysTarget, selectedDays);
-          } finally {
-            setIsStartingNewWeek(false);
-          }
-        }}
-        currentCycle={userProfile?.weeklyCycle || 1}
-        currentLanguage={currentLanguage}
-        initialStudyDaysTarget={weeklyStudyDaysTarget}
-        initialSelectedDays={userProfile?.weeklyStudyDays}
-        weeklyNativeLessonsTarget={weeklyNativeTarget}
-      />
     </div>
   );
 };
