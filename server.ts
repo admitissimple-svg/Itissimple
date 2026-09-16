@@ -1171,7 +1171,14 @@ const handleRegistration = async (req: any, res: any) => {
       avatar: userAvatar,
     };
   } else {
-    // New Student: NO automatic assignment of any Native Friend
+    // New Student: Respect explicit onboarding selected tutor and trial lesson credit if provided
+    const initialTeacherEmail = req.body.teacherEmail ? (req.body.teacherEmail as string).toLowerCase().trim() : null;
+    const initialTeacherName = req.body.teacherName || null;
+    const initialContractedLessons = Number(req.body.contractedLessons ?? 0);
+    const initialEnrollmentStatus = req.body.enrollmentStatus || (initialTeacherEmail ? 'active' : 'not_enrolled');
+    const initialWeeklyStudyDaysTarget = req.body.weeklyStudyDaysTarget !== undefined ? Number(req.body.weeklyStudyDaysTarget) : 7;
+    const initialWeeklyStudyDays = req.body.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
     const studentData = {
       id: userUid,
       name: cleanName,
@@ -1182,10 +1189,10 @@ const handleRegistration = async (req: any, res: any) => {
       studentLevel: level,
       goal: goal || 'English for everyday life & work',
       learningGoal: goal || 'English for everyday life & work',
-      contractedLessons: 0,
+      contractedLessons: initialContractedLessons,
       completedLessonsCount: 0,
-      teacherEmail: null,
-      teacherName: null,
+      teacherEmail: initialTeacherEmail,
+      teacherName: initialTeacherName,
       routineVideoTime,
       routineAudioTime,
       dailyPhraseTime,
@@ -1196,12 +1203,22 @@ const handleRegistration = async (req: any, res: any) => {
       avatar: userAvatar,
     };
     db.students.push(studentData);
+
+    if (initialContractedLessons > 0) {
+      if (!db.contractedLessons) db.contractedLessons = {};
+      db.contractedLessons[cleanEmail] = initialContractedLessons;
+    }
   }
 
   if (!db.contractedLessons) db.contractedLessons = {};
   if (db.contractedLessons[cleanEmail] === undefined) {
-    db.contractedLessons[cleanEmail] = 0;
+    db.contractedLessons[cleanEmail] = Number(req.body.contractedLessons ?? 0);
   }
+
+  const initialTeacherEmail = req.body.teacherEmail ? (req.body.teacherEmail as string).toLowerCase().trim() : null;
+  const initialTeacherName = req.body.teacherName || null;
+  const initialContracted = Number(req.body.contractedLessons ?? db.contractedLessons[cleanEmail] ?? 0);
+  const initialEnrollment = req.body.enrollmentStatus || (initialTeacherEmail ? 'active' : 'not_enrolled');
 
   if (!db.userProfiles) db.userProfiles = {};
   if (!db.userProfiles[cleanEmail]) {
@@ -1210,20 +1227,23 @@ const handleRegistration = async (req: any, res: any) => {
       name: cleanName,
       email: cleanEmail,
       level,
-      teacherEmail: null,
-      teacherName: null,
+      teacherEmail: initialTeacherEmail,
+      teacherName: initialTeacherName,
       routineVideoTime,
       routineAudioTime,
       dailyPhraseTime,
-      enrollmentStatus: 'not_enrolled',
+      enrollmentStatus: initialEnrollment,
       learningGoal: goal || 'English for everyday life & work',
       streakDays: 0,
       streakCount: 0,
       points: 0,
       dailyGoalMinutes: 30,
       completedTodayMinutes: 0,
-      contractedLessons: 0,
+      contractedLessons: initialContracted,
       completedLessonsCount: 0,
+      weeklyStudyDaysTarget: req.body.weeklyStudyDaysTarget !== undefined ? Number(req.body.weeklyStudyDaysTarget) : 7,
+      weeklyStudyDays: req.body.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+      onboardingCompleted: req.body.onboardingCompleted ?? false,
       picture: userAvatar,
       avatar: userAvatar,
       createdAt: new Date().toISOString(),

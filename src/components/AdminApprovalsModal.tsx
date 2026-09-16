@@ -256,8 +256,7 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
                         </span>
                         <span className="flex items-center gap-1 font-bold text-slate-700">
                           <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                          ${tutor.pricePerSessionUsd || (tutor as any).hourlyRateUsd || 20} USD
-                          {tutor.pricePerSessionBrl ? ` (R$ ${tutor.pricePerSessionBrl})` : ''} / sessão
+                          ${tutor.pricePerSessionUsd || (tutor as any).hourlyRateUsd || 15} USD / sessão
                         </span>
                       </div>
 

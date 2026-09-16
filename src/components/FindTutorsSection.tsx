@@ -306,15 +306,15 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
                       </span>
                       <div className="flex items-baseline gap-1 mt-0.5">
                         <span className="text-lg sm:text-xl font-black text-white">
-                          R$ {tutor.pricePerSessionBrl ?? 95}
+                          ${tutor.pricePerSessionUsd ?? 15} USD
                         </span>
                         <span className="text-[11px] text-[#9AB4FF] font-semibold">
-                          / ${tutor.pricePerSessionUsd ?? 18} USD
+                          / 50 min
                         </span>
                       </div>
                       <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
                         <CheckCircle className="w-2.5 h-2.5" />
-                        <span>Google Meet</span>
+                        <span>{currentLanguage === 'en' ? '1st Trial: 25 min Free' : '1ª Aula: 25 min Grátis'}</span>
                       </span>
                     </div>
 

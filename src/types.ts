@@ -205,6 +205,10 @@ export interface UserProfile {
   weeklyStudyDaysTarget?: number;
   weeklyStudyDays?: DayOfWeek[];
   weeklyCycle?: number;
+  subscriptionType?: 'monthly' | 'trial' | 'package';
+  monthlyFrequency?: '1x' | '2x' | '4x';
+  autoRenew?: boolean;
+  hasCompletedTrialLesson?: boolean;
   dailyJournalEntries?: DailyJournalEntry[];
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
 }

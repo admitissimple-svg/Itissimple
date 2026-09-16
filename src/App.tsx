@@ -70,6 +70,7 @@ import { StudentProfileModal } from './components/StudentProfileModal';
 import { PersonalDictionaryModal } from './components/PersonalDictionaryModal';
 import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
+import { OnboardingWizardModal, OnboardingResultData } from './components/OnboardingWizardModal';
 import { ShieldCheck, Edit3 } from 'lucide-react';
 
 const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfile => ({
@@ -257,9 +258,11 @@ export default function App() {
   const [studentDictionaryEntries, setStudentDictionaryEntries] = useState<StudentDictionaryEntry[]>([]);
   const [isManageSubscriptionOpen, setIsManageSubscriptionOpen] = useState<boolean>(false);
   const [subscriptionTargetTutor, setSubscriptionTargetTutor] = useState<NativeFriendTutor | null>(null);
+  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
 
   const [activeLessonForAction, setActiveLessonForAction] = useState<LiveLesson | null>(null);
   const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('itissimple.school@gmail.com');
+  const [scheduleStudentInfo, setScheduleStudentInfo] = useState<{ email: string; name: string; uid?: string } | null>(null);
 
   // Teacher Filter
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
@@ -626,6 +629,172 @@ export default function App() {
       } catch (err) {
         console.warn('Failed to update subscription:', err);
       }
+    }
+  };
+
+  // Handler: Complete Onboarding Wizard (Multi-step Assistant)
+  const handleCompleteOnboarding = async (data: OnboardingResultData) => {
+    try {
+      let activeAccount = currentAccount;
+
+      // 1. If not logged in and student filled account details in Step 5, perform signup
+      if (!activeAccount && data.studentAccount?.email && data.studentAccount?.password) {
+        try {
+          const signupRes = await fetch('/api/auth/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: data.studentAccount.name || data.studentAccount.email.split('@')[0],
+              email: data.studentAccount.email,
+              password: data.studentAccount.password,
+              role: 'student',
+              learningGoal: data.learningGoal,
+              weeklyPracticeDays: data.weeklyStudyDaysTarget,
+              routineActivities: data.weeklyStudyDays,
+              selectedTutorEmail: data.selectedTutor?.email,
+              selectedTutorName: data.selectedTutor?.name,
+            }),
+          });
+
+          if (signupRes.ok) {
+            const authData = await signupRes.json();
+            if (authData.account) {
+              activeAccount = authData.account;
+              setCurrentAccount(authData.account);
+              localStorage.setItem('currentUserAccount', JSON.stringify(authData.account));
+            }
+          }
+        } catch (authErr) {
+          console.warn('Signup during onboarding failed:', authErr);
+        }
+      }
+
+      // 2. Prepare user profile data
+      const isRegisteringStudent = Boolean(data.studentAccount?.email && data.studentAccount.email.trim() !== '');
+      const effectiveEmail = isRegisteringStudent
+        ? data.studentAccount!.email.trim().toLowerCase()
+        : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : (userProfile.email || activeAccount?.email || ''));
+      const effectiveName = isRegisteringStudent
+        ? (data.studentAccount!.name || data.studentAccount!.email.split('@')[0]).trim()
+        : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile.name || activeAccount?.name || 'Aluno'));
+      const cleanEmail = (effectiveEmail || '').toLowerCase().trim();
+      const studentUid = (currentAccount?.role === 'student' && currentAccount.email?.toLowerCase() === cleanEmail && currentAccount.uid)
+        ? currentAccount.uid
+        : (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id ? userProfile.id : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
+
+      const updatedProfile: Partial<UserProfile> = {
+        id: studentUid,
+        name: effectiveName,
+        email: effectiveEmail,
+        onboardingCompleted: true,
+        learningGoal: data.learningGoal,
+        weeklyStudyDaysTarget: data.weeklyStudyDaysTarget,
+        weeklyStudyDays: data.weeklyStudyDays,
+        routineVideoTime: data.routineVideoTime,
+        routineAudioTime: data.routineAudioTime,
+        dailyPhraseTime: data.dailyPhraseTime,
+        teacherEmail: data.selectedTutor?.email || userProfile.teacherEmail,
+        teacherName: data.selectedTutor?.name || userProfile.teacherName,
+        enrollmentStatus: data.selectedTutor ? 'active' : userProfile.enrollmentStatus,
+        contractedLessons: Math.max(userProfile.contractedLessons || 0, 1),
+        hasCompletedTrialLesson: false,
+        subscriptionType: 'trial',
+      };
+
+      // 3. Persist to /api/user-profile
+      if (cleanEmail) {
+        await fetch('/api/user-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            profile: updatedProfile,
+          }),
+        }).catch(() => {});
+      }
+
+      // 4. Update local state
+      setUserProfile((prev) => ({
+        ...prev,
+        ...updatedProfile,
+      }));
+
+      // Update contractedLessons map with trial lesson
+      if (cleanEmail) {
+        setContractedLessons((prev) => ({
+          ...prev,
+          [cleanEmail]: Math.max(prev[cleanEmail] || 0, 1),
+        }));
+
+        setStudents((prev) => {
+          const exists = prev.some((st) => (st.email || st.studentEmail || '').toLowerCase().trim() === cleanEmail);
+          if (exists) {
+            return prev.map((st) =>
+              (st.email || st.studentEmail || '').toLowerCase().trim() === cleanEmail
+                ? {
+                    ...st,
+                    teacherEmail: data.selectedTutor?.email || st.teacherEmail,
+                    teacherName: data.selectedTutor?.name || st.teacherName,
+                    contractedLessons: Math.max(st.contractedLessons || 0, 1),
+                  }
+                : st
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: `st-${Date.now()}`,
+              name: effectiveName || cleanEmail.split('@')[0],
+              studentName: effectiveName || cleanEmail.split('@')[0],
+              email: cleanEmail,
+              studentEmail: cleanEmail,
+              teacherEmail: data.selectedTutor?.email || '',
+              teacherName: data.selectedTutor?.name || '',
+              status: 'active',
+              level: userProfile.level || 'iniciante',
+              contractedLessons: 1,
+            },
+          ];
+        });
+      }
+
+      // 5. Close onboarding, switch to dashboard
+      setIsOnboardingModalOpen(false);
+      setViewMode('dashboard');
+
+      // 6. Push welcome notification
+      setNotifications((prev) => [
+        {
+          id: `onboarding-${Date.now()}`,
+          title: currentLanguage === 'en'
+            ? '🎉 Onboarding Completed!'
+            : '🎉 Onboarding Concluído com Sucesso!',
+          message: currentLanguage === 'en'
+            ? `Your personalized routine with ${data.selectedTutor?.name || 'your Native Friend'} is active! Your first free trial lesson is available to schedule.`
+            : `Sua rotina personalizada com ${data.selectedTutor?.name || 'seu Amigo Nativo'} foi ativada! Sua 1ª aula teste gratuita está disponível para agendamento.`,
+          type: 'success',
+          timestamp: new Date().toISOString(),
+          read: false,
+        },
+        ...prev,
+      ]);
+
+      // 7. Auto-open lesson schedule modal for this tutor so the student can pick their trial session
+      if (data.selectedTutor?.email) {
+        setTeacherEmailForConfig(data.selectedTutor.email);
+        setScheduleStudentInfo({
+          name: effectiveName,
+          email: cleanEmail,
+          uid: studentUid,
+        });
+        setTimeout(() => {
+          setIsScheduleModalOpen(true);
+        }, 400);
+      }
+    } catch (err) {
+      console.warn('Error completing onboarding:', err);
+      setIsOnboardingModalOpen(false);
+      setViewMode('dashboard');
     }
   };
 
@@ -1166,14 +1335,16 @@ export default function App() {
   }) => {
     const finalStudentEmail = (lessonData.studentEmail && lessonData.studentEmail.trim() !== '')
       ? lessonData.studentEmail.trim().toLowerCase()
-      : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : '');
+      : (scheduleStudentInfo?.email ? scheduleStudentInfo.email.trim().toLowerCase() : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : (userProfile?.email ? userProfile.email.trim().toLowerCase() : '')));
 
     const finalStudentName = (lessonData.studentName && lessonData.studentName.trim() !== '')
       ? lessonData.studentName.trim()
-      : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : 'Aluno');
+      : (scheduleStudentInfo?.name ? scheduleStudentInfo.name.trim() : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile?.name || 'Aluno')));
 
     const finalStudentUid = lessonData.studentUid
+      || scheduleStudentInfo?.uid
       || (currentAccount?.role === 'student' ? currentAccount.uid : '')
+      || (userProfile?.email?.toLowerCase() === finalStudentEmail && userProfile.id ? userProfile.id : '')
       || (finalStudentEmail ? `usr-${finalStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
 
     const finalTeacherUid = lessonData.teacherUid
@@ -2370,6 +2541,7 @@ export default function App() {
           onOpenAdminApprovals={() => setIsAdminApprovalsOpen(true)}
           pendingApprovalsCount={pendingApprovalsCount}
           onLogout={handleLogout}
+          onStartLivingInEnglish={() => setIsOnboardingModalOpen(true)}
           onOpenAuthModal={(mode, role = 'student') => {
             setAuthModalMode(mode);
             setAuthModalRole(role);
@@ -2854,6 +3026,7 @@ export default function App() {
         onClose={() => {
           setIsScheduleModalOpen(false);
           setTeacherEmailForConfig('');
+          setScheduleStudentInfo(null);
         }}
         currentAccount={currentAccount}
         teachers={teachersList}
@@ -2866,6 +3039,9 @@ export default function App() {
         t={isTeacher ? getTranslations('en') : t}
         timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}
         userProfile={userProfile}
+        initialStudentEmail={scheduleStudentInfo?.email || (currentAccount?.role === 'student' ? currentAccount.email : userProfile?.email)}
+        initialStudentName={scheduleStudentInfo?.name || (currentAccount?.role === 'student' ? currentAccount.name : userProfile?.name)}
+        initialStudentUid={scheduleStudentInfo?.uid || (currentAccount?.role === 'student' ? currentAccount.uid : (userProfile?.id || userProfile?.uid))}
       />
 
       <StudentManagementModal
@@ -2972,6 +3148,35 @@ export default function App() {
         onUpdateSubscription={handleUpdateSubscription}
         onPurchasePackage={handlePurchasePackage}
         initialSelectedTutor={subscriptionTargetTutor}
+        onScheduleTrialLessonWithTutor={(tutor) => {
+          setTeacherEmailForConfig(tutor.email);
+          setIsManageSubscriptionOpen(false);
+          setIsScheduleModalOpen(true);
+        }}
+      />
+
+      {/* Multi-step Onboarding Assistant Wizard */}
+      <OnboardingWizardModal
+        isOpen={isOnboardingModalOpen}
+        onClose={() => setIsOnboardingModalOpen(false)}
+        currentLanguage={currentLanguage}
+        tutorsList={tutors}
+        currentUserProfile={userProfile}
+        currentAccount={currentAccount}
+        onCompleteOnboarding={handleCompleteOnboarding}
+        onOpenScheduleTrialLesson={(tutor, studentInfo) => {
+          setTeacherEmailForConfig(tutor.email);
+          if (studentInfo && studentInfo.email) {
+            setScheduleStudentInfo(studentInfo);
+          } else {
+            setScheduleStudentInfo({
+              name: userProfile.name,
+              email: userProfile.email,
+              uid: userProfile.id,
+            });
+          }
+          setIsScheduleModalOpen(true);
+        }}
       />
 
       <DailySentenceModal

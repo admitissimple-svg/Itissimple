@@ -4,6 +4,7 @@ import {
   UserCheck,
   UserX,
   CheckCircle,
+  CheckCircle2,
   AlertTriangle,
   Globe,
   Sparkles,
@@ -20,6 +21,8 @@ import {
   ChevronRight,
   Star,
   ArrowLeftRight,
+  RefreshCw,
+  CalendarCheck,
 } from 'lucide-react';
 import { GoogleAccount, Language, NativeFriendTutor, UserProfile } from '../types';
 
@@ -36,9 +39,58 @@ interface LessonPackageOption {
   isBestValue?: boolean;
   descriptionPt: string;
   descriptionEn: string;
+  frequency?: '1x' | '2x' | '4x';
+  isRecurringMonthly?: boolean;
 }
 
-const LESSON_PACKAGES: LessonPackageOption[] = [
+export const MONTHLY_PACKAGES: LessonPackageOption[] = [
+  {
+    lessonsCount: 4,
+    frequency: '1x',
+    isRecurringMonthly: true,
+    labelPt: '1x por semana (4 aulas/mês)',
+    labelEn: '1x per week (4 lessons/mo)',
+    priceBrl: 360,
+    priceUsd: 70,
+    pricePerLessonBrl: 90,
+    discountBadgePt: 'RECORRÊNCIA MENSAL',
+    discountBadgeEn: 'MONTHLY AUTO-RENEW',
+    descriptionPt: '1 encontro semanal com seu Amigo Nativo para manter contato constante e hábitos sólidos.',
+    descriptionEn: '1 weekly session with your Native Friend for steady practice and solid habits.',
+  },
+  {
+    lessonsCount: 8,
+    frequency: '2x',
+    isRecurringMonthly: true,
+    labelPt: '2x por semana (8 aulas/mês)',
+    labelEn: '2x per week (8 lessons/mo)',
+    priceBrl: 680,
+    priceUsd: 130,
+    pricePerLessonBrl: 85,
+    discountBadgePt: 'MAIS RECOMENDADO • 10% OFF',
+    discountBadgeEn: 'MOST POPULAR • 10% OFF',
+    isPopular: true,
+    descriptionPt: 'Ritmo ideal de imersão para destravar fluência, segurança e vocabulário ativo.',
+    descriptionEn: 'Ideal immersion rhythm to unlock fluency, confidence and active vocabulary.',
+  },
+  {
+    lessonsCount: 16,
+    frequency: '4x',
+    isRecurringMonthly: true,
+    labelPt: '4x por semana (16 aulas/mês)',
+    labelEn: '4x per week (16 lessons/mo)',
+    priceBrl: 1280,
+    priceUsd: 240,
+    pricePerLessonBrl: 80,
+    discountBadgePt: 'IMERSÃO INTENSIVA • 15% OFF',
+    discountBadgeEn: 'INTENSIVE IMMERSION • 15% OFF',
+    isBestValue: true,
+    descriptionPt: 'Aceleração máxima: viva o inglês quase todos os dias com seu mentor dedicado.',
+    descriptionEn: 'Maximum speed: live English almost every day with your dedicated mentor.',
+  },
+];
+
+export const FLEXIBLE_PACKAGES: LessonPackageOption[] = [
   {
     lessonsCount: 1,
     labelPt: '1 Aula Avulsa',
@@ -89,6 +141,8 @@ const LESSON_PACKAGES: LessonPackageOption[] = [
   },
 ];
 
+const LESSON_PACKAGES: LessonPackageOption[] = [...MONTHLY_PACKAGES, ...FLEXIBLE_PACKAGES];
+
 interface ManageSubscriptionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -104,7 +158,10 @@ interface ManageSubscriptionModalProps {
     packagePriceBrl: number;
     packagePriceUsd: number;
     paymentMethod: string;
+    isRecurringMonthly?: boolean;
+    monthlyFrequency?: string;
   }) => Promise<any>;
+  onScheduleTrialLessonWithTutor?: (tutor: NativeFriendTutor) => void;
   initialSelectedTutor?: NativeFriendTutor | null;
 }
 
@@ -117,6 +174,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
   currentLanguage,
   onUpdateSubscription,
   onPurchasePackage,
+  onScheduleTrialLessonWithTutor,
   initialSelectedTutor,
 }) => {
   const isEn = currentLanguage === 'en';
@@ -126,12 +184,16 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
 
   // State to control visibility of the full tutors list when student already has an active tutor
   const [showAvailableTutors, setShowAvailableTutors] = useState<boolean>(false);
+  const [showTrialLessonPicker, setShowTrialLessonPicker] = useState<boolean>(false);
+
+  // Package category tab: monthly recurring vs flexible packages
+  const [packageCategoryTab, setPackageCategoryTab] = useState<'monthly' | 'flexible'>('monthly');
 
   // Purchase Package Flow State
   const [selectedTutorForPurchase, setSelectedTutorForPurchase] = useState<NativeFriendTutor | null>(
     initialSelectedTutor || null
   );
-  const [selectedPackageLessons, setSelectedPackageLessons] = useState<number>(10);
+  const [selectedPackageLessons, setSelectedPackageLessons] = useState<number>(8); // default to 2x/week (8 lessons)
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'pix' | 'credit_card'>('pix');
   const [purchaseCompleted, setPurchaseCompleted] = useState<boolean>(false);
 
@@ -139,6 +201,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
   useEffect(() => {
     if (isOpen) {
       setShowAvailableTutors(false);
+      setShowTrialLessonPicker(false);
       setShowCancelConfirm(false);
       setFeedbackMsg(null);
       if (initialSelectedTutor) {
@@ -384,7 +447,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                     {isEn ? 'Lesson Rate' : 'Valor Base'}
                   </span>
                   <span className="text-base font-black text-[#000035]">
-                    R$ {selectedTutorForPurchase.pricePerSessionBrl || 95}
+                    ${selectedTutorForPurchase.pricePerSessionUsd || 15} USD
                   </span>
                   <span className="text-[10px] text-[#607EC9] font-semibold block">/ {isEn ? 'session' : 'sessão'}</span>
                 </div>
@@ -405,15 +468,60 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                 </div>
               </div>
 
+              {/* Package Category Tabs */}
+              <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPackageCategoryTab('monthly');
+                    setSelectedPackageLessons(8);
+                  }}
+                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    packageCategoryTab === 'monthly'
+                      ? 'bg-white text-[#000035] shadow-xs border border-slate-200/80'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-[#1C4C96]" />
+                  <span>{isEn ? 'Monthly Plans (Recommended)' : 'Planos Mensais (Recomendado)'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPackageCategoryTab('flexible');
+                    setSelectedPackageLessons(10);
+                  }}
+                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    packageCategoryTab === 'flexible'
+                      ? 'bg-white text-[#000035] shadow-xs border border-slate-200/80'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <ShoppingBag className="w-3.5 h-3.5 text-[#1C4C96]" />
+                  <span>{isEn ? 'Flexible Lesson Packs' : 'Pacotes Avulsos Flexíveis'}</span>
+                </button>
+              </div>
+
               {/* Package Selection Grid */}
               <div className="space-y-3">
-                <h4 className="font-black text-sm text-[#000035] flex items-center gap-2">
-                  <ShoppingBag className="w-4 h-4 text-[#1C4C96]" />
-                  <span>{isEn ? 'Select Lesson Package' : 'Escolha o Pacote de Aulas'}</span>
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-black text-sm text-[#000035] flex items-center gap-2">
+                    <ShoppingBag className="w-4 h-4 text-[#1C4C96]" />
+                    <span>
+                      {packageCategoryTab === 'monthly'
+                        ? (isEn ? 'Select Monthly Subscription Frequency' : 'Escolha a Frequência Mensal do Amigo Nativo')
+                        : (isEn ? 'Select Flexible Lesson Pack' : 'Escolha o Pacote de Aulas Avulsas')}
+                    </span>
+                  </h4>
+                  {packageCategoryTab === 'monthly' && (
+                    <span className="text-[11px] text-emerald-700 font-bold bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                      {isEn ? 'Auto-renews monthly • Cancel anytime' : 'Renovação mensal • Cancele quando quiser'}
+                    </span>
+                  )}
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {LESSON_PACKAGES.map((pkg) => {
+                  {(packageCategoryTab === 'monthly' ? MONTHLY_PACKAGES : FLEXIBLE_PACKAGES).map((pkg) => {
                     const isSelected = selectedPackageLessons === pkg.lessonsCount;
                     return (
                       <div
@@ -457,15 +565,15 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
 
                           <div className="flex items-baseline gap-1.5 pt-1">
                             <span className="text-xl font-black text-[#000035]">
-                              R$ {pkg.priceBrl}
+                              ${pkg.priceUsd} USD
                             </span>
                             <span className="text-xs text-[#607EC9] font-medium">
-                              / ${pkg.priceUsd} USD
+                              {pkg.isRecurringMonthly ? (isEn ? '/mo' : '/mês') : ''}
                             </span>
                           </div>
 
                           <p className="text-[11px] text-[#062863] font-bold">
-                            R$ {pkg.pricePerLessonBrl} {isEn ? '/ lesson' : '/ aula'}
+                            ${Math.round(pkg.priceUsd / pkg.lessonsCount)} USD {isEn ? '/ lesson' : '/ aula'}
                           </p>
 
                           <p className="text-xs text-slate-600 pt-1 leading-relaxed">
@@ -542,7 +650,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                 <div className="flex items-center justify-between text-xs border-b border-[#1C4C96] pb-2">
                   <span className="text-[#9AB4FF] font-medium">{isEn ? 'Package:' : 'Pacote Escolhido:'}</span>
                   <span className="font-bold text-white">
-                    {selectedPkg.lessonsCount} {isEn ? 'Lessons' : 'Aulas de 30min'}
+                    {selectedPkg.lessonsCount} {isEn ? 'Lessons (50 min)' : 'Aulas de 50 min'}
                   </span>
                 </div>
 
@@ -550,8 +658,10 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                   <div>
                     <span className="text-[10px] text-[#9AB4FF] font-bold uppercase block">Total</span>
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-xl font-black text-white">R$ {selectedPkg.priceBrl}</span>
-                      <span className="text-xs text-[#9AB4FF]">(${selectedPkg.priceUsd} USD)</span>
+                      <span className="text-xl font-black text-white">${selectedPkg.priceUsd} USD</span>
+                      {selectedPkg.isRecurringMonthly && (
+                        <span className="text-xs text-[#9AB4FF]">{isEn ? '/month' : '/mês'}</span>
+                      )}
                     </div>
                   </div>
 
@@ -627,19 +737,66 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                       </div>
                     </div>
 
-                    {/* Reorganized Action Buttons: Responsive Wrap, Clean Spacing, No Horizontal Scroll */}
-                    <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center gap-2">
-                      {currentTutor && (
+                    {/* 2 Clear Options for Post-Trial / Ongoing Learning */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                      {/* OPÇÃO A */}
+                      <div className="bg-linear-to-br from-blue-50/90 to-indigo-50/70 border border-[#1C4C96]/30 rounded-xl p-3.5 flex flex-col justify-between space-y-2">
+                        <div>
+                          <div className="flex items-center gap-1.5 text-xs font-black text-[#000035]">
+                            <CheckCircle2 className="w-4 h-4 text-[#1C4C96]" />
+                            <span>{isEn ? 'Option A: Continue with Current Friend' : 'Opção A: Continuar com seu Amigo Nativo'}</span>
+                          </div>
+                          <p className="text-[11px] text-[#062863] mt-1 leading-relaxed">
+                            {isEn
+                              ? 'Keep your momentum with a Monthly Recurring Package (1x, 2x or 4x/week) or flexible lesson packs.'
+                              : 'Renove a rotina escolhendo um Pacote Mensal de Aulas (1x, 2x ou 4x/semana) com renovação automática sem multas!'}
+                          </p>
+                        </div>
+                        {currentTutor && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTutorForPurchase(currentTutor);
+                              setPackageCategoryTab('monthly');
+                              setSelectedPackageLessons(8);
+                            }}
+                            className="w-full py-2 px-3 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                          >
+                            <ShoppingBag className="w-3.5 h-3.5 text-[#9AB4FF]" />
+                            <span>{isEn ? 'Choose Monthly Package' : 'Contratar Pacote de Aulas'}</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* OPÇÃO B */}
+                      <div className="bg-linear-to-br from-amber-50/80 to-orange-50/60 border border-amber-300/70 rounded-xl p-3.5 flex flex-col justify-between space-y-2">
+                        <div>
+                          <div className="flex items-center gap-1.5 text-xs font-black text-amber-950">
+                            <Sparkles className="w-4 h-4 text-amber-600" />
+                            <span>{isEn ? 'Option B: Try Another Native Friend' : 'Opção B: Nova Aula Teste com Outro Tutor'}</span>
+                          </div>
+                          <p className="text-[11px] text-amber-900 mt-1 leading-relaxed">
+                            {isEn
+                              ? 'Did not click or want to test another style? Schedule a new trial session with another Native Friend at zero extra charge!'
+                              : 'Não se adaptou à 1ª experiência? Agende uma nova aula teste com outro Amigo Nativo sem nenhum custo adicional!'}
+                          </p>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setSelectedTutorForPurchase(currentTutor)}
-                          className="px-3 py-2 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                          onClick={() => {
+                            setShowTrialLessonPicker(true);
+                            setShowAvailableTutors(true);
+                          }}
+                          className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                         >
-                          <ShoppingBag className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                          <span className="whitespace-nowrap">{isEn ? 'Buy More Lessons' : 'Comprar Mais Aulas'}</span>
+                          <CalendarCheck className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Schedule Trial with Another Tutor' : 'Agendar Aula Teste com Outro Tutor'}</span>
                         </button>
-                      )}
+                      </div>
+                    </div>
 
+                    {/* Reorganized Action Buttons: Responsive Wrap, Clean Spacing, No Horizontal Scroll */}
+                    <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center gap-2">
                       {/* Action button: Substituir Amigo Nativo */}
                       <button
                         type="button"
@@ -675,7 +832,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                       ) : (
                         <div className="sm:ml-auto p-2 bg-rose-50 rounded-xl border border-rose-300 flex items-center gap-2 text-xs">
                           <span className="font-bold text-rose-900 text-[11px] whitespace-nowrap">
-                            {isEn ? 'Confirm cancel?' : 'Confirmar cancelamento?'}
+                            {isEn ? 'Cancel anytime (no fees)?' : 'Cancelar sem multas?'}
                           </span>
                           <button
                             type="button"
@@ -715,6 +872,22 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
               {/* Section 2: Available Native Friends List (Visible if student has no active tutor or clicked 'Substituir Amigo Nativo') */}
               {shouldShowAvailableTutors && (
                 <div className="space-y-3 pt-1 animate-in fade-in duration-200">
+                  {showTrialLessonPicker && (
+                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2.5 text-xs text-amber-950">
+                      <Sparkles className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold block">
+                          {isEn ? 'Schedule New Trial Session with Another Native Friend' : 'Agendamento de Nova Aula Teste'}
+                        </span>
+                        <span>
+                          {isEn
+                            ? 'Choose any Native Friend below to switch your assigned mentor and immediately schedule your 1-on-1 free trial session.'
+                            : 'Selecione qualquer Amigo Nativo abaixo para atualizar seu mentor e agendar sua aula experimental gratuita de 25 minutos.'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <h4 className="font-black text-sm text-[#000035] flex items-center gap-2">
                       <Globe className="w-4 h-4 text-[#1C4C96]" />
@@ -727,7 +900,10 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                       {hasActiveSubscription && (
                         <button
                           type="button"
-                          onClick={() => setShowAvailableTutors(false)}
+                          onClick={() => {
+                            setShowAvailableTutors(false);
+                            setShowTrialLessonPicker(false);
+                          }}
                           className="text-xs font-bold text-[#1C4C96] hover:text-[#062863] hover:underline cursor-pointer ml-1"
                         >
                           {isEn ? 'Hide list' : 'Fechar lista'}
@@ -791,38 +967,58 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                             {/* Price preview */}
                             <div className="text-right hidden sm:block">
                               <span className="text-xs font-black text-[#000035]">
-                                R$ {tutor.pricePerSessionBrl || 95}
+                                ${tutor.pricePerSessionUsd || 15} USD
                               </span>
                               <span className="text-[10px] text-[#607EC9]"> / {isEn ? 'session' : 'sessão'}</span>
                             </div>
 
                             {/* Actions */}
                             <div className="flex items-center gap-2">
-                              {/* Primary: Buy Package & Link */}
-                              <button
-                                type="button"
-                                onClick={() => setSelectedTutorForPurchase(tutor)}
-                                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-98"
-                              >
-                                <ShoppingBag className="w-3.5 h-3.5 text-white" />
-                                <span>
-                                  {isSelected
-                                    ? (isEn ? 'Buy More Lessons' : 'Comprar Mais Aulas')
-                                    : (isEn ? 'Buy Package & Bind' : 'Comprar Pacote & Vincular')}
-                                </span>
-                              </button>
-
-                              {/* Secondary: Switch tutor directly without purchase (if desired) */}
-                              {!isSelected && hasActiveSubscription && (
+                              {/* Option when picking a tutor for a new trial lesson */}
+                              {!isSelected && showTrialLessonPicker ? (
                                 <button
                                   type="button"
                                   disabled={isProcessing}
-                                  onClick={() => handleSelectTutorDirectly(tutor.email, tutor.name)}
-                                  className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-                                  title={isEn ? 'Switch to this tutor directly' : 'Substituir para este tutor diretamente'}
+                                  onClick={async () => {
+                                    await handleSelectTutorDirectly(tutor.email, tutor.name);
+                                    if (onScheduleTrialLessonWithTutor) {
+                                      onScheduleTrialLessonWithTutor(tutor);
+                                    }
+                                  }}
+                                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-98 disabled:opacity-50"
                                 >
-                                  {isEn ? 'Switch' : 'Substituir'}
+                                  <CalendarCheck className="w-3.5 h-3.5" />
+                                  <span>{isEn ? 'Schedule Trial with This Friend' : 'Agendar Aula Teste com este Tutor'}</span>
                                 </button>
+                              ) : (
+                                <>
+                                  {/* Primary: Buy Package & Link */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedTutorForPurchase(tutor)}
+                                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-98"
+                                  >
+                                    <ShoppingBag className="w-3.5 h-3.5 text-white" />
+                                    <span>
+                                      {isSelected
+                                        ? (isEn ? 'Buy More Lessons' : 'Comprar Mais Aulas')
+                                        : (isEn ? 'Buy Package & Bind' : 'Comprar Pacote & Vincular')}
+                                    </span>
+                                  </button>
+
+                                  {/* Secondary: Switch tutor directly without purchase (if desired) */}
+                                  {!isSelected && hasActiveSubscription && (
+                                    <button
+                                      type="button"
+                                      disabled={isProcessing}
+                                      onClick={() => handleSelectTutorDirectly(tutor.email, tutor.name)}
+                                      className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                                      title={isEn ? 'Switch to this tutor directly' : 'Substituir para este tutor diretamente'}
+                                    >
+                                      {isEn ? 'Switch' : 'Substituir'}
+                                    </button>
+                                  )}
+                                </>
                               )}
                             </div>
                           </div>

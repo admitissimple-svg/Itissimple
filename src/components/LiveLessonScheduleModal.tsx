@@ -57,6 +57,9 @@ interface LiveLessonScheduleModalProps {
   t: Translations;
   timeZone?: string;
   userProfile?: UserProfile | null;
+  initialStudentEmail?: string;
+  initialStudentName?: string;
+  initialStudentUid?: string;
 }
 
 export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = ({
@@ -73,10 +76,28 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   t,
   timeZone,
   userProfile,
+  initialStudentEmail,
+  initialStudentName,
+  initialStudentUid,
 }) => {
   const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
   const isEn = currentLanguage === 'en' || isTeacher;
   const activeTz = timeZone || (isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE);
+
+  // Determine candidate student email with priority to registering student / student profile
+  const candidateStudentEmail = (
+    initialStudentEmail ||
+    (currentAccount?.role === 'student' ? currentAccount.email : null) ||
+    (userProfile?.email ? userProfile.email : null)
+  )?.trim().toLowerCase() || null;
+
+  // Student booking mode: when registering, scheduling for oneself, or when an explicit student was provided
+  const isStudentBookingMode = Boolean(
+    initialStudentEmail ||
+    currentAccount?.role === 'student' ||
+    (userProfile?.email && !isTeacher) ||
+    (!isTeacher)
+  );
 
   // Check if student has an active linked teacher
   const studentHasActiveTeacher = !isTeacher && Boolean(
@@ -137,28 +158,30 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   }, [isOpen, activeStudentTeacherEmail, initialTeacherEmail, isTeacher, currentAccount?.email, availableTeachers]);
 
   const defaultStudent =
-    (!isTeacher && currentAccount)
-      ? currentAccount
-      : students[0] || {
-          email: '',
-          name: '',
-          role: 'student' as const,
-        };
+    (candidateStudentEmail ? { email: candidateStudentEmail, name: initialStudentName || userProfile?.name || currentAccount?.name || '', role: 'student' as const } : null) ||
+    (!isTeacher && currentAccount ? currentAccount : null) ||
+    students[0] || {
+      email: '',
+      name: '',
+      role: 'student' as const,
+    };
 
   const [selectedStudentEmail, setSelectedStudentEmail] = useState<string>(
-    !isTeacher && currentAccount ? currentAccount.email : defaultStudent.email
+    candidateStudentEmail || (!isTeacher && currentAccount ? currentAccount.email : defaultStudent.email)
   );
 
   // Synchronize student email whenever modal opens or account changes
   React.useEffect(() => {
-    if (!isTeacher && currentAccount?.email) {
+    if (candidateStudentEmail) {
+      setSelectedStudentEmail(candidateStudentEmail);
+    } else if (!isTeacher && currentAccount?.email) {
       setSelectedStudentEmail(currentAccount.email);
     } else if (isTeacher && students.length > 0) {
       if (!selectedStudentEmail || !students.some((s) => s.email === selectedStudentEmail)) {
         setSelectedStudentEmail(students[0].email);
       }
     }
-  }, [isOpen, isTeacher, currentAccount?.email, students]);
+  }, [isOpen, candidateStudentEmail, isTeacher, currentAccount?.email, students]);
 
   const todayStr = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
@@ -191,22 +214,59 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
       email: selectedTeacherEmail,
     };
 
-  const effectiveTeacherUid = (selectedTeacherObj as any)?.uid
-    || (selectedTeacherEmail ? `usr-${selectedTeacherEmail.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+  const effectiveTeacherUid = useMemo(() => {
+    if ((selectedTeacherObj as any)?.uid) return (selectedTeacherObj as any).uid;
+    if (selectedTeacherObj?.id && !selectedTeacherObj.id.startsWith('teacher-')) return selectedTeacherObj.id;
+    if (selectedTeacherEmail) {
+      return `usr-${selectedTeacherEmail.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-')}`;
+    }
+    return `usr-teacher-${Date.now()}`;
+  }, [selectedTeacherObj, selectedTeacherEmail]);
 
-  const effectiveStudentEmail = (!isTeacher && currentAccount?.email)
-    ? currentAccount.email.trim().toLowerCase()
-    : (selectedStudentEmail || (currentAccount?.email ?? '')).trim().toLowerCase();
+  const effectiveStudentEmail = (
+    (isStudentBookingMode && candidateStudentEmail)
+      ? candidateStudentEmail
+      : (!isTeacher && currentAccount?.email)
+        ? currentAccount.email.trim().toLowerCase()
+        : (selectedStudentEmail || (currentAccount?.email ?? '')).trim().toLowerCase()
+  );
 
   const matchedStudent = students.find((s) => (s.email || '').toLowerCase() === effectiveStudentEmail);
 
-  const effectiveStudentName = (!isTeacher && currentAccount?.name)
-    ? currentAccount.name.trim()
-    : (matchedStudent?.name || currentAccount?.name || 'Aluno').trim();
+  const effectiveStudentName = useMemo(() => {
+    if (initialStudentName && initialStudentName.trim() !== '') return initialStudentName.trim();
+    if (userProfile?.email && userProfile.email.toLowerCase().trim() === effectiveStudentEmail && userProfile.name) {
+      return userProfile.name.trim();
+    }
+    if (currentAccount?.role === 'student' && currentAccount?.name) {
+      return currentAccount.name.trim();
+    }
+    if (matchedStudent?.name) {
+      return matchedStudent.name.trim();
+    }
+    if (effectiveStudentEmail) {
+      return effectiveStudentEmail.split('@')[0];
+    }
+    return 'Aluno';
+  }, [initialStudentName, userProfile, currentAccount, effectiveStudentEmail, matchedStudent]);
 
-  const effectiveStudentUid = (!isTeacher && currentAccount?.uid)
-    ? currentAccount.uid
-    : ((matchedStudent as any)?.uid || (effectiveStudentEmail ? `usr-${effectiveStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : ''));
+  const effectiveStudentUid = useMemo(() => {
+    if (initialStudentUid && initialStudentUid.trim() !== '') return initialStudentUid.trim();
+    if (userProfile?.email && userProfile.email.toLowerCase().trim() === effectiveStudentEmail) {
+      if (userProfile.id) return userProfile.id;
+      if ((userProfile as any).uid) return (userProfile as any).uid;
+    }
+    if (currentAccount?.role === 'student' && currentAccount?.uid) {
+      return currentAccount.uid;
+    }
+    if ((matchedStudent as any)?.uid) {
+      return (matchedStudent as any).uid;
+    }
+    if (effectiveStudentEmail) {
+      return `usr-${effectiveStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    }
+    return `usr-student-${Date.now()}`;
+  }, [initialStudentUid, userProfile, currentAccount, effectiveStudentEmail, matchedStudent]);
 
   const selectedStudentObj = {
     name: effectiveStudentName,
@@ -450,17 +510,9 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               <CalendarPlus className="w-5 h-5 text-[#9AB4FF]" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-black text-base sm:text-lg text-white">
-                  {isEn ? 'Schedule Live 1-on-1 Lesson' : 'Agendar Aula Ao Vivo (Google Meet)'}
-                </h3>
-                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#9AB4FF] border border-[#9AB4FF]/30">
-                  30-min Grid
-                </span>
-              </div>
-              <p className="text-xs text-[#9AB4FF] font-medium">
-                {isEn ? 'Fixed 30-min blocks • Anti-duplicity schedule lock' : 'Blocos de 30 min • Trava anti-duplicidade'}
-              </p>
+              <h3 className="font-black text-base sm:text-lg text-white">
+                {isEn ? 'Schedule Live 1-on-1 Lesson' : 'Agendar Aula Ao Vivo (Google Meet)'}
+              </h3>
             </div>
           </div>
 
@@ -517,11 +569,17 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Your Name' : 'Seu nome'}
+                {isTeacher && !isStudentBookingMode ? (isEn ? 'Student' : 'Aluno') : (isEn ? 'Your Name' : 'Seu nome')}
               </label>
-              {!isTeacher && currentAccount ? (
-                <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863]">
-                  {currentAccount.name} ({currentAccount.email})
+              {isStudentBookingMode ? (
+                <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863] flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <span className="text-[#000035] font-black text-xs sm:text-sm">{effectiveStudentName}</span>
+                    <span className="text-[11px] text-[#607EC9] font-medium">{effectiveStudentEmail}</span>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#1C4C96]/10 text-[#1C4C96] border border-[#1C4C96]/20 shrink-0">
+                    UID: {effectiveStudentUid.length > 14 ? `${effectiveStudentUid.slice(0, 14)}...` : effectiveStudentUid}
+                  </span>
                 </div>
               ) : (
                 <select
@@ -556,7 +614,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
             <div>
               <label className="block text-xs font-bold text-[#000035] mb-1">
-                {isEn ? 'Start Time (30-min Block)' : 'Horário de Início (Blocos de 30 min)'}
+                {isEn ? 'Start Time' : 'Horário de Início'}
               </label>
               <select
                 value={selectedStartTime}

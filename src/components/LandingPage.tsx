@@ -42,6 +42,7 @@ interface LandingPageProps {
   onOpenAdminApprovals?: () => void;
   pendingApprovalsCount?: number;
   onLogout?: () => void;
+  onStartLivingInEnglish?: () => void;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
@@ -59,6 +60,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenAdminApprovals,
   pendingApprovalsCount = 0,
   onLogout,
+  onStartLivingInEnglish,
 }) => {
   const isEn = currentLanguage === 'en';
   const isPt = currentLanguage === 'pt';
@@ -478,7 +480,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    if (currentAccount) {
+                    if (onStartLivingInEnglish) {
+                      onStartLivingInEnglish();
+                    } else if (currentAccount) {
                       onGoToDashboard();
                     } else {
                       onOpenAuthModal('signup');
@@ -513,7 +517,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <SFluencyTracker
                 mode="demo"
                 currentLanguage={currentLanguage}
-                onExploreRoutines={onGoToDashboard}
+                onExploreRoutines={onStartLivingInEnglish || onGoToDashboard}
               />
             </div>
           </div>
