@@ -4042,6 +4042,32 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
           createdAt: new Date().toISOString(),
         });
       }
+
+      // Also ensure student profile has their assigned teacher and active enrollment
+      if (db.userProfiles) {
+        if (!db.userProfiles[cleanStudentEmail]) {
+          db.userProfiles[cleanStudentEmail] = {
+            id: newLesson.studentUid || `usr-${cleanStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: newLesson.studentName || cleanStudentEmail.split('@')[0],
+            email: cleanStudentEmail,
+            teacherEmail: cleanTeacherEmail,
+            teacherName: cleanTeacherName,
+            teacherUid: newLesson.teacherUid,
+            enrollmentStatus: 'active',
+            contractedLessons: Math.max(db.contractedLessons?.[cleanStudentEmail] || 0, 1),
+            createdAt: new Date().toISOString(),
+          };
+        } else {
+          db.userProfiles[cleanStudentEmail] = {
+            ...db.userProfiles[cleanStudentEmail],
+            teacherEmail: cleanTeacherEmail,
+            teacherName: cleanTeacherName || db.userProfiles[cleanStudentEmail].teacherName,
+            teacherUid: newLesson.teacherUid || db.userProfiles[cleanStudentEmail].teacherUid,
+            enrollmentStatus: 'active',
+            contractedLessons: Math.max(db.userProfiles[cleanStudentEmail].contractedLessons || 0, 1),
+          };
+        }
+      }
     }
   }
   await writeDbSync(db);

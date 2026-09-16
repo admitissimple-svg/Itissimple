@@ -572,14 +572,9 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 {isTeacher && !isStudentBookingMode ? (isEn ? 'Student' : 'Aluno') : (isEn ? 'Your Name' : 'Seu nome')}
               </label>
               {isStudentBookingMode ? (
-                <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863] flex items-center justify-between">
-                  <div className="flex flex-col">
-                    <span className="text-[#000035] font-black text-xs sm:text-sm">{effectiveStudentName}</span>
-                    <span className="text-[11px] text-[#607EC9] font-medium">{effectiveStudentEmail}</span>
-                  </div>
-                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#1C4C96]/10 text-[#1C4C96] border border-[#1C4C96]/20 shrink-0">
-                    UID: {effectiveStudentUid.length > 14 ? `${effectiveStudentUid.slice(0, 14)}...` : effectiveStudentUid}
-                  </span>
+                <div className="p-2.5 bg-[#9AB4FF]/10 rounded-xl border border-[#607EC9]/30 text-xs font-bold text-[#062863] flex flex-col justify-center">
+                  <span className="text-[#000035] font-black text-xs sm:text-sm">{effectiveStudentName}</span>
+                  <span className="text-[11px] text-[#607EC9] font-medium mt-0.5">{effectiveStudentEmail}</span>
                 </div>
               ) : (
                 <select

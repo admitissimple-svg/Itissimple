@@ -637,22 +637,40 @@ export default function App() {
     try {
       let activeAccount = currentAccount;
 
-      // 1. If not logged in and student filled account details in Step 5, perform signup
-      if (!activeAccount && data.studentAccount?.email && data.studentAccount?.password) {
+      // 1. Student identity resolution
+      const isRegisteringStudent = Boolean(data.studentAccount?.email && data.studentAccount.email.trim() !== '');
+      const cleanEmail = isRegisteringStudent
+        ? data.studentAccount!.email.trim().toLowerCase()
+        : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : (userProfile.email || activeAccount?.email || ''));
+      const effectiveName = isRegisteringStudent
+        ? (data.studentAccount!.name || data.studentAccount!.email.split('@')[0]).trim()
+        : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile.name || activeAccount?.name || 'Aluno'));
+      const studentUid = (currentAccount?.role === 'student' && currentAccount.email?.toLowerCase() === cleanEmail && currentAccount.uid)
+        ? currentAccount.uid
+        : (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id ? userProfile.id : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
+
+      // 2. Perform student registration/activation on server and set local session
+      if (isRegisteringStudent) {
         try {
           const signupRes = await fetch('/api/auth/signup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: data.studentAccount.name || data.studentAccount.email.split('@')[0],
-              email: data.studentAccount.email,
-              password: data.studentAccount.password,
+              name: effectiveName,
+              email: cleanEmail,
+              password: data.studentAccount?.password || '123456',
               role: 'student',
               learningGoal: data.learningGoal,
               weeklyPracticeDays: data.weeklyStudyDaysTarget,
               routineActivities: data.weeklyStudyDays,
+              routineVideoTime: data.routineVideoTime,
+              routineAudioTime: data.routineAudioTime,
+              dailyPhraseTime: data.dailyPhraseTime,
               selectedTutorEmail: data.selectedTutor?.email,
               selectedTutorName: data.selectedTutor?.name,
+              teacherEmail: data.selectedTutor?.email,
+              teacherName: data.selectedTutor?.name,
+              contractedLessons: 1,
             }),
           });
 
@@ -660,32 +678,32 @@ export default function App() {
             const authData = await signupRes.json();
             if (authData.account) {
               activeAccount = authData.account;
-              setCurrentAccount(authData.account);
-              localStorage.setItem('currentUserAccount', JSON.stringify(authData.account));
             }
           }
         } catch (authErr) {
           console.warn('Signup during onboarding failed:', authErr);
         }
+
+        const newStudentAccount: GoogleAccount = {
+          uid: studentUid,
+          id: studentUid,
+          name: effectiveName,
+          email: cleanEmail,
+          role: 'student',
+          picture: '',
+          avatar: '',
+        };
+        activeAccount = newStudentAccount;
+        setCurrentAccount(newStudentAccount);
+        localStorage.setItem('currentUserAccount', JSON.stringify(newStudentAccount));
       }
 
-      // 2. Prepare user profile data
-      const isRegisteringStudent = Boolean(data.studentAccount?.email && data.studentAccount.email.trim() !== '');
-      const effectiveEmail = isRegisteringStudent
-        ? data.studentAccount!.email.trim().toLowerCase()
-        : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : (userProfile.email || activeAccount?.email || ''));
-      const effectiveName = isRegisteringStudent
-        ? (data.studentAccount!.name || data.studentAccount!.email.split('@')[0]).trim()
-        : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile.name || activeAccount?.name || 'Aluno'));
-      const cleanEmail = (effectiveEmail || '').toLowerCase().trim();
-      const studentUid = (currentAccount?.role === 'student' && currentAccount.email?.toLowerCase() === cleanEmail && currentAccount.uid)
-        ? currentAccount.uid
-        : (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id ? userProfile.id : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
-
-      const updatedProfile: Partial<UserProfile> = {
+      // 3. Prepare user profile data with assigned Native Friend and trial lesson balance
+      const updatedProfile: UserProfile = {
+        ...createDefaultStudentProfile(activeAccount),
         id: studentUid,
         name: effectiveName,
-        email: effectiveEmail,
+        email: cleanEmail,
         onboardingCompleted: true,
         learningGoal: data.learningGoal,
         weeklyStudyDaysTarget: data.weeklyStudyDaysTarget,
@@ -693,15 +711,15 @@ export default function App() {
         routineVideoTime: data.routineVideoTime,
         routineAudioTime: data.routineAudioTime,
         dailyPhraseTime: data.dailyPhraseTime,
-        teacherEmail: data.selectedTutor?.email || userProfile.teacherEmail,
-        teacherName: data.selectedTutor?.name || userProfile.teacherName,
-        enrollmentStatus: data.selectedTutor ? 'active' : userProfile.enrollmentStatus,
+        teacherEmail: data.selectedTutor?.email || userProfile.teacherEmail || '',
+        teacherName: data.selectedTutor?.name || userProfile.teacherName || '',
+        enrollmentStatus: 'active',
         contractedLessons: Math.max(userProfile.contractedLessons || 0, 1),
         hasCompletedTrialLesson: false,
         subscriptionType: 'trial',
       };
 
-      // 3. Persist to /api/user-profile
+      // 4. Persist to /api/user-profile
       if (cleanEmail) {
         await fetch('/api/user-profile', {
           method: 'POST',
@@ -713,7 +731,7 @@ export default function App() {
         }).catch(() => {});
       }
 
-      // 4. Update local state
+      // 5. Update local state
       setUserProfile((prev) => ({
         ...prev,
         ...updatedProfile,
@@ -758,11 +776,11 @@ export default function App() {
         });
       }
 
-      // 5. Close onboarding, switch to dashboard
+      // 6. Direct student to dashboard and close wizard
       setIsOnboardingModalOpen(false);
       setViewMode('dashboard');
 
-      // 6. Push welcome notification
+      // 7. Push welcome notification
       setNotifications((prev) => [
         {
           id: `onboarding-${Date.now()}`,
@@ -779,7 +797,7 @@ export default function App() {
         ...prev,
       ]);
 
-      // 7. Auto-open lesson schedule modal for this tutor so the student can pick their trial session
+      // 8. Auto-open lesson schedule modal for this tutor with student info ready
       if (data.selectedTutor?.email) {
         setTeacherEmailForConfig(data.selectedTutor.email);
         setScheduleStudentInfo({
@@ -1416,14 +1434,54 @@ export default function App() {
       ];
     });
 
-    // If current user is student, bind teacher to student's profile immediately
-    if (currentAccount?.role === 'student') {
+    // Ensure active student session, profile, and fixed assigned Native Friend are locked in
+    if (finalStudentEmail) {
+      if (!currentAccount || currentAccount.role !== 'teacher' || scheduleStudentInfo) {
+        const studentAccount: GoogleAccount = {
+          uid: finalStudentUid,
+          id: finalStudentUid,
+          name: finalStudentName,
+          email: finalStudentEmail,
+          role: 'student',
+          picture: '',
+          avatar: '',
+        };
+        setCurrentAccount(studentAccount);
+        localStorage.setItem('currentUserAccount', JSON.stringify(studentAccount));
+      }
+
       setUserProfile((prev) => ({
         ...prev,
+        id: finalStudentUid,
+        name: finalStudentName,
+        email: finalStudentEmail,
         teacherEmail: lessonData.teacherEmail,
         teacherName: lessonData.teacherName,
         enrollmentStatus: 'active',
+        contractedLessons: Math.max(prev?.contractedLessons || 0, 1),
       }));
+
+      setContractedLessons((prev) => ({
+        ...prev,
+        [finalStudentEmail]: Math.max(prev[finalStudentEmail] || 0, 1),
+      }));
+
+      fetch('/api/user-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: finalStudentEmail,
+          profile: {
+            id: finalStudentUid,
+            name: finalStudentName,
+            email: finalStudentEmail,
+            teacherEmail: lessonData.teacherEmail,
+            teacherName: lessonData.teacherName,
+            enrollmentStatus: 'active',
+            contractedLessons: Math.max(userProfile?.contractedLessons || 0, 1),
+          },
+        }),
+      }).catch(() => {});
     }
 
     try {
@@ -1435,6 +1493,12 @@ export default function App() {
     } catch {
       // local fallback
     }
+
+    // Direct student to their personal dashboard page and close modals
+    setViewMode('dashboard');
+    setIsScheduleModalOpen(false);
+    setIsOnboardingModalOpen(false);
+    setScheduleStudentInfo(null);
   };
 
   // Handler: Complete lesson
@@ -3027,6 +3091,7 @@ export default function App() {
           setIsScheduleModalOpen(false);
           setTeacherEmailForConfig('');
           setScheduleStudentInfo(null);
+          setViewMode('dashboard');
         }}
         currentAccount={currentAccount}
         teachers={teachersList}
@@ -3158,12 +3223,19 @@ export default function App() {
       {/* Multi-step Onboarding Assistant Wizard */}
       <OnboardingWizardModal
         isOpen={isOnboardingModalOpen}
-        onClose={() => setIsOnboardingModalOpen(false)}
+        onClose={() => {
+          setIsOnboardingModalOpen(false);
+          setViewMode('dashboard');
+        }}
         currentLanguage={currentLanguage}
         tutorsList={tutors}
         currentUserProfile={userProfile}
         currentAccount={currentAccount}
         onCompleteOnboarding={handleCompleteOnboarding}
+        onOpenStartNewWeek={() => {
+          setViewMode('dashboard');
+          setIsOnboardingModalOpen(false);
+        }}
         onOpenScheduleTrialLesson={(tutor, studentInfo) => {
           setTeacherEmailForConfig(tutor.email);
           if (studentInfo && studentInfo.email) {

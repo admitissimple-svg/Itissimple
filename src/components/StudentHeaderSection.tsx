@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Award,
   Edit3,
@@ -65,11 +65,25 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
   timeZone = 'America/Sao_Paulo',
 }) => {
   const isEn = currentLanguage === 'en';
-  const studentEmail = currentAccount?.email || '';
+  const studentEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
+  const studentUid = (currentAccount as any)?.uid || userProfile?.id || (userProfile as any)?.uid || '';
 
-  // Native Friend assigned to this student from userProfile
-  const assignedTeacherEmail = (userProfile?.teacherEmail || '').toLowerCase().trim();
-  const assignedTeacherName = userProfile?.teacherName || '';
+  const studentLessons = useMemo(() => {
+    return [...lessons]
+      .filter((l) => {
+        const lEmail = (l.studentEmail || '').toLowerCase().trim();
+        const lUid = l.studentUid || '';
+        const emailMatches = Boolean(studentEmail && lEmail === studentEmail);
+        const uidMatches = Boolean(studentUid && lUid === studentUid);
+        return emailMatches || uidMatches;
+      })
+      .sort((a, b) => new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime());
+  }, [lessons, studentEmail, studentUid]);
+
+  // Native Friend assigned to this student from userProfile or from scheduled/completed lessons
+  const fallbackTeacherFromLesson = studentLessons.find((l) => l.teacherEmail && (l.status === 'scheduled' || l.status === 'completed'));
+  const assignedTeacherEmail = (userProfile?.teacherEmail || fallbackTeacherFromLesson?.teacherEmail || '').toLowerCase().trim();
+  const assignedTeacherName = userProfile?.teacherName || fallbackTeacherFromLesson?.teacherName || '';
   const assignedTeacher = assignedTeacherEmail
     ? (teachers.find((tc) => tc.email.toLowerCase() === assignedTeacherEmail) || {
         name: assignedTeacherName || assignedTeacherEmail.split('@')[0],
@@ -78,18 +92,14 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
       })
     : null;
 
-  // Contract calculation: default to 0 for new students without contracts
+  // Contract calculation: default to 0 for new students without contracts, but at least 1 if they booked a trial lesson
   const totalContractedCount =
     contractedLessons[studentEmail] !== undefined
       ? contractedLessons[studentEmail]
-      : (userProfile?.contractedLessons ?? 0);
+      : Math.max(userProfile?.contractedLessons ?? 0, studentLessons.length > 0 ? 1 : 0);
 
   const [isEditingContract, setIsEditingContract] = useState<boolean>(false);
   const [contractInputVal, setContractInputVal] = useState<number>(totalContractedCount);
-
-  const studentLessons = [...lessons]
-    .filter((l) => (l.studentEmail || '').toLowerCase() === studentEmail.toLowerCase())
-    .sort((a, b) => new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime());
 
   // 2. Realizadas: Quando o aluno confirma a aula através do botão "Realizada" ou quando o aluno cancela a aula por motivo próprio
   const studentRealizadasCount = studentLessons.filter((l) => {
