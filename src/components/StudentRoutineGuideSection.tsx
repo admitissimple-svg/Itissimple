@@ -244,6 +244,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [sentenceSavedSuccess, setSentenceSavedSuccess] = useState<boolean>(false);
   const [sentenceEvaluation, setSentenceEvaluation] = useState<WritingEvaluationResult | null>(null);
   const [isCheckingSentence, setIsCheckingSentence] = useState<boolean>(false);
+  const [savedTopicsBeforeRepeat, setSavedTopicsBeforeRepeat] = useState<Record<string, string>>({});
 
   // Quick jump helpers
   const activeStudyDays: DayOfWeek[] = useMemo(() => {
@@ -252,6 +253,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     }
     return DAYS_OF_WEEK;
   }, [userProfile?.weeklyStudyDays]);
+
+  // Active study days sorted in standard calendar order
+  const activeDaysInOrder: DayOfWeek[] = useMemo(() => {
+    const calendarOrder: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const filtered = calendarOrder.filter((d) => activeStudyDays.includes(d));
+    return filtered.length > 0 ? filtered : calendarOrder;
+  }, [activeStudyDays]);
+
+  // Requirement 3: "Repeat Previous Video" option is available ONLY from the 2nd active study day onwards
+  const canShowRepeatVideoOption = useMemo(() => {
+    const currentActiveIdx = activeDaysInOrder.indexOf(selectedDay);
+    return currentActiveIdx >= 1;
+  }, [activeDaysInOrder, selectedDay]);
 
   // Ensure selectedDay is always one of the active study days in the student's plan
   useEffect(() => {
@@ -621,6 +635,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     setSuggestingUrlActivityId(null);
     setLoadingPlaylistAssignId(activityId);
     setPlaylistFeedback(null);
+    setSavedTopicsBeforeRepeat((prev) => ({ ...prev, [activityId]: playlistId }));
 
     const studentEmail = userProfile?.email || 'aluno@itssimple.com';
 
@@ -672,6 +687,85 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     } finally {
       setLoadingPlaylistAssignId(null);
     }
+  };
+
+  // Handler: Toggle "Repeat Previous Video" checkbox/button
+  const handleToggleRepeatPreviousVideo = async (activityId: string, shouldRepeat: boolean) => {
+    if (shouldRepeat) {
+      // Find current playlist topic and remember it before repeating
+      const currentAct = currentDayList.find((a) => a.id === activityId);
+      const currentVid = currentAct?.teacherVideos?.[0];
+      const currentPlId = (currentVid as any)?.playlistId || '';
+      if (currentPlId && currentPlId !== 'repeat_previous_video' && currentPlId !== 'custom_suggestion') {
+        setSavedTopicsBeforeRepeat((prev) => ({ ...prev, [activityId]: currentPlId }));
+      }
+      await handleSelectPlaylistForActivity(activityId, 'repeat_previous_video');
+    } else {
+      await handleUncheckRepeatPreviousVideo(activityId);
+    }
+  };
+
+  // Handler: Uncheck "Repeat Previous Video", restoring topic selection and resetting video
+  const handleUncheckRepeatPreviousVideo = async (activityId: string) => {
+    setLoadingPlaylistAssignId(activityId);
+    setPlaylistFeedback(null);
+
+    const normLevel = normalizeStudentLevel(userProfile?.level || 'beginner');
+    const defaultDailyVid = getDailyYouTubeVideoForStudent(normLevel, selectedDay);
+    const studentEmail = userProfile?.email || 'aluno@itssimple.com';
+    const studentUid = userProfile?.id || (userProfile as any)?.uid;
+
+    const resetVideo: TeacherAssignedVideo = {
+      id: `vid-${selectedDay}-reset-${Date.now()}`,
+      url: defaultDailyVid.url,
+      videoId: defaultDailyVid.videoId,
+      title: defaultDailyVid.title,
+      duration: defaultDailyVid.duration || '5-10 min',
+      instructions: isEn ? 'Daily English video practice.' : 'Prática diária de vídeo em inglês.',
+      addedAt: new Date().toISOString(),
+      playlistId: '',
+      playlistTitle: isEn ? 'Video of the Day' : 'Vídeo do Dia',
+    } as any;
+
+    if (onAssignVideoToActivity) {
+      onAssignVideoToActivity(activityId, resetVideo, selectedDay);
+    }
+
+    setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: false }));
+    setSuggestingUrlActivityId(null);
+
+    try {
+      await fetch('/api/routines/teacher-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          activityId,
+          activityName: isEn ? 'Video of the Day' : 'Vídeo do Dia',
+          playlistTitle: isEn ? 'Video of the Day' : 'Vídeo do Dia',
+          playlistId: '',
+          videos: [resetVideo],
+          teacherNotes: resetVideo.instructions,
+          days: [selectedDay],
+          day: selectedDay,
+          studentEmail,
+          studentUid,
+        }),
+      });
+    } catch (err) {
+      console.warn('Error syncing uncheck repeat video:', err);
+    } finally {
+      setLoadingPlaylistAssignId(null);
+    }
+
+    setPlaylistFeedback({
+      activityId,
+      type: 'info',
+      message: isEn
+        ? 'Topic selector re-enabled. Choose a topic or your suggestion.'
+        : 'Seletor de tópicos reabilitado. Escolha um tema ou sua sugestão.',
+    });
+    setTimeout(() => setPlaylistFeedback(null), 3500);
+    onSelectActivity(activityId);
   };
 
   // Handler: Save / Confirm custom YouTube video URL suggested by student
@@ -1078,17 +1172,18 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
                 // Find currently active playlist ID for this activity
                 const assignedVid = act.teacherVideos?.[0];
-                let currentPlaylistId = (assignedVid as any)?.playlistId || '';
-
-                if (isCustomSuggestion) {
-                  currentPlaylistId = 'custom_suggestion';
-                } else if (
+                const isRepeatVideo =
                   (assignedVid as any)?.playlistId === 'repeat_previous_video' ||
                   (assignedVid as any)?.playlistTitle === 'Repeat Previous Video' ||
                   (assignedVid as any)?.playlistTitle === 'Repetir Vídeo Anterior' ||
                   act.activityName === 'Repeat Previous Video' ||
-                  act.activityName === 'Repetir Vídeo Anterior'
-                ) {
+                  act.activityName === 'Repetir Vídeo Anterior';
+
+                let currentPlaylistId = (assignedVid as any)?.playlistId || '';
+
+                if (isCustomSuggestion) {
+                  currentPlaylistId = 'custom_suggestion';
+                } else if (isRepeatVideo) {
                   currentPlaylistId = 'repeat_previous_video';
                 } else {
                   if (!currentPlaylistId && (assignedVid as any)?.playlistTitle && playlists.length > 0) {
@@ -1231,48 +1326,94 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                       </span>
 
                       {isVideoAct ? (
-                        <div
-                          className="relative inline-flex items-center min-w-0"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <select
-                            value={currentPlaylistId || ''}
-                            onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
-                            disabled={loadingPlaylistAssignId === act.id}
-                            aria-label={isEn ? 'Playlist Topic / Routine name' : 'Tópico da Playlist / Nome da Rotina'}
-                            className={`text-xs font-bold py-1 pl-2.5 pr-7 rounded-xl border appearance-none cursor-pointer transition focus:outline-hidden max-w-[190px] sm:max-w-[270px] truncate shadow-2xs ${
-                              isSelected
-                                ? 'bg-[#062863] text-white border-[#607EC9] hover:bg-[#1C4C96] hover:border-[#9AB4FF]'
-                                : 'bg-white text-[#000035] border-slate-300 hover:border-[#1C4C96]'
-                            }`}
-                            title={
-                              isEn
-                                ? 'Topic: Choose playlist to unify routine name & inject exclusive video'
-                                : 'Tópico: Escolha a playlist para unificar o nome da rotina e injetar o vídeo exclusivo'
-                            }
+                        <div className="flex items-center gap-2 flex-wrap min-w-0">
+                          {/* Topic Dropdown (Predefined topics + "Your Suggestion") */}
+                          <div
+                            className="relative inline-flex items-center min-w-0"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <option value="" disabled>
-                              {loadingPlaylistAssignId === act.id
-                                ? (isEn ? '⏳ Assigning Topic...' : '⏳ Injetando Tópico...')
-                                : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...')}
-                            </option>
-                            {playlists.map((pl) => (
-                              <option key={pl.id} value={pl.id} className="text-[#000035] bg-white">
-                                {pl.title}
+                            <select
+                              value={isRepeatVideo ? '' : (currentPlaylistId || '')}
+                              onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
+                              disabled={isRepeatVideo || loadingPlaylistAssignId === act.id}
+                              aria-label={isEn ? 'Playlist Topic / Routine name' : 'Tópico da Playlist / Nome da Rotina'}
+                              className={`text-xs font-bold py-1 pl-2.5 pr-7 rounded-xl border appearance-none transition focus:outline-hidden max-w-[180px] sm:max-w-[240px] truncate shadow-2xs ${
+                                isRepeatVideo
+                                  ? isSelected
+                                    ? 'bg-[#062863]/60 text-slate-300 border-[#607EC9]/40 opacity-70 cursor-not-allowed'
+                                    : 'bg-slate-100 text-slate-500 border-slate-300 opacity-70 cursor-not-allowed'
+                                  : isSelected
+                                  ? 'bg-[#062863] text-white border-[#607EC9] hover:bg-[#1C4C96] hover:border-[#9AB4FF] cursor-pointer'
+                                  : 'bg-white text-[#000035] border-slate-300 hover:border-[#1C4C96] cursor-pointer'
+                              }`}
+                              title={
+                                isRepeatVideo
+                                  ? (isEn
+                                      ? 'Topic selection is disabled while "Repeat Previous Video" is checked'
+                                      : 'Seleção de tópicos desabilitada enquanto "Repetir Vídeo Anterior" estiver marcado')
+                                  : (isEn
+                                      ? 'Topic: Choose playlist to unify routine name & inject exclusive video'
+                                      : 'Tópico: Escolha a playlist para unificar o nome da rotina e injetar o vídeo exclusivo')
+                              }
+                            >
+                              <option value="" disabled>
+                                {loadingPlaylistAssignId === act.id
+                                  ? (isEn ? '⏳ Assigning Topic...' : '⏳ Injetando Tópico...')
+                                  : isRepeatVideo
+                                  ? (isEn ? '🔁 Repeat Previous Video' : '🔁 Repetir Vídeo Anterior')
+                                  : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...')}
                               </option>
-                            ))}
-                            <option value="repeat_previous_video" className="text-[#000035] bg-white font-semibold">
-                              {isEn ? '🔁 Repeat Previous Video' : '🔁 Repetir Vídeo Anterior'}
-                            </option>
-                            <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
-                              {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
-                            </option>
-                          </select>
-                          <ChevronDown
-                            className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${
-                              isSelected ? 'text-[#9AB4FF]' : 'text-[#1C4C96]'
-                            }`}
-                          />
+                              {playlists.map((pl) => (
+                                <option key={pl.id} value={pl.id} className="text-[#000035] bg-white">
+                                  {pl.title}
+                                </option>
+                              ))}
+                              <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
+                                {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
+                              </option>
+                            </select>
+                            <ChevronDown
+                              className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${
+                                isRepeatVideo
+                                  ? 'text-slate-400'
+                                  : isSelected
+                                  ? 'text-[#9AB4FF]'
+                                  : 'text-[#1C4C96]'
+                              }`}
+                            />
+                          </div>
+
+                          {/* Requirement 2 & 3: "Repeat Previous Video" Checkbox/Toggle, shown ONLY from 2nd active study day onwards */}
+                          {canShowRepeatVideoOption && (
+                            <label
+                              onClick={(e) => e.stopPropagation()}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border transition cursor-pointer select-none shrink-0 shadow-2xs ${
+                                isSelected
+                                  ? isRepeatVideo
+                                    ? 'bg-[#1C4C96] text-white border-[#9AB4FF] ring-1 ring-[#9AB4FF]/50'
+                                    : 'bg-white/10 text-slate-200 border-white/20 hover:bg-white/20 hover:text-white'
+                                  : isRepeatVideo
+                                  ? 'bg-[#1C4C96]/15 text-[#062863] border-[#1C4C96] font-extrabold'
+                                  : 'bg-white text-[#000035] border-slate-300 hover:border-[#1C4C96]'
+                              } ${loadingPlaylistAssignId === act.id ? 'opacity-60 cursor-wait' : ''}`}
+                              title={
+                                isEn
+                                  ? 'Repeat video from the previous active study day of this week'
+                                  : 'Repetir vídeo do último dia de estudo ativo da semana'
+                              }
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isRepeatVideo}
+                                onChange={(e) => handleToggleRepeatPreviousVideo(act.id, e.target.checked)}
+                                disabled={loadingPlaylistAssignId === act.id}
+                                className="w-3.5 h-3.5 rounded border-slate-300 text-[#1C4C96] focus:ring-0 cursor-pointer accent-[#1C4C96]"
+                              />
+                              <span className="whitespace-nowrap">
+                                {isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior'}
+                              </span>
+                            </label>
+                          )}
                         </div>
                       ) : (
                         <span className="text-xs font-bold truncate max-w-[160px] sm:max-w-[220px]" title={act.activityName}>
