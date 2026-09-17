@@ -167,6 +167,13 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
 
   // YouTube Playlist & Anti-Repetition Video Assignment State
   const [playlists, setPlaylists] = useState<any[]>([]);
+
+  // Alphabetically sorted playlists for topic selector (preserving Your Suggestion as the first item)
+  const sortedPlaylists = React.useMemo(() => {
+    return [...playlists].sort((a, b) =>
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+    );
+  }, [playlists]);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>('pl-eating-habits');
   const [dayPlaylistIds, setDayPlaylistIds] = useState<Partial<Record<DayOfWeek, string>>>({});
   const [studentAssignments, setStudentAssignments] = useState<any[]>([]);
@@ -1439,7 +1446,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                   onChange={(e) => setSelectedPlaylistId(e.target.value)}
                   className="text-xs font-bold text-[#000035] bg-transparent focus:outline-hidden cursor-pointer"
                 >
-                  {playlists.map((pl) => (
+                  {sortedPlaylists.map((pl) => (
                     <option key={pl.id} value={pl.id}>
                       {pl.title} ({pl.videos?.length || 0} videos)
                     </option>
@@ -1595,14 +1602,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                             className="text-xs font-bold py-1 pl-2.5 pr-7 bg-slate-50 hover:bg-white text-[#000035] border border-slate-300 hover:border-[#1C4C96] rounded-xl appearance-none cursor-pointer transition focus:outline-hidden max-w-[210px] truncate shadow-2xs"
                             title="YouTube playlist topic unified with student routine"
                           >
-                            {playlists.map((pl) => (
+                            <option value="" disabled>
+                              {isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...'}
+                            </option>
+                            <option value="custom_suggestion">
+                              💡 {isEn ? 'Your Suggestion (Student)' : 'Sua Sugestão (Aluno)'}
+                            </option>
+                            {sortedPlaylists.map((pl) => (
                               <option key={pl.id} value={pl.id}>
                                 {pl.title}
                               </option>
                             ))}
-                            <option value="custom_suggestion">
-                              💡 {isEn ? 'Your Suggestion (Student)' : 'Sua Sugestão (Aluno)'}
-                            </option>
                             <option value="repeat_previous_video">
                               🔁 {isEn ? `Repeat Previous (${prevDayLabel.slice(0, 3)})` : `Repetir Anterior (${prevDayLabel.slice(0, 3)})`}
                             </option>

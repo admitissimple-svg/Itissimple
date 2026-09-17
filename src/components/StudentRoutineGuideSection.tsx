@@ -125,6 +125,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   // Playlists from active admin YouTube channel
   const [playlists, setPlaylists] = useState<YouTubePlaylistItem[]>([]);
+
+  // Alphabetically sorted playlists for topic selector (preserving Your Suggestion as the first item)
+  const sortedPlaylists = useMemo(() => {
+    return [...playlists].sort((a, b) =>
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+    );
+  }, [playlists]);
   const [loadingPlaylistAssignId, setLoadingPlaylistAssignId] = useState<string | null>(null);
   const [playlistFeedback, setPlaylistFeedback] = useState<{
     activityId: string;
@@ -406,16 +413,16 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const isCustomWithoutVideo =
     isActiveActivityCustomSuggestion && (!assignedVideo?.url || !assignedVideo?.videoId);
 
-  const rawVideoUrl = assignedVideo?.videoId || assignedVideo?.url || (isCustomWithoutVideo ? '' : dailyYouTubeVideo.url);
-  const validVidId = isCustomWithoutVideo
-    ? ''
-    : extractYouTubeVideoId(rawVideoUrl) || dailyYouTubeVideo.videoId || 'OT1YRzt1f8A';
-  const defaultVideoTitle =
-    assignedVideo?.title ||
-    dailyYouTubeVideo.title ||
-    (activeActivity
-      ? `English Routine: ${getActivityDisplayName(activeActivity.activityName, currentLanguage)}`
-      : 'English Routine Video');
+  const hasAssignedVideo = Boolean(assignedVideo && (assignedVideo.url || assignedVideo.videoId));
+  const rawVideoUrl = hasAssignedVideo
+    ? (assignedVideo?.videoId || assignedVideo?.url || '')
+    : '';
+  const validVidId = hasAssignedVideo
+    ? (extractYouTubeVideoId(rawVideoUrl) || assignedVideo?.videoId || '')
+    : '';
+  const defaultVideoTitle = hasAssignedVideo
+    ? (assignedVideo?.title || 'Daily Video Practice')
+    : (isEn ? 'Choose a Topic to Start' : 'Escolha um Tópico para Iniciar');
   const embedUrl = validVidId ? getYouTubeEmbedUrl(validVidId) : '';
 
   const rawAssignedSpotify =
@@ -1363,14 +1370,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                                   ? (isEn ? '🔁 Repeat Previous Video' : '🔁 Repetir Vídeo Anterior')
                                   : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...')}
                               </option>
-                              {playlists.map((pl) => (
+                              <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
+                                {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
+                              </option>
+                              {sortedPlaylists.map((pl) => (
                                 <option key={pl.id} value={pl.id} className="text-[#000035] bg-white">
                                   {pl.title}
                                 </option>
                               ))}
-                              <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
-                                {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
-                              </option>
                             </select>
                             <ChevronDown
                               className={`w-3.5 h-3.5 pointer-events-none absolute right-2 ${
@@ -1630,10 +1637,17 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 </p>
               </div>
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-2">
-                <Play className="w-10 h-10 text-[#9AB4FF]" />
-                <p className="text-xs text-slate-300">
-                  {isEn ? 'Video ready for your routine' : 'Vídeo pronto para sua rotina'}
+              <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-2.5 p-6 text-center bg-gradient-to-b from-[#062863]/60 to-[#000035]">
+                <div className="w-12 h-12 rounded-2xl bg-[#1C4C96]/40 text-[#9AB4FF] flex items-center justify-center border border-[#9AB4FF]/20 shadow-xs mb-0.5">
+                  <Sparkles className="w-6 h-6 text-[#F4CA54]" />
+                </div>
+                <p className="text-sm font-black text-white">
+                  {isEn ? 'Choose a Topic for this Day' : 'Escolha um Tópico para este Dia'}
+                </p>
+                <p className="text-xs text-slate-300 max-w-sm leading-relaxed">
+                  {isEn
+                    ? 'Select a topic from the dropdown menu above or paste your own suggestion to start this day of your new weekly cycle.'
+                    : 'Selecione um tópico na lista suspensa acima ou sugira seu próprio vídeo para iniciar este dia do seu novo ciclo semanal.'}
                 </p>
               </div>
             )}

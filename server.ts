@@ -79,6 +79,8 @@ interface AppDb {
   studentWatchedVideos?: Record<string, string[]>;
   studentSpotifyAssignments?: Record<string, any[]>;
   studentListenedTracks?: Record<string, string[]>;
+  studentAwaitingTopicSelection?: Record<string, boolean>;
+  spotifyPlaylists?: Record<string, any>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -3202,7 +3204,8 @@ function distributeWeeklySpotifyForStudent(
   activeDays?: string[]
 ): any[] {
   const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
-  const levelPlaylist = SPOTIFY_LEVEL_PLAYLISTS[normLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+  const dbSpotifyPlaylists = db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
+  const levelPlaylist = dbSpotifyPlaylists[normLevel] || dbSpotifyPlaylists.beginner || SPOTIFY_LEVEL_PLAYLISTS[normLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
 
   const targetKeys = Array.from(new Set([email, uid].filter(Boolean) as string[]));
   if (targetKeys.length === 0) return [];
@@ -3455,10 +3458,28 @@ function distributeWeeklyYouTubeForStudent(
   const assignedRecords: any[] = [];
   const assignedInWeekVideoIds = new Set<string>();
 
-  // Full candidate pool for this level (7 designated days + curriculum pool)
+  // Incorporate dynamic playlists from the YouTube channel as candidate pool
+  const channelPlaylistCandidates: any[] = [];
+  if (db.youtubePlaylists && Array.isArray(db.youtubePlaylists)) {
+    db.youtubePlaylists.forEach((pl: any) => {
+      if (Array.isArray(pl.videos)) {
+        pl.videos.forEach((v: any) => {
+          channelPlaylistCandidates.push({
+            ...v,
+            playlistId: pl.id,
+            playlistTitle: pl.title,
+            instructions: v.instructions || `Assista a esta aula sobre "${pl.title}".`,
+          });
+        });
+      }
+    });
+  }
+
+  // Full candidate pool for this level (7 designated days + curriculum pool + channel videos)
   const allLevelCandidates: any[] = [
     ...DAYS_SEQUENCE.map((d) => levelPlaylist.videos[d]),
     ...(levelPlaylist.pool || []),
+    ...channelPlaylistCandidates,
   ].filter(Boolean);
 
   daysToDistribute.forEach((dayKey, idx) => {
@@ -3644,7 +3665,12 @@ app.get('/api/student-routines', (req, res) => {
         : DAYS_SEQUENCE;
     const expectedDaysCount = Math.max(1, studentPlanDays.length);
 
-    if (videoAssigns.length < expectedDaysCount || hasRepeatingVideoBug) {
+    const isAwaitingTopicSelection = Boolean(
+      (resolved.email && db.studentAwaitingTopicSelection?.[resolved.email]) ||
+      (resolved.uid && db.studentAwaitingTopicSelection?.[resolved.uid])
+    );
+
+    if ((videoAssigns.length < expectedDaysCount || hasRepeatingVideoBug) && !isAwaitingTopicSelection) {
       distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;
     }
@@ -3765,10 +3791,15 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
     });
   }
 
-  // 3. Reset weekly activity checks and routine completion flags for the new week
+  // 3. Reset weekly activity checks, clear video attachments, and reset routine completion flags for the new week
   if (!db.studentWeeklyChecks) db.studentWeeklyChecks = {};
+  if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
+
   targetKeys.forEach((k) => {
     db.studentWeeklyChecks[k] = {};
+    db.studentAwaitingTopicSelection[k] = true;
+    db.studentVideoAssignments[k] = []; // Clear video assignments for the new week
+
     if (db.studentRoutinesMap?.[k]) {
       Object.keys(db.studentRoutinesMap[k]).forEach((dayKey) => {
         const dayActs = db.studentRoutinesMap[k][dayKey];
@@ -3776,6 +3807,18 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
           dayActs.forEach((act: any) => {
             act.completed = false;
             act.completedToday = false;
+            // Clear any attached video for the video activity so the day starts fresh
+            const isVideoAct =
+              act.id?.endsWith('1') ||
+              act.activityName?.toLowerCase().includes('vídeo') ||
+              act.activityName?.toLowerCase().includes('video') ||
+              (act.teacherVideos && act.teacherVideos.length > 0) ||
+              (db.youtubePlaylists || []).some((pl: any) => pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim());
+            if (isVideoAct) {
+              act.teacherVideos = [];
+              act.activityName = 'Daily Video Practice';
+              act.teacherNotes = '';
+            }
           });
         }
       });
@@ -3790,15 +3833,26 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
         dayActs.forEach((act: any) => {
           act.completed = false;
           act.completedToday = false;
+          const isVideoAct =
+            act.id?.endsWith('1') ||
+            act.activityName?.toLowerCase().includes('vídeo') ||
+            act.activityName?.toLowerCase().includes('video') ||
+            (act.teacherVideos && act.teacherVideos.length > 0);
+          if (isVideoAct) {
+            act.teacherVideos = [];
+            act.activityName = 'Daily Video Practice';
+            act.teacherNotes = '';
+          }
         });
       }
     });
   }
 
-  // 4. Generate new weekly curriculum with guaranteed anti-repetition
+  // 4. Distribute new weekly Spotify tracks with guaranteed anti-repetition.
+  // Video assignments are reset to empty: student must select new topics for the cycle.
   const studentLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, resolved.email, resolved.uid)).key;
-  const newVideos = distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel);
   const newTracks = distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel);
+  const newVideos: any[] = [];
 
   writeDb(db);
 
@@ -5090,10 +5144,231 @@ app.get('/api/spotify/verify', async (req, res) => {
   }
 });
 
-// 7.0 YouTube Playlists & Anti-Repetition Exclusive Video Assignment Endpoints
-app.get('/api/youtube-playlists', (req, res) => {
+// 7.0 YouTube & Spotify Dynamic Playlist Synchronization & Anti-Repetition Video Assignments
+
+let lastYouTubeSyncTime = 0;
+const YOUTUBE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+
+async function syncYouTubePlaylistsFromApi(force = false): Promise<any[]> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  const channelId = 'UCdimJysdxd2Hu9YmlVHB98A';
   const db = readDb();
-  res.json(db.youtubePlaylists || []);
+
+  if (!apiKey) {
+    return db.youtubePlaylists || [];
+  }
+
+  if (!force && lastYouTubeSyncTime && Date.now() - lastYouTubeSyncTime < YOUTUBE_CACHE_TTL_MS) {
+    if (db.youtubePlaylists && db.youtubePlaylists.length > 0) {
+      return db.youtubePlaylists;
+    }
+  }
+
+  try {
+    const plUrl = `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&channelId=${channelId}&maxResults=50&key=${apiKey}`;
+    const plRes = await fetch(plUrl);
+    if (!plRes.ok) {
+      console.warn('YouTube API playlists fetch status:', plRes.status);
+      return db.youtubePlaylists || [];
+    }
+
+    const plData = (await plRes.json()) as any;
+    const items = plData.items || [];
+    if (items.length === 0) {
+      return db.youtubePlaylists || [];
+    }
+
+    const syncedPlaylists: any[] = [];
+    for (const pl of items) {
+      const plId = pl.id;
+      const title = pl.snippet?.title || 'English Practice';
+      const description = pl.snippet?.description || '';
+      const thumbnailUrl =
+        pl.snippet?.thumbnails?.high?.url ||
+        pl.snippet?.thumbnails?.medium?.url ||
+        pl.snippet?.thumbnails?.default?.url ||
+        '';
+      const itemCount = pl.contentDetails?.itemCount || 0;
+
+      const itemsUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${plId}&maxResults=50&key=${apiKey}`;
+      const itemsRes = await fetch(itemsUrl);
+      let videos: any[] = [];
+
+      if (itemsRes.ok) {
+        const itemsData = (await itemsRes.json()) as any;
+        const rawItems = itemsData.items || [];
+        videos = rawItems
+          .filter(
+            (v: any) =>
+              v.snippet?.resourceId?.videoId &&
+              v.snippet?.title !== 'Private video' &&
+              v.snippet?.title !== 'Deleted video'
+          )
+          .map((v: any) => {
+            const vidId = v.snippet.resourceId.videoId;
+            return {
+              id: `vid-${vidId}`,
+              videoId: vidId,
+              title: v.snippet.title,
+              description: v.snippet.description || '',
+              thumbnailUrl:
+                v.snippet?.thumbnails?.high?.url ||
+                v.snippet?.thumbnails?.medium?.url ||
+                `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+              url: `https://www.youtube.com/watch?v=${vidId}`,
+              playlistId: plId,
+              playlistTitle: title,
+              instructions: `Assista a esta aula sobre "${title}" e anote 3 expressões novas.`,
+              duration: '6 min',
+            };
+          });
+      }
+
+      // Preserve fallback videos if sub-request didn't return any
+      if (videos.length === 0 && db.youtubePlaylists) {
+        const existingPl = db.youtubePlaylists.find((p: any) => p.id === plId);
+        if (existingPl?.videos?.length) {
+          videos = existingPl.videos;
+        }
+      }
+
+      syncedPlaylists.push({
+        id: plId,
+        title,
+        description,
+        thumbnailUrl,
+        channelId,
+        channelTitle: pl.snippet?.channelTitle || 'Adm Itissimple',
+        itemCount: itemCount || videos.length,
+        updatedAt: new Date().toISOString(),
+        isPublic: true,
+        videos,
+      });
+    }
+
+    if (syncedPlaylists.length > 0) {
+      db.youtubePlaylists = syncedPlaylists;
+      writeDb(db);
+      lastYouTubeSyncTime = Date.now();
+      return syncedPlaylists;
+    }
+  } catch (err) {
+    console.warn('Error fetching YouTube playlists:', err);
+  }
+
+  return db.youtubePlaylists || [];
+}
+
+let lastSpotifySyncTime = 0;
+const SPOTIFY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
+  const token = process.env.SPOTIFY_TOKEN;
+  const db = readDb();
+
+  if (!token) {
+    return db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
+  }
+
+  if (!force && lastSpotifySyncTime && Date.now() - lastSpotifySyncTime < SPOTIFY_CACHE_TTL_MS) {
+    if (db.spotifyPlaylists) {
+      return db.spotifyPlaylists;
+    }
+  }
+
+  const playlistMap: Record<string, { level: 'beginner' | 'intermediate' | 'advanced'; title: string }> = {
+    '01gS0x1KOwrDp7pJq2dPCM': { level: 'beginner', title: "Beginner • It's simple" },
+    '1PdOI8azTqiywT5FWfimQM': { level: 'intermediate', title: "Intermediate • It's simple" },
+    '2bMnxz06NIK6dHeG9lwyUF': { level: 'advanced', title: "Advanced • It's simple" },
+  };
+
+  try {
+    const updatedPlaylists: Record<string, any> = JSON.parse(
+      JSON.stringify(db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS)
+    );
+
+    for (const [playlistId, meta] of Object.entries(playlistMap)) {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=50`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const items = data.items || [];
+        const dynamicTracks = items
+          .filter((item: any) => item.track && item.track.id)
+          .map((item: any) => {
+            const t = item.track;
+            const artistNames = t.artists?.map((a: any) => a.name).join(', ') || 'Adm Itissimple';
+            return {
+              trackId: t.id,
+              title: t.name,
+              artist: artistNames,
+              url: t.external_urls?.spotify || `https://open.spotify.com/track/${t.id}`,
+              embedUrl: `https://open.spotify.com/embed/track/${t.id}?utm_source=generator&theme=0`,
+              duration: Math.round((t.duration_ms || 180000) / 1000),
+              playlistId,
+              playlistTitle: meta.title,
+              teacherTipPt: `Prática de listening com "${t.name}" (${artistNames}). Preste atenção na dicção e conectividade das palavras.`,
+              teacherTipEn: `Active listening practice with "${t.name}" (${artistNames}). Notice rhythm, diction, and connected speech.`,
+            };
+          });
+
+        if (dynamicTracks.length > 0) {
+          if (!updatedPlaylists[meta.level]) {
+            updatedPlaylists[meta.level] = { ...SPOTIFY_LEVEL_PLAYLISTS[meta.level] };
+          }
+          DAYS_SEQUENCE.forEach((d, i) => {
+            if (dynamicTracks[i]) {
+              updatedPlaylists[meta.level].tracks[d] = {
+                ...updatedPlaylists[meta.level].tracks[d],
+                ...dynamicTracks[i],
+                dayOfWeek: d,
+                dayLabelPt: SPOTIFY_LEVEL_PLAYLISTS[meta.level]?.tracks[d]?.dayLabelPt || d,
+                dayLabelEn: SPOTIFY_LEVEL_PLAYLISTS[meta.level]?.tracks[d]?.dayLabelEn || d,
+              };
+            }
+          });
+          if (dynamicTracks.length > 7) {
+            updatedPlaylists[meta.level].pool = dynamicTracks.slice(7);
+          }
+        }
+      }
+    }
+
+    db.spotifyPlaylists = updatedPlaylists;
+    writeDb(db);
+    lastSpotifySyncTime = Date.now();
+    return updatedPlaylists;
+  } catch (err) {
+    console.warn('Error syncing Spotify playlists:', err);
+  }
+
+  return db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
+}
+
+app.get('/api/youtube-playlists', async (req, res) => {
+  const force = req.query.refresh === 'true' || req.query.force === 'true';
+  const playlists = await syncYouTubePlaylistsFromApi(force);
+  const sortedPlaylists = [...playlists].sort((a, b) =>
+    (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+  );
+  res.json(sortedPlaylists);
+});
+
+app.post('/api/youtube-playlists/sync', async (req, res) => {
+  const playlists = await syncYouTubePlaylistsFromApi(true);
+  res.json({ success: true, count: playlists.length, playlists });
+});
+
+app.get('/api/spotify-playlists', async (req, res) => {
+  const force = req.query.refresh === 'true' || req.query.force === 'true';
+  const playlists = await syncSpotifyPlaylistsFromApi(force);
+  res.json(playlists);
+});
+
+app.post('/api/spotify-playlists/sync', async (req, res) => {
+  const playlists = await syncSpotifyPlaylistsFromApi(true);
+  res.json({ success: true, playlists });
 });
 
 app.get('/api/student-video-assignments', (req, res) => {
@@ -5131,7 +5406,12 @@ app.get('/api/student-video-assignments', (req, res) => {
       : DAYS_SEQUENCE;
   const expectedDaysCount = Math.max(1, studentPlanDays.length);
 
-  if (assignments.length < expectedDaysCount || hasRepeatingBug) {
+  const isAwaitingTopicSelection = Boolean(
+    (email && db.studentAwaitingTopicSelection?.[email]) ||
+    (resolvedUid && db.studentAwaitingTopicSelection?.[resolvedUid])
+  );
+
+  if ((assignments.length < expectedDaysCount || hasRepeatingBug) && !isAwaitingTopicSelection) {
     if (email || resolvedUid) {
       assignments = distributeWeeklyYouTubeForStudent(db, email, resolvedUid, studentLevel, undefined, undefined, studentPlanDays);
       writeDb(db);
@@ -5451,6 +5731,10 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
 
   targetKeys.forEach((key) => {
     db.studentRoutinesMap[key] = studentRoutineObj;
+    const assigns = db.studentVideoAssignments?.[key] || [];
+    if (assigns.length >= 7 && db.studentAwaitingTopicSelection) {
+      db.studentAwaitingTopicSelection[key] = false;
+    }
   });
 
   writeDb(db);
