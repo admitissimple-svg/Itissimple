@@ -17,6 +17,7 @@ import {
   DEFAULT_TEACHER_TIMEZONE,
   getDefaultTimezoneForCountry,
 } from '../utils/timezone';
+import { extractYouTubeVideoId } from '../utils/youtube';
 
 interface EditTutorProfileModalProps {
   isOpen: boolean;
@@ -97,9 +98,17 @@ export const EditTutorProfileModal: React.FC<EditTutorProfileModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanVideoLink = (formData.videoIntroUrl || (formData as any).videoUrl || (formData as any).introVideoUrl || (formData as any).youtubeUrl || '').trim();
+    const extractedEmbedId = extractYouTubeVideoId(cleanVideoLink);
+
     const updated: NativeFriendTutor = {
       ...(tutor as NativeFriendTutor),
       ...formData,
+      videoIntroUrl: cleanVideoLink,
+      youtubeUrl: cleanVideoLink,
+      videoUrl: cleanVideoLink,
+      introVideoUrl: cleanVideoLink,
+      youtubeEmbedId: extractedEmbedId || '',
       // Strictly preserve schedule and meet link from tutor / centralized settings
       meetUrl: tutor.meetUrl || (tutor as any).meetLink || '',
       availableDays: tutor.availableDays || [],

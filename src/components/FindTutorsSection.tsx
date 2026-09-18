@@ -18,6 +18,7 @@ import {
 import { NativeFriendTutor, INITIAL_NATIVE_FRIENDS } from '../data/tutors';
 import { Language } from '../types';
 import { getTranslations } from '../utils/i18n';
+import { extractYouTubeVideoId } from '../utils/youtube';
 
 interface FindTutorsSectionProps {
   currentLanguage: Language;
@@ -228,14 +229,25 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
                       </span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setActiveVideoModal(tutor)}
-                      className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C4C96]/60 hover:bg-[#1C4C96] text-[#9AB4FF] hover:text-white text-[11px] font-bold transition cursor-pointer border border-[#607EC9]/40"
-                    >
-                      <Play className="w-3 h-3 fill-[#9AB4FF]" />
-                      <span>{t.watchIntroVideoBtn}</span>
-                    </button>
+                    {Boolean(
+                      (
+                        tutor.videoIntroUrl ||
+                        tutor.youtubeUrl ||
+                        tutor.videoUrl ||
+                        tutor.introVideoUrl ||
+                        tutor.youtubeEmbedId ||
+                        ''
+                      ).trim()
+                    ) && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveVideoModal(tutor)}
+                        className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1C4C96]/60 hover:bg-[#1C4C96] text-[#9AB4FF] hover:text-white text-[11px] font-bold transition cursor-pointer border border-[#607EC9]/40"
+                      >
+                        <Play className="w-3 h-3 fill-[#9AB4FF]" />
+                        <span>{t.watchIntroVideoBtn}</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Center: Tutor Details & Bio */}
@@ -392,15 +404,50 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
               </button>
             </div>
 
-            <div className="aspect-video w-full bg-black">
-              <iframe
-                src={`https://www.youtube-nocookie.com/embed/${activeVideoModal.youtubeEmbedId || 'dQw4w9WgXcQ'}?autoplay=1&rel=0`}
-                title={`Introduction by ${activeVideoModal.name}`}
-                className="w-full h-full border-0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              />
-            </div>
+            {(() => {
+              const rawVideo = (
+                activeVideoModal.videoIntroUrl ||
+                activeVideoModal.youtubeUrl ||
+                activeVideoModal.videoUrl ||
+                activeVideoModal.introVideoUrl ||
+                activeVideoModal.youtubeEmbedId ||
+                ''
+              ).trim();
+
+              const embedId = extractYouTubeVideoId(rawVideo);
+
+              if (embedId) {
+                return (
+                  <div className="w-full aspect-video rounded-xl overflow-hidden bg-black">
+                    <iframe
+                      src={`https://www.youtube.com/embed/${embedId}?autoplay=1&rel=0`}
+                      title={`Introduction by ${activeVideoModal.name}`}
+                      className="w-full h-full border-0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                    />
+                  </div>
+                );
+              }
+
+              if (rawVideo) {
+                return (
+                  <div className="w-full aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center">
+                    <video
+                      src={rawVideo}
+                      controls
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-contain bg-black"
+                    >
+                      {currentLanguage === 'en' ? 'Your browser does not support HTML5 video.' : 'Seu navegador não suporta vídeos HTML5.'}
+                    </video>
+                  </div>
+                );
+              }
+
+              return null;
+            })()}
 
             <div className="p-4 sm:p-5 bg-slate-50 flex items-center justify-between gap-4">
               <div>

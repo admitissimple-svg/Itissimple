@@ -51,6 +51,9 @@ export interface NativeFriendTutor {
   specialties: string[];
   videoIntroUrl: string;
   youtubeEmbedId?: string;
+  introVideoUrl?: string;
+  videoUrl?: string;
+  youtubeUrl?: string;
   availableDays: DayOfWeek[];
   availableHours: string[];
   isSuperTutor?: boolean;

@@ -15,6 +15,7 @@ import {
 import { Language, DayOfWeek } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
 import { TIMEZONE_OPTIONS, getDefaultTimezoneForCountry } from '../utils/timezone';
+import { extractYouTubeVideoId } from '../utils/youtube';
 
 interface BecomeTutorModalProps {
   isOpen: boolean;
@@ -119,6 +120,9 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
     setErrorMessage(null);
 
     try {
+      const cleanVideoLink = (formData.videoUrl || '').trim();
+      const extractedEmbedId = extractYouTubeVideoId(cleanVideoLink);
+
       // Register with backend
       const tutorPayload = {
         name: formData.name.trim(),
@@ -129,7 +133,11 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
         accent: formData.accent,
         headline: formData.headline,
         bio: formData.bio,
-        videoIntroUrl: formData.videoUrl,
+        videoIntroUrl: cleanVideoLink,
+        youtubeUrl: cleanVideoLink,
+        videoUrl: cleanVideoLink,
+        introVideoUrl: cleanVideoLink,
+        youtubeEmbedId: extractedEmbedId || '',
         pricePerSessionUsd: Number(formData.priceUsd) || 20,
         pricePerSessionBrl: Math.round((Number(formData.priceUsd) || 20) * 5.5),
         availableDays: formData.availableDays,

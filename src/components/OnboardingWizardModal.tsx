@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Play,
   Eye,
+  EyeOff,
   DollarSign,
   Briefcase,
   Plane,
@@ -71,9 +72,13 @@ function getYouTubeEmbedId(urlOrId?: string): string | null {
   if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
     return trimmed;
   }
+  const match = trimmed.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|shorts\/|watch\?v=|watch\?.+&v=))([\w-]{11})/i);
+  if (match && match[1]) {
+    return match[1];
+  }
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = trimmed.match(regExp);
-  return match && match[2].length === 11 ? match[2] : null;
+  const secondary = trimmed.match(regExp);
+  return secondary && secondary[2].length === 11 ? secondary[2] : null;
 }
 
 const TIME_OPTIONS = [
@@ -236,17 +241,21 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   );
   const [previewTutorModal, setPreviewTutorModal] = useState<NativeFriendTutor | null>(null);
 
-  // Support ESC key to close preview tutor modal
+  // Support ESC key to close preview tutor modal or main wizard modal
   useEffect(() => {
-    if (!previewTutorModal) return;
+    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setPreviewTutorModal(null);
+        if (previewTutorModal) {
+          setPreviewTutorModal(null);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewTutorModal]);
+  }, [isOpen, previewTutorModal, onClose]);
 
   // Step 5: Account Registration (if not logged in)
   const [authMode, setAuthMode] = useState<'signup' | 'login'>('signup');
@@ -257,6 +266,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     currentUserProfile?.email || currentAccount?.email || ''
   );
   const [studentPassword, setStudentPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isSavedSuccessfully, setIsSavedSuccessfully] = useState<boolean>(false);
 
   // Reset or initialize on open
@@ -434,6 +444,11 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   return (
     <div
       id="onboarding-wizard-modal"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200"
     >
       <div className="bg-[#000035] text-white rounded-3xl max-w-2xl w-full border border-[#607EC9]/40 shadow-2xl overflow-hidden flex flex-col my-4 max-h-[92vh]">
@@ -1057,47 +1072,6 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Presentation Video Player */}
-                      {(() => {
-                        const embedId = getYouTubeEmbedId(previewTutorModal.youtubeEmbedId || previewTutorModal.videoIntroUrl);
-                        if (embedId) {
-                          return (
-                            <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-xs font-bold text-[#9AB4FF]">
-                                <Video className="w-4 h-4 text-[#F4CA54]" />
-                                <span>{isEn ? 'Presentation Video' : 'Vídeo de Apresentação'}</span>
-                              </div>
-                              <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black border border-white/10 shadow-lg">
-                                <iframe
-                                  src={`https://www.youtube-nocookie.com/embed/${embedId}?autoplay=1&rel=0`}
-                                  title={`Video by ${previewTutorModal.name}`}
-                                  className="w-full h-full border-0"
-                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                  allowFullScreen
-                                />
-                              </div>
-                            </div>
-                          );
-                        }
-                        return (
-                          <div className="p-4 rounded-2xl bg-[#062863]/40 border border-[#607EC9]/30 flex items-center gap-3.5">
-                            <div className="w-12 h-12 rounded-xl bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center shrink-0">
-                              <Video className="w-6 h-6" />
-                            </div>
-                            <div className="text-xs">
-                              <h4 className="font-bold text-white">
-                                {isEn ? 'Live 1-on-1 Video Conversation' : 'Conversação Individual ao Vivo'}
-                              </h4>
-                              <p className="text-slate-300 mt-0.5 leading-snug">
-                                {isEn
-                                  ? `${previewTutorModal.name} conducts all sessions natively via Google Meet, adjusting pronunciation, rhythm, and vocabulary in real time.`
-                                  : `${previewTutorModal.name} realiza encontros individuais via Google Meet, calibrando pronúncia, ritmo e vocabulário em tempo real.`}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
                       {/* Pricing Transparency Card */}
                       <div className="p-4 rounded-2xl bg-[#062863]/60 border border-[#607EC9]/40 space-y-3">
                         <div className="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2.5">
@@ -1163,6 +1137,72 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                           {previewTutorModal.bio || 'Experienced conversational native friend helping students speak naturally in everyday situations.'}
                         </p>
                       </div>
+
+                      {/* Presentation Video Player - Positioned directly below ABOUT THE NATIVE FRIEND */}
+                      {(() => {
+                        const rawVideoUrl = (
+                          previewTutorModal.videoIntroUrl ||
+                          previewTutorModal.youtubeUrl ||
+                          previewTutorModal.videoUrl ||
+                          previewTutorModal.introVideoUrl ||
+                          (previewTutorModal.youtubeEmbedId ? `https://www.youtube.com/watch?v=${previewTutorModal.youtubeEmbedId}` : '') ||
+                          ''
+                        ).trim();
+
+                        const embedId = getYouTubeEmbedId(rawVideoUrl);
+
+                        // If tutor did not register a video, do not render the container
+                        if (!embedId && !rawVideoUrl) {
+                          return null;
+                        }
+
+                        if (embedId) {
+                          return (
+                            <div id="tutor-presentation-video-container" className="space-y-2">
+                              <div className="flex items-center gap-2 text-xs font-bold text-[#9AB4FF]">
+                                <Video className="w-4 h-4 text-[#F4CA54]" />
+                                <span>{isEn ? 'Presentation Video' : 'Vídeo de Apresentação'}</span>
+                              </div>
+                              <div className="w-full aspect-video rounded-xl overflow-hidden bg-black border border-white/10 shadow-lg">
+                                <iframe
+                                  src={`https://www.youtube.com/embed/${embedId}`}
+                                  title={`Video by ${previewTutorModal.name}`}
+                                  className="w-full h-full border-0"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                  allowFullScreen
+                                />
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Direct HTML5 video file support
+                        if (rawVideoUrl.match(/\.(mp4|webm|ogg)($|\?)/i)) {
+                          return (
+                            <div id="tutor-presentation-video-container" className="space-y-2">
+                              <div className="flex items-center gap-2 text-xs font-bold text-[#9AB4FF]">
+                                <Video className="w-4 h-4 text-[#F4CA54]" />
+                                <span>{isEn ? 'Presentation Video' : 'Vídeo de Apresentação'}</span>
+                              </div>
+                              <div className="w-full aspect-video rounded-xl overflow-hidden bg-black border border-white/10 shadow-lg flex items-center justify-center">
+                                <video
+                                  src={rawVideoUrl}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                  className="w-full h-full object-contain bg-black"
+                                >
+                                  <p className="text-xs text-slate-300 p-4">
+                                    {isEn ? 'Your browser does not support HTML5 video.' : 'Seu navegador não suporta vídeos HTML5.'}
+                                  </p>
+                                </video>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return null;
+                      })()}
 
                       {/* Specialties & Languages Spoken */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1300,14 +1340,30 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                       <label htmlFor="student-password-input" className="block text-xs font-bold text-slate-300 mb-1">
                         {isEn ? 'Password' : 'Senha'}
                       </label>
-                      <input
-                        id="student-password-input"
-                        type="password"
-                        value={studentPassword}
-                        onChange={(e) => setStudentPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full px-3 py-2 rounded-xl bg-[#000035] border border-[#607EC9]/50 text-white text-xs placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#F4CA54]"
-                      />
+                      <div className="relative">
+                        <input
+                          id="student-password-input"
+                          type={showPassword ? 'text' : 'password'}
+                          value={studentPassword}
+                          onChange={(e) => setStudentPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full pl-3 pr-10 py-2 rounded-xl bg-[#000035] border border-[#607EC9]/50 text-white text-xs placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#F4CA54]"
+                        />
+                        <button
+                          type="button"
+                          id="student-password-toggle-btn"
+                          onClick={() => setShowPassword((prev) => !prev)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors p-1 cursor-pointer"
+                          aria-label={showPassword ? (isEn ? 'Hide password' : 'Ocultar senha') : (isEn ? 'Show password' : 'Ver senha')}
+                          title={showPassword ? (isEn ? 'Hide password' : 'Ocultar senha') : (isEn ? 'Show password' : 'Ver senha')}
+                        >
+                          {showPassword ? (
+                            <EyeOff className="w-4 h-4 text-[#F4CA54]" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1475,6 +1531,16 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>{isEn ? 'Back' : 'Voltar'}</span>
+            </button>
+          ) : currentStep === 1 ? (
+            <button
+              type="button"
+              id="onboarding-cancel-btn"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-slate-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>{isEn ? 'Cancel & Return Home' : 'Cancelar & Voltar ao Início'}</span>
             </button>
           ) : (
             <div />

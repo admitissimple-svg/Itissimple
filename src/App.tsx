@@ -812,7 +812,9 @@ export default function App() {
     } catch (err) {
       console.warn('Error completing onboarding:', err);
       setIsOnboardingModalOpen(false);
-      setViewMode('dashboard');
+      if (!currentAccount) {
+        setViewMode('landing');
+      }
     }
   };
 
@@ -2594,7 +2596,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#FAFCFF] text-[#000035] flex flex-col font-sans selection:bg-[#9AB4FF]/40 selection:text-[#000035]">
       {/* 1. Conditional View Rendering: Landing Page vs Dashboard vs Find Tutors */}
-      {viewMode === 'landing' ? (
+      {viewMode === 'landing' || (!currentAccount && viewMode !== 'find-tutors') ? (
         <LandingPage
           tutors={tutors}
           currentLanguage={currentLanguage}
@@ -2671,10 +2673,16 @@ export default function App() {
             <div className="flex items-center justify-between">
               <button
                 type="button"
-                onClick={() => setViewMode('dashboard')}
+                onClick={() => {
+                  if (currentAccount) {
+                    setViewMode('dashboard');
+                  } else {
+                    setViewMode('landing');
+                  }
+                }}
                 className="px-4 py-2 rounded-xl bg-white border border-[#607EC9]/30 text-[#062863] font-bold text-xs sm:text-sm hover:bg-[#9AB4FF]/15 transition cursor-pointer shadow-2xs"
               >
-                ← {currentLanguage === 'en' ? 'Back to Practice Space' : 'Voltar ao Seu Espaço de Prática'}
+                ← {currentLanguage === 'en' ? (currentAccount ? 'Back to Practice Space' : 'Back to Home') : (currentAccount ? 'Voltar ao Seu Espaço de Prática' : 'Voltar ao Início')}
               </button>
 
               <button
@@ -3091,7 +3099,9 @@ export default function App() {
           setIsScheduleModalOpen(false);
           setTeacherEmailForConfig('');
           setScheduleStudentInfo(null);
-          setViewMode('dashboard');
+          if (!currentAccount) {
+            setViewMode('landing');
+          }
         }}
         currentAccount={currentAccount}
         teachers={teachersList}
@@ -3225,7 +3235,10 @@ export default function App() {
         isOpen={isOnboardingModalOpen}
         onClose={() => {
           setIsOnboardingModalOpen(false);
-          setViewMode('dashboard');
+          // If student gave up or closed onboarding before completion, or has no account, return to initial landing page
+          if (!currentAccount || viewMode === 'landing') {
+            setViewMode('landing');
+          }
         }}
         currentLanguage={currentLanguage}
         tutorsList={tutors}

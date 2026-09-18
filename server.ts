@@ -1592,12 +1592,20 @@ app.post('/api/tutors', async (req, res) => {
     });
   }
   
+  const rawVideoLink = (newTutor.videoIntroUrl || newTutor.youtubeUrl || newTutor.videoUrl || newTutor.introVideoUrl || '').trim();
+  const extractedVideoId = newTutor.youtubeEmbedId || extractYouTubeVideoId(rawVideoLink) || '';
+
   const tutorEntry = {
     ...newTutor,
     name: cleanName,
     id: tutorId,
     email: cleanEmail,
     role: 'teacher',
+    videoIntroUrl: rawVideoLink,
+    youtubeUrl: rawVideoLink,
+    videoUrl: rawVideoLink,
+    introVideoUrl: rawVideoLink,
+    youtubeEmbedId: extractedVideoId,
     approvalStatus: newTutor.approvalStatus || (newTutor.registeredByAdmin ? 'approved' : 'pending'),
     appliedAt: newTutor.appliedAt || new Date().toISOString(),
   };
@@ -1655,10 +1663,28 @@ app.put('/api/tutors/:id', (req, res) => {
     const tEmail = (existingTutor.email || updatedData.email || '').toLowerCase();
     const existingSettings = (db.teacherSettings && db.teacherSettings[tEmail]) || (db.meetSettings && db.meetSettings[tEmail]);
 
+    const rawVideoLink = (
+      updatedData.videoIntroUrl ||
+      updatedData.youtubeUrl ||
+      updatedData.videoUrl ||
+      updatedData.introVideoUrl ||
+      existingTutor.videoIntroUrl ||
+      existingTutor.youtubeUrl ||
+      existingTutor.videoUrl ||
+      existingTutor.introVideoUrl ||
+      ''
+    ).trim();
+    const extractedVideoId = updatedData.youtubeEmbedId || extractYouTubeVideoId(rawVideoLink) || existingTutor.youtubeEmbedId || '';
+
     db.tutorsList[existingIdx] = {
       ...existingTutor,
       ...updatedData,
       id: existingTutor.id || tutorId,
+      videoIntroUrl: rawVideoLink,
+      youtubeUrl: rawVideoLink,
+      videoUrl: rawVideoLink,
+      introVideoUrl: rawVideoLink,
+      youtubeEmbedId: extractedVideoId,
       // Strictly preserve centralized meetUrl, availableDays, and availability
       meetUrl: updatedData.meetUrl || existingTutor.meetUrl || existingSettings?.meetLink || '',
       availableDays:
