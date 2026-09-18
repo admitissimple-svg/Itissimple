@@ -37,10 +37,14 @@ import {
   NativeFriendTutor,
   UserProfile,
   GoogleAccount,
+  EnglishLevel,
 } from '../types';
 
 export interface OnboardingResultData {
   learningGoal: string;
+  level: EnglishLevel;
+  englishLevel: EnglishLevel;
+  userLevel: EnglishLevel;
   weeklyStudyDaysTarget: number;
   weeklyStudyDays: DayOfWeek[];
   routineVideoTime: string;
@@ -195,6 +199,52 @@ const WEEK_DAYS_CONFIG: { key: DayOfWeek; shortPt: string; shortEn: string; labe
   { key: 'sunday', shortPt: 'Dom', shortEn: 'Sun', labelPt: 'Domingo', labelEn: 'Sunday' },
 ];
 
+export const ENGLISH_LEVEL_OPTIONS: {
+  key: EnglishLevel;
+  value: 'Beginner' | 'Intermediate' | 'Advanced';
+  titlePt: string;
+  titleEn: string;
+  badge: string;
+  descPt: string;
+  descEn: string;
+  icon: string;
+  color: string;
+}[] = [
+  {
+    key: EnglishLevel.BEGINNER,
+    value: 'Beginner',
+    titlePt: 'Beginner (Iniciante)',
+    titleEn: 'Beginner (A1 - A2)',
+    badge: 'A1 - A2',
+    descPt: 'Começando do zero ou construindo vocabulário essencial do cotidiano.',
+    descEn: 'Starting from scratch or building essential everyday vocabulary.',
+    icon: '🌱',
+    color: 'from-emerald-600 to-teal-700',
+  },
+  {
+    key: EnglishLevel.INTERMEDIATE,
+    value: 'Intermediate',
+    titlePt: 'Intermediate (Intermediário)',
+    titleEn: 'Intermediate (B1 - B2)',
+    badge: 'B1 - B2',
+    descPt: 'Compreendo conversas e quero destravar fluência e confiança.',
+    descEn: 'I understand conversations and want to unlock natural fluency.',
+    icon: '🌿',
+    color: 'from-blue-600 to-indigo-700',
+  },
+  {
+    key: EnglishLevel.ADVANCED,
+    value: 'Advanced',
+    titlePt: 'Advanced (Avançado)',
+    titleEn: 'Advanced (C1 - C2)',
+    badge: 'C1 - C2',
+    descPt: 'Vocabulário profissional, nuances, pronúncia fina e ritmo natural.',
+    descEn: 'Professional vocabulary, subtle nuances, idioms, and natural rhythm.',
+    icon: '🌳',
+    color: 'from-purple-600 to-violet-800',
+  },
+];
+
 export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   isOpen,
   onClose,
@@ -212,6 +262,16 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // English Level selection: Beginner | Intermediate | Advanced
+  const [studentLevel, setStudentLevel] = useState<EnglishLevel>(() => {
+    const raw = currentUserProfile?.level || (currentUserProfile as any)?.englishLevel || (currentUserProfile as any)?.userLevel;
+    if (!raw) return EnglishLevel.BEGINNER;
+    const l = String(raw).toLowerCase();
+    if (l.includes('inter')) return EnglishLevel.INTERMEDIATE;
+    if (l.includes('avan') || l.includes('adv')) return EnglishLevel.ADVANCED;
+    return EnglishLevel.BEGINNER;
+  });
 
   // Step 1: Learning Goal
   const [selectedGoalId, setSelectedGoalId] = useState<string>('career');
@@ -393,6 +453,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     try {
       await onCompleteOnboarding({
         learningGoal: getFinalLearningGoal(),
+        level: studentLevel,
+        englishLevel: studentLevel,
+        userLevel: studentLevel,
         weeklyStudyDaysTarget: selectedDaysTarget,
         weeklyStudyDays: selectedDays,
         routineVideoTime,
@@ -573,6 +636,59 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   />
                 </div>
               )}
+
+              {/* Requirement 1: English Level Selection ("Beginner", "Intermediate", "Advanced") */}
+              <div className="pt-4 border-t border-[#607EC9]/30 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                  <label className="text-xs font-black uppercase tracking-wider text-[#F4CA54] flex items-center gap-1.5">
+                    <GraduationCap className="w-4 h-4 text-[#F4CA54]" />
+                    <span>{isEn ? 'Select your English Level' : 'Qual o seu nível de inglês?'}</span>
+                  </label>
+                  <span className="text-[10px] sm:text-[11px] text-blue-200 font-bold">
+                    {isEn
+                      ? 'Calibrates your YouTube videos & Spotify playlist'
+                      : 'Define sua playlist do Spotify e vídeos recomendados'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {ENGLISH_LEVEL_OPTIONS.map((lvl) => {
+                    const isSelected = studentLevel === lvl.key;
+                    return (
+                      <button
+                        key={lvl.key}
+                        type="button"
+                        id={`onboarding-level-${lvl.value.toLowerCase()}`}
+                        onClick={() => setStudentLevel(lvl.key)}
+                        className={`p-3 sm:p-3.5 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between relative ${
+                          isSelected
+                            ? 'bg-[#1C4C96] border-[#F4CA54] shadow-md ring-2 ring-[#F4CA54]/40'
+                            : 'bg-[#062863]/40 border-[#607EC9]/30 hover:bg-[#062863]/80 hover:border-[#9AB4FF]/50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 w-full">
+                          <span className="text-lg">{lvl.icon}</span>
+                          <span className="text-[9.5px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-[#000035] text-[#9AB4FF] border border-[#607EC9]/30">
+                            {lvl.badge}
+                          </span>
+                        </div>
+
+                        <div className="mt-2.5">
+                          <div className="flex items-center justify-between">
+                            <h5 className="font-extrabold text-xs sm:text-[13px] text-white">
+                              {isEn ? lvl.titleEn : lvl.titlePt}
+                            </h5>
+                            {isSelected && <CheckCircle2 className="w-4 h-4 text-[#F4CA54] shrink-0" />}
+                          </div>
+                          <p className="text-[10.5px] sm:text-[11px] text-blue-200/80 leading-snug mt-1 line-clamp-2">
+                            {isEn ? lvl.descEn : lvl.descPt}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1365,6 +1481,30 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                         </button>
                       </div>
                     </div>
+
+                    {authMode === 'signup' && (
+                      <div>
+                        <label htmlFor="student-level-select" className="block text-xs font-bold text-slate-300 mb-1">
+                          {isEn ? 'English Level' : 'Nível de Inglês'}
+                        </label>
+                        <select
+                          id="student-level-select"
+                          value={studentLevel}
+                          onChange={(e) => setStudentLevel(e.target.value as EnglishLevel)}
+                          className="w-full px-3 py-2 rounded-xl bg-[#000035] border border-[#607EC9]/50 text-white text-xs focus:outline-none focus:ring-2 focus:ring-[#F4CA54] cursor-pointer"
+                        >
+                          <option value={EnglishLevel.BEGINNER} className="bg-[#000035] text-white">
+                            🌱 {isEn ? 'Beginner (Iniciante - A1/A2)' : 'Iniciante / Beginner (A1/A2)'}
+                          </option>
+                          <option value={EnglishLevel.INTERMEDIATE} className="bg-[#000035] text-white">
+                            🌿 {isEn ? 'Intermediate (Intermediário - B1/B2)' : 'Intermediário / Intermediate (B1/B2)'}
+                          </option>
+                          <option value={EnglishLevel.ADVANCED} className="bg-[#000035] text-white">
+                            🌳 {isEn ? 'Advanced (Avançado - C1/C2)' : 'Avançado / Advanced (C1/C2)'}
+                          </option>
+                        </select>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -1395,7 +1535,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
                   <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30">
                     <span className="text-[10px] text-slate-400 block font-medium">
                       {isEn ? 'Assigned Native Friend' : 'Amigo Nativo Vinculado'}
@@ -1408,6 +1548,16 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
                   <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30">
                     <span className="text-[10px] text-slate-400 block font-medium">
+                      {isEn ? 'English Level' : 'Nível de Inglês'}
+                    </span>
+                    <span className="font-extrabold text-[#F4CA54] flex items-center gap-1.5 mt-0.5">
+                      <span>{studentLevel === EnglishLevel.INTERMEDIATE ? '🌿' : studentLevel === EnglishLevel.ADVANCED ? '🌳' : '🌱'}</span>
+                      <span>{studentLevel === EnglishLevel.INTERMEDIATE ? 'Intermediate' : studentLevel === EnglishLevel.ADVANCED ? 'Advanced' : 'Beginner'}</span>
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30">
+                    <span className="text-[10px] text-slate-400 block font-medium">
                       {isEn ? 'Practice Target' : 'Meta de Prática'}
                     </span>
                     <span className="font-extrabold text-emerald-300 mt-0.5 block">
@@ -1415,7 +1565,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30">
+                  <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30 col-span-2 sm:col-span-2">
                     <span className="text-[10px] text-slate-400 block font-medium">
                       {isEn ? 'Primary Goal' : 'Objetivo'}
                     </span>
@@ -1424,7 +1574,7 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30">
+                  <div className="p-2.5 rounded-xl bg-[#000035]/70 border border-[#607EC9]/30 col-span-2 sm:col-span-1">
                     <span className="text-[10px] text-slate-400 block font-medium">
                       {isEn ? 'Trial Lesson Balance' : 'Saldo de Aula Teste'}
                     </span>

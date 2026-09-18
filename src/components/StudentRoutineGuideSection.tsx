@@ -255,6 +255,16 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [isCheckingSentence, setIsCheckingSentence] = useState<boolean>(false);
   const [savedTopicsBeforeRepeat, setSavedTopicsBeforeRepeat] = useState<Record<string, string>>({});
 
+  // Strictly neutral initial state: topics start as "" until user voluntarily selects
+  const [selectedTopicByDay, setSelectedTopicByDay] = useState<Partial<Record<DayOfWeek, string>>>({});
+
+  // Reset selected topics when starting a new week or weekly cycle updates
+  useEffect(() => {
+    setSelectedTopicByDay({});
+    setCustomSuggestionActivities({});
+    setSuggestingUrlValues({});
+  }, [weeklyCycle]);
+
   // Quick jump helpers
   const activeStudyDays: DayOfWeek[] = useMemo(() => {
     if (userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0) {
@@ -401,13 +411,25 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
 
-  // Active YouTube video extraction: priority to active selected activity, then any day routine item, then level curriculum daily video
-  const assignedVideo: TeacherAssignedVideo | null =
+  // Active YouTube video extraction: only considered assigned if user voluntarily picked a topic or repeat video for this day
+  const rawAssignedVideo: TeacherAssignedVideo | null =
     (activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0
       ? activeActivity.teacherVideos[0]
       : null) ||
     currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0)?.teacherVideos?.[0] ||
     null;
+
+  const userChosenTopicForDay = selectedTopicByDay[selectedDay] || '';
+  const isRepeatVideoToday =
+    (rawAssignedVideo as any)?.playlistId === 'repeat_previous_video' ||
+    (rawAssignedVideo as any)?.playlistTitle === 'Repeat Previous Video' ||
+    (rawAssignedVideo as any)?.playlistTitle === 'Repetir Vídeo Anterior' ||
+    activeActivity?.activityName === 'Repeat Previous Video' ||
+    activeActivity?.activityName === 'Repetir Vídeo Anterior' ||
+    userChosenTopicForDay === 'repeat_previous_video';
+
+  const isTopicVoluntarilyChosen = Boolean(userChosenTopicForDay) || isRepeatVideoToday;
+  const assignedVideo: TeacherAssignedVideo | null = isTopicVoluntarilyChosen ? rawAssignedVideo : null;
 
   const isActiveActivityCustomSuggestion =
     Boolean(activeActivity && customSuggestionActivities[activeActivity.id]) ||
@@ -444,8 +466,51 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       ? rawAssignedSpotify
       : null;
 
+  // Detect legacy template audios or level-mismatched assignments from previous beginner state
+  const isLegacyTemplateAudio = Boolean(
+    assignedSpotify &&
+    (
+      (assignedSpotify.id && (
+        assignedSpotify.id.startsWith('sp-m') ||
+        assignedSpotify.id.startsWith('sp-t') ||
+        assignedSpotify.id.startsWith('sp-w') ||
+        assignedSpotify.id.startsWith('sp-th') ||
+        assignedSpotify.id.startsWith('sp-f') ||
+        assignedSpotify.id.startsWith('sp-sa') ||
+        assignedSpotify.id.startsWith('sp-su') ||
+        assignedSpotify.id.startsWith('def-') ||
+        (assignedSpotify as any).isDefaultTemplate === true
+      )) ||
+      // Legacy hardcoded URLs from default templates
+      assignedSpotify.url.includes('7pKfPomDEeI4TPT6EOYjn9') || // Imagine
+      assignedSpotify.url.includes('3B5UbSndRz907IZhhmUfLi') || // Count on Me
+      assignedSpotify.url.includes('7BqBn9nXd3Ba0BsflQvvx1') || // Count on Me alt
+      assignedSpotify.url.includes('0tgVpDi06FyKpA1z0VMD4v') || // Perfect
+      assignedSpotify.url.includes('4qsVPnhbvEooD1bSNqvvh0') || // Let It Be
+      assignedSpotify.url.includes('3AJwUDP919kvQ9QcozQPxg') || // Yellow
+      assignedSpotify.url.includes('62PaSfnXSMyLshYJrlTuL3') || // Hello
+      assignedSpotify.url.includes('6OzAkuRDmEpd52RF1g1WvU')    // Stand By Me
+    )
+  );
+
+  const isLevelMismatchedAudio = Boolean(
+    assignedSpotify &&
+    (assignedSpotify as any).level &&
+    normalizeStudentLevel((assignedSpotify as any).level) !== normalizedLevel
+  );
+
+  const isAssignedPlaylistMismatched = Boolean(
+    assignedSpotify &&
+    (assignedSpotify as any).playlistId &&
+    (assignedSpotify as any).playlistId !== levelPlaylistConfig.playlistId &&
+    ((assignedSpotify as any).playlistId === '01gS0x1KOwrDp7pJq2dPCM' || (assignedSpotify as any).playlistTitle?.includes('Beginner'))
+  );
+
   const hasTeacherCustomAudio = Boolean(
     assignedSpotify?.url &&
+    !isLegacyTemplateAudio &&
+    !isLevelMismatchedAudio &&
+    !isAssignedPlaylistMismatched &&
     assignedSpotify.url.trim() !== '' &&
     assignedSpotify.url.trim() !== dailySpotifyTrack.url.trim()
   );
@@ -474,6 +539,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   // Topic / Playlist selection & auto video injection handler
   const handleSelectPlaylistForActivity = async (activityId: string, playlistId: string) => {
     if (!playlistId) return;
+
+    // Record user's voluntary choice for this day
+    setSelectedTopicByDay((prev) => ({ ...prev, [selectedDay]: playlistId }));
 
     // Exclusive behavior for "Your Suggestion" / "Sua Sugestão"
     if (playlistId === 'custom_suggestion') {
@@ -725,6 +793,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const handleUncheckRepeatPreviousVideo = async (activityId: string) => {
     setLoadingPlaylistAssignId(activityId);
     setPlaylistFeedback(null);
+    setSelectedTopicByDay((prev) => ({ ...prev, [selectedDay]: '' }));
 
     const normLevel = normalizeStudentLevel(userProfile?.level || 'beginner');
     const defaultDailyVid = getDailyYouTubeVideoForStudent(normLevel, selectedDay);
@@ -1195,44 +1264,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   act.activityName === 'Repeat Previous Video' ||
                   act.activityName === 'Repetir Vídeo Anterior';
 
-                let currentPlaylistId = (assignedVid as any)?.playlistId || '';
+                const dayTopicSelection = selectedTopicByDay[selectedDay] || '';
+                let currentPlaylistId = '';
 
-                if (isCustomSuggestion) {
-                  currentPlaylistId = 'custom_suggestion';
-                } else if (isRepeatVideo) {
+                if (isRepeatVideo) {
                   currentPlaylistId = 'repeat_previous_video';
+                } else if (dayTopicSelection === 'custom_suggestion' || isCustomSuggestion) {
+                  currentPlaylistId = 'custom_suggestion';
+                } else if (dayTopicSelection) {
+                  currentPlaylistId = dayTopicSelection;
                 } else {
-                  if (!currentPlaylistId && (assignedVid as any)?.playlistTitle && playlists.length > 0) {
-                    const foundPl = playlists.find(
-                      (pl) => pl.title?.toLowerCase().trim() === (assignedVid as any).playlistTitle?.toLowerCase().trim()
-                    );
-                    if (foundPl) currentPlaylistId = foundPl.id;
-                  }
-
-                  if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
-                    const foundPl = playlists.find(
-                      (pl) =>
-                        pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim() ||
-                        pl.id === act.activityName
-                    );
-                    if (foundPl) currentPlaylistId = foundPl.id;
-                  }
-
-                  if (!currentPlaylistId && assignedVid && playlists.length > 0) {
-                    const vidId = extractYouTubeVideoId(assignedVid.videoId || assignedVid.url || '');
-                    if (vidId) {
-                      const foundPl = playlists.find((pl) =>
-                        pl.videos?.some((v) => extractYouTubeVideoId(v.videoId || v.url || v.id || '') === vidId)
-                      );
-                      if (foundPl) currentPlaylistId = foundPl.id;
-                    }
-                  }
-
-                  if (!currentPlaylistId && playlists.length > 0 && act.activityName) {
-                    const lowerName = act.activityName.toLowerCase();
-                    const foundPl = playlists.find((pl) => lowerName.includes(pl.title.toLowerCase()));
-                    if (foundPl) currentPlaylistId = foundPl.id;
-                  }
+                  // Strictly neutral initial "Choose Topic..." state ("" or null)
+                  // The user must voluntarily pick a topic; never auto-match or inherit from previous day
+                  currentPlaylistId = '';
                 }
 
                 return (
@@ -2189,6 +2233,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           if (!onStartNewWeek) return;
           setIsStartingNewWeek(true);
           try {
+            setSelectedTopicByDay({});
+            setCustomSuggestionActivities({});
+            setSuggestingUrlValues({});
             await onStartNewWeek(studyDaysTarget, selectedDays);
           } finally {
             setIsStartingNewWeek(false);

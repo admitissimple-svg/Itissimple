@@ -179,6 +179,8 @@ export interface UserProfile {
   picture?: string;
   avatar?: string;
   level: EnglishLevel;
+  userLevel?: EnglishLevel | string;
+  englishLevel?: EnglishLevel | string;
   teacherEmail?: string;
   teacherName?: string;
   routineVideoTime?: string;

@@ -2957,6 +2957,9 @@ app.post('/api/user-profile', async (req, res) => {
   const updatedTeacherName =
     rawProfile.teacherName !== undefined ? (rawProfile.teacherName || null) : (existing.teacherName ?? null);
 
+  const oldLevelKey = normalizeStudentLevel(existing.level).key;
+  const newLevelKey = normalizeStudentLevel(rawProfile.level || existing.level).key;
+
   db.userProfiles[email] = {
     ...existing,
     ...rawProfile,
@@ -3011,6 +3014,17 @@ app.post('/api/user-profile', async (req, res) => {
       activeSince: new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString(),
     });
+  }
+
+  // If student level changed, redistribute Spotify and YouTube tracks to match the new level
+  if (oldLevelKey !== newLevelKey || !db.studentSpotifyAssignments?.[email]) {
+    const studentPlanDays: string[] =
+      db.userProfiles[email]?.weeklyStudyDays ||
+      db.userProfiles[email]?.selectedStudyDays ||
+      DAYS_SEQUENCE;
+    const resolvedUid = db.userProfiles[email]?.uid || '';
+    distributeWeeklySpotifyForStudent(db, email, resolvedUid, newLevelKey, undefined, undefined, studentPlanDays);
+    distributeWeeklyYouTubeForStudent(db, email, resolvedUid, newLevelKey, undefined, undefined, studentPlanDays);
   }
 
   await writeDbSync(db);
@@ -3696,11 +3710,16 @@ app.get('/api/student-routines', (req, res) => {
       (resolved.uid && db.studentAwaitingTopicSelection?.[resolved.uid])
     );
 
+    const hasSpotifyLevelMismatch = spotifyAssigns.length > 0 && spotifyAssigns.some((a) => {
+      const aNorm = normalizeStudentLevel(a.level || a.playlistTitle).key;
+      return aNorm !== studentLevel || (a.playlistId && a.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[studentLevel].playlistId);
+    });
+
     if ((videoAssigns.length < expectedDaysCount || hasRepeatingVideoBug) && !isAwaitingTopicSelection) {
       distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;
     }
-    if (spotifyAssigns.length < expectedDaysCount || hasRepeatingSpotifyBug) {
+    if (spotifyAssigns.length < expectedDaysCount || hasRepeatingSpotifyBug || hasSpotifyLevelMismatch) {
       distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;
     }
@@ -4808,13 +4827,17 @@ app.get('/api/student-spotify-assignments', (req, res) => {
     }
   }
 
-  // Check if assignments are missing or corrupted with duplicate track IDs (e.g. Count on Me repeated)
+  // Check if assignments are missing, corrupted with duplicate track IDs, or level mismatched
   const uniqueTrackIds = new Set(
     assignments.map((a) => extractSpotifyTrackId(a.trackId || a.url || a.trackUrl)).filter(Boolean)
   );
   const hasRepeatingBug = assignments.length > 1 && uniqueTrackIds.size === 1;
+  const levelMismatch = assignments.length > 0 && assignments.some((a) => {
+    const aNorm = normalizeStudentLevel(a.level || a.playlistTitle).key;
+    return aNorm !== studentLevel || (a.playlistId && a.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[studentLevel].playlistId);
+  });
 
-  if (assignments.length < 7 || hasRepeatingBug) {
+  if (assignments.length < 7 || hasRepeatingBug || levelMismatch) {
     if (email || resolvedUid) {
       assignments = distributeWeeklySpotifyForStudent(db, email, resolvedUid, studentLevel);
       writeDb(db);

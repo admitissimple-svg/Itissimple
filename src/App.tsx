@@ -31,6 +31,7 @@ import {
 } from './utils/timezone';
 import { getTodayDayOfWeek } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
+import { normalizeStudentLevel, fetchTracksForStudentLevel } from './utils/spotify';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -649,6 +650,8 @@ export default function App() {
         ? currentAccount.uid
         : (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id ? userProfile.id : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
 
+      const selectedLevel = (data.englishLevel || data.userLevel || data.level || EnglishLevel.BEGINNER) as EnglishLevel;
+
       // 2. Perform student registration/activation on server and set local session
       if (isRegisteringStudent) {
         try {
@@ -660,6 +663,9 @@ export default function App() {
               email: cleanEmail,
               password: data.studentAccount?.password || '123456',
               role: 'student',
+              level: selectedLevel,
+              englishLevel: selectedLevel,
+              userLevel: selectedLevel,
               learningGoal: data.learningGoal,
               weeklyPracticeDays: data.weeklyStudyDaysTarget,
               routineActivities: data.weeklyStudyDays,
@@ -704,6 +710,9 @@ export default function App() {
         id: studentUid,
         name: effectiveName,
         email: cleanEmail,
+        level: selectedLevel,
+        userLevel: selectedLevel,
+        englishLevel: selectedLevel,
         onboardingCompleted: true,
         learningGoal: data.learningGoal,
         weeklyStudyDaysTarget: data.weeklyStudyDaysTarget,
@@ -731,11 +740,15 @@ export default function App() {
         }).catch(() => {});
       }
 
-      // 5. Update local state
+      // 5. Update local state & pre-load Spotify tracks matching student level
       setUserProfile((prev) => ({
         ...prev,
         ...updatedProfile,
       }));
+
+      // Pre-fetch and cache Spotify playlist tracks for the selected student level (e.g. Intermediate -> 34E52K1dEJO5cZ7RPKlR4l)
+      const normLevel = normalizeStudentLevel(selectedLevel);
+      fetchTracksForStudentLevel(normLevel).catch(() => {});
 
       // Update contractedLessons map with trial lesson
       if (cleanEmail) {
@@ -754,6 +767,7 @@ export default function App() {
                     teacherEmail: data.selectedTutor?.email || st.teacherEmail,
                     teacherName: data.selectedTutor?.name || st.teacherName,
                     contractedLessons: Math.max(st.contractedLessons || 0, 1),
+                    level: selectedLevel,
                   }
                 : st
             );
@@ -769,7 +783,7 @@ export default function App() {
               teacherEmail: data.selectedTutor?.email || '',
               teacherName: data.selectedTutor?.name || '',
               status: 'active',
-              level: userProfile.level || 'iniciante',
+              level: selectedLevel,
               contractedLessons: 1,
             },
           ];
