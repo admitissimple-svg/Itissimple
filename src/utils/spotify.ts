@@ -1,4 +1,5 @@
 import { DayOfWeek, EnglishLevel } from '../types';
+import { CURATED_SPOTIFY_TRACKS, CuratedTrackItem } from './spotifyCuratedTracks';
 
 /**
  * Utility helpers for Spotify URLs, Embeds, and Automated Level-Based Daily Listening Playlists
@@ -84,44 +85,80 @@ export const SPOTIFY_PLAYLIST_IDS: Record<NormalizedStudentLevel, string> = {
 };
 
 /**
- * Creates a clean official playlist default entry for a day of week
- * No mock/hardcoded tracks are used.
+ * Creates an official single-track entry for a day of week from curated playlist tracks.
+ * Guarantees single-track embedUrl (https://open.spotify.com/embed/track/{trackId}) so Spotify embeds only 1 song.
  */
-export function createDefaultTrackForDay(
+export function createCuratedTrackForDay(
   level: NormalizedStudentLevel,
-  dayOfWeek: DayOfWeek
+  dayOfWeek: DayOfWeek,
+  curatedItem?: CuratedTrackItem
 ): SpotifyDailyTrack {
   const playlistId = SPOTIFY_PLAYLIST_IDS[level] || SPOTIFY_PLAYLIST_IDS.beginner;
   const label = DAY_LABELS[dayOfWeek] || { pt: 'Dia', en: 'Day' };
-  const levelTitle =
-    level === 'advanced'
-      ? "Advanced • It's simple"
-      : level === 'intermediate'
-      ? "Intermediate • It's simple"
-      : "Beginner • It's simple";
 
+  if (curatedItem && curatedItem.id) {
+    return {
+      dayOfWeek,
+      dayLabelPt: label.pt,
+      dayLabelEn: label.en,
+      trackId: curatedItem.id,
+      title: curatedItem.title,
+      artist: curatedItem.artist,
+      url: `https://open.spotify.com/track/${curatedItem.id}`,
+      embedUrl: `https://open.spotify.com/embed/track/${curatedItem.id}?utm_source=generator&theme=0`,
+      imageUrl: undefined,
+      albumImages: [],
+      teacherTipPt: `Prática auditiva diária com "${curatedItem.title}" (${curatedItem.artist}). Preste atenção na pronúncia, ritmo e vocabulário.`,
+      teacherTipEn: `Daily listening practice with "${curatedItem.title}" (${curatedItem.artist}). Focus on pronunciation, rhythm, and vocabulary.`,
+    };
+  }
+
+  const fallbackId = '7qiZfU4dY1lWllzX7mPBI3';
   return {
     dayOfWeek,
     dayLabelPt: label.pt,
     dayLabelEn: label.en,
-    trackId: playlistId,
-    title: levelTitle,
-    artist: "It's simple (Adm Itissimple)",
-    url: `https://open.spotify.com/playlist/${playlistId}`,
-    embedUrl: `https://open.spotify.com/embed/playlist/${playlistId}?utm_source=generator&theme=0`,
+    trackId: fallbackId,
+    title: level === 'advanced' ? "Bohemian Rhapsody" : level === 'intermediate' ? "Shape of You" : "Count on Me",
+    artist: level === 'advanced' ? "Queen" : level === 'intermediate' ? "Ed Sheeran" : "Bruno Mars",
+    url: `https://open.spotify.com/track/${fallbackId}`,
+    embedUrl: `https://open.spotify.com/embed/track/${fallbackId}?utm_source=generator&theme=0`,
     imageUrl: undefined,
     albumImages: [],
-    teacherTipPt: "Ouça a playlist oficial da It's simple no Spotify para praticar sua compreensão auditiva diária.",
-    teacherTipEn: "Listen to the official It's simple Spotify playlist to practice your daily listening comprehension.",
+    teacherTipPt: "Ouça a faixa exclusiva de hoje no Spotify para praticar sua compreensão auditiva.",
+    teacherTipEn: "Listen to today's exclusive track on Spotify to practice your listening comprehension.",
   };
 }
 
 export const createLevelTracksMap = (level: NormalizedStudentLevel): Record<DayOfWeek, SpotifyDailyTrack> => {
   const map = {} as Record<DayOfWeek, SpotifyDailyTrack>;
-  DAYS_SEQUENCE.forEach((day) => {
-    map[day] = createDefaultTrackForDay(level, day);
+  const curated = CURATED_SPOTIFY_TRACKS[level] || [];
+  DAYS_SEQUENCE.forEach((day, idx) => {
+    map[day] = createCuratedTrackForDay(level, day, curated[idx]);
   });
   return map;
+};
+
+export const createLevelPool = (level: NormalizedStudentLevel): SpotifyDailyTrack[] => {
+  const curated = CURATED_SPOTIFY_TRACKS[level] || [];
+  return curated.slice(7).map((item, idx) => {
+    const day = DAYS_SEQUENCE[idx % 7];
+    const label = DAY_LABELS[day] || { pt: 'Dia', en: 'Day' };
+    return {
+      dayOfWeek: day,
+      dayLabelPt: label.pt,
+      dayLabelEn: label.en,
+      trackId: item.id,
+      title: item.title,
+      artist: item.artist,
+      url: `https://open.spotify.com/track/${item.id}`,
+      embedUrl: `https://open.spotify.com/embed/track/${item.id}?utm_source=generator&theme=0`,
+      imageUrl: undefined,
+      albumImages: [],
+      teacherTipPt: `Prática auditiva diária com "${item.title}" (${item.artist}).`,
+      teacherTipEn: `Daily listening practice with "${item.title}" (${item.artist}).`,
+    };
+  });
 };
 
 export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLevelPlaylistConfig> = {
@@ -136,7 +173,7 @@ export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLeve
     descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Iniciantes: músicas com dicção clara, frases fundamentais e ritmo acolhedor.",
     descriptionEn: "Official It's simple playlist (Adm Itissimple) for Beginners: songs featuring clear diction, foundational phrasing, and accessible rhythm.",
     tracks: createLevelTracksMap("beginner"),
-    pool: [],
+    pool: createLevelPool("beginner"),
   },
   intermediate: {
     level: "intermediate",
@@ -149,7 +186,7 @@ export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLeve
     descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Intermediários: vocabulário do cotidiano, expressões idiomáticas e estruturas gramaticais variadas.",
     descriptionEn: "Official It's simple playlist (Adm Itissimple) for Intermediates: everyday vocabulary, idiomatic expressions, and diverse sentence structures.",
     tracks: createLevelTracksMap("intermediate"),
-    pool: [],
+    pool: createLevelPool("intermediate"),
   },
   advanced: {
     level: "advanced",
@@ -162,13 +199,13 @@ export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLeve
     descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Alunos Avançados: ritmo rápido, metáforas culturais, linguagem coloquial e rimas complexas.",
     descriptionEn: "Official It's simple playlist (Adm Itissimple) for Advanced Students: fast cadence, cultural metaphors, colloquial speech, and intricate phrasing.",
     tracks: createLevelTracksMap("advanced"),
-    pool: [],
+    pool: createLevelPool("advanced"),
   },
 };
 
 export const SPOTIFY_PLAYLISTS = SPOTIFY_LEVEL_PLAYLISTS;
 
-export const SPOTIFY_CACHE_KEY_PREFIX = 'its_simple_spotify_playlist_v4_';
+export const SPOTIFY_CACHE_KEY_PREFIX = 'its_simple_spotify_playlist_v5_';
 export const SPOTIFY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface SpotifyPlaylistCacheEntry {
@@ -306,12 +343,50 @@ export async function fetchPlaylistTracksFromSpotifyApi(
     }
     const res = await fetch(url, { headers });
     if (!res.ok) {
-      console.warn(`[Spotify API] Requisição para ${url} retornou status [${res.status}]`);
-      return null;
+      console.warn(`[Spotify API] Requisição para ${url} retornou status [${res.status}], tentando fallback da playlist pública...`);
+      return await fetchPlaylistTracksFromPublicEmbed(playlistId);
     }
     return await res.json();
   } catch (err) {
     console.warn(`[Spotify API] Erro ao buscar faixas em ${url}:`, err);
+    return await fetchPlaylistTracksFromPublicEmbed(playlistId);
+  }
+}
+
+/**
+ * Fallback to retrieve tracks from Spotify public embed page if Spotify Bearer token has expired
+ */
+async function fetchPlaylistTracksFromPublicEmbed(playlistId: string): Promise<any> {
+  try {
+    const embedRes = await fetch(`https://open.spotify.com/embed/playlist/${playlistId}`);
+    if (!embedRes.ok) return null;
+    const html = await embedRes.text();
+    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!match) return null;
+    const json = JSON.parse(match[1]);
+    const trackList = json?.props?.pageProps?.state?.data?.entity?.trackList || [];
+    if (!Array.isArray(trackList) || trackList.length === 0) return null;
+
+    return {
+      items: trackList.map((t: any) => {
+        const id = t.uri ? t.uri.replace('spotify:track:', '') : '';
+        return {
+          track: {
+            id,
+            name: t.title,
+            artists: [{ name: t.subtitle || 'Adm Itissimple' }],
+            external_urls: {
+              spotify: `https://open.spotify.com/track/${id}`,
+            },
+            album: {
+              images: [],
+            },
+          },
+        };
+      }),
+    };
+  } catch (e) {
+    console.warn(`[Spotify API] Erro no fallback de embed para ${playlistId}:`, e);
     return null;
   }
 }
@@ -430,19 +505,102 @@ export function getSpotifyPlaylistForLevel(rawLevel?: string | EnglishLevel | nu
 }
 
 /**
+ * Selects exactly one Spotify track for a student's study day, respecting:
+ * 1. Daily exclusivity: 1 song per active study day in sequential playlist order (Index 0 = 1st study day, Index 1 = 2nd study day...)
+ * 2. Weekly frequency (2x, 3x, 5x, 7x) with Rest Days returning null.
+ * 3. Looping: (cycle - 1) * studyDaysCount + studyDayIndex % totalPlaylistTracks.
+ * 4. Weekly rotation on new week or level change.
+ */
+export function selectCurrentDaySpotifyTrack(params: {
+  level?: string | EnglishLevel | null;
+  selectedDay: DayOfWeek;
+  activeStudyDays?: DayOfWeek[];
+  weeklyCycle?: number;
+  liveTracks?: SpotifyDailyTrack[] | null;
+}): SpotifyDailyTrack | null {
+  const { level, selectedDay, activeStudyDays, weeklyCycle = 1, liveTracks } = params;
+  const norm = normalizeStudentLevel(level);
+
+  // 1. Determine active study days in calendar order
+  const calendarOrder: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const effectiveStudyDays = activeStudyDays && activeStudyDays.length > 0
+    ? calendarOrder.filter((d) => activeStudyDays.includes(d))
+    : calendarOrder.slice(0, 5); // Default to 5x (Mon-Fri)
+
+  // 2. Check if selectedDay is an active study day or Rest Day
+  const studyDayIndex = effectiveStudyDays.indexOf(selectedDay);
+  if (studyDayIndex === -1) {
+    return null; // Rest Day: No track scheduled
+  }
+
+  // 3. Pool of tracks from Spotify playlist
+  const cached = getCachedPlaylistTracks(norm);
+  const pool = (liveTracks && liveTracks.length > 0)
+    ? liveTracks
+    : (cached && cached.length > 0 ? cached : []);
+
+  const config = SPOTIFY_LEVEL_PLAYLISTS[norm] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+  const effectivePool = pool.length > 0
+    ? pool
+    : [
+        ...DAYS_SEQUENCE.map((d) => config.tracks[d]).filter(Boolean),
+        ...(config.pool || []),
+      ];
+
+  const totalPlaylistTracks = effectivePool.length;
+  if (totalPlaylistTracks === 0) return null;
+
+  // 4. Sequential distribution + Looping (trackIndex % totalPlaylistTracks)
+  const cycle = Math.max(1, weeklyCycle);
+  const studyDaysCount = Math.max(1, effectiveStudyDays.length);
+  const rawTrackIndex = (cycle - 1) * studyDaysCount + studyDayIndex;
+  const trackIndex = rawTrackIndex % totalPlaylistTracks;
+
+  const baseTrack = effectivePool[trackIndex];
+  if (!baseTrack) return null;
+
+  // Strictly ensure single-track embed URL (never playlist embed)
+  const rawId = baseTrack.trackId && !baseTrack.trackId.startsWith('http') && baseTrack.trackId !== config.playlistId
+    ? baseTrack.trackId
+    : (CURATED_SPOTIFY_TRACKS[norm]?.[trackIndex]?.id || '7qiZfU4dY1lWllzX7mPBI3');
+
+  const embedUrl = `https://open.spotify.com/embed/track/${rawId}?utm_source=generator&theme=0`;
+  const trackDirectUrl = `https://open.spotify.com/track/${rawId}`;
+
+  return {
+    ...baseTrack,
+    url: trackDirectUrl,
+    embedUrl,
+    dayOfWeek: selectedDay,
+    dayLabelPt: DAY_LABELS[selectedDay]?.pt || baseTrack.dayLabelPt,
+    dayLabelEn: DAY_LABELS[selectedDay]?.en || baseTrack.dayLabelEn,
+  };
+}
+
+/**
  * Retrieves the daily track sequentially mapped from the level's playlist for the selected day
  */
 export function getDailySpotifyTrackForStudent(
   rawLevel: string | EnglishLevel | null | undefined,
-  dayOfWeek: DayOfWeek
+  dayOfWeek: DayOfWeek,
+  activeStudyDays?: DayOfWeek[],
+  weeklyCycle: number = 1
 ): SpotifyDailyTrack {
+  const exclusive = selectCurrentDaySpotifyTrack({
+    level: rawLevel,
+    selectedDay: dayOfWeek,
+    activeStudyDays,
+    weeklyCycle,
+  });
+  if (exclusive) return exclusive;
+
   const norm = normalizeStudentLevel(rawLevel);
   const cachedTracks = getCachedPlaylistTracks(norm);
   if (cachedTracks && cachedTracks.length > 0) {
-    const found = cachedTracks.find((t) => t.dayOfWeek === dayOfWeek);
-    if (found) return found;
     const dayIdx = DAYS_SEQUENCE.indexOf(dayOfWeek);
-    if (dayIdx >= 0 && cachedTracks[dayIdx]) return cachedTracks[dayIdx];
+    if (dayIdx >= 0 && cachedTracks[dayIdx % cachedTracks.length]) {
+      return cachedTracks[dayIdx % cachedTracks.length];
+    }
   }
   const playlist = getSpotifyPlaylistForLevel(rawLevel);
   const track = playlist.tracks[dayOfWeek];

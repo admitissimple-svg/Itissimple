@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Sparkles,
   Calendar,
@@ -47,6 +47,7 @@ import {
   normalizeStudentLevel,
   getSpotifyPlaylistForLevel,
   getDailySpotifyTrackForStudent,
+  selectCurrentDaySpotifyTrack,
   DAYS_SEQUENCE,
   isValidSpotifyUrl,
   checkAndInvalidateSpotifyCache,
@@ -272,8 +273,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     if (userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0) {
       return userProfile.weeklyStudyDays;
     }
+    const target = userProfile?.weeklyStudyDaysTarget;
+    if (target === 2) return ['tuesday', 'thursday'];
+    if (target === 3) return ['monday', 'wednesday', 'friday'];
+    if (target === 5) return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    if (target === 7) return DAYS_OF_WEEK;
     return DAYS_OF_WEEK;
-  }, [userProfile?.weeklyStudyDays]);
+  }, [userProfile?.weeklyStudyDays, userProfile?.weeklyStudyDaysTarget]);
 
   // Active study days sorted in standard calendar order
   const activeDaysInOrder: DayOfWeek[] = useMemo(() => {
@@ -288,17 +294,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     return currentActiveIdx >= 1;
   }, [activeDaysInOrder, selectedDay]);
 
-  // Ensure selectedDay is always one of the active study days in the student's plan
+  // Ensure selectedDay is initialized to an active study day on initial load
+  const hasInitializedDayRef = useRef(false);
   useEffect(() => {
-    if (userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0) {
-      if (!userProfile.weeklyStudyDays.includes(selectedDay)) {
-        const fallback = userProfile.weeklyStudyDays.includes(todayDay)
+    if (!hasInitializedDayRef.current && activeStudyDays && activeStudyDays.length > 0) {
+      hasInitializedDayRef.current = true;
+      if (!activeStudyDays.includes(selectedDay)) {
+        const fallback = activeStudyDays.includes(todayDay)
           ? todayDay
-          : userProfile.weeklyStudyDays[0];
+          : activeStudyDays[0];
         if (fallback) onSelectDay(fallback);
       }
     }
-  }, [userProfile?.weeklyStudyDays, selectedDay, todayDay, onSelectDay]);
+  }, [activeStudyDays, selectedDay, todayDay, onSelectDay]);
 
   const handleJumpWeekdays = () => {
     const weekday = activeStudyDays.find((d) =>
@@ -425,15 +433,32 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       });
   }, [normalizedLevel]);
 
+  // Daily Exclusivity (1 song per study day) based on student's active plan and weekly cycle
+  const isRestDay = useMemo(() => {
+    return !activeDaysInOrder.includes(selectedDay);
+  }, [activeDaysInOrder, selectedDay]);
+
+  const currentStudyDayIndex = useMemo(() => {
+    return activeDaysInOrder.indexOf(selectedDay);
+  }, [activeDaysInOrder, selectedDay]);
+
+  const currentDayTrack = useMemo(() => {
+    return selectCurrentDaySpotifyTrack({
+      level: normalizedLevel,
+      selectedDay,
+      activeStudyDays: activeDaysInOrder,
+      weeklyCycle,
+      liveTracks: liveSpotifyTracks,
+    });
+  }, [normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, liveSpotifyTracks]);
+
   const dailySpotifyTrack = useMemo(() => {
-    if (liveSpotifyTracks && liveSpotifyTracks.length > 0) {
-      const found = liveSpotifyTracks.find((t) => t.dayOfWeek === selectedDay);
-      if (found) return found;
-      const dayIdx = DAYS_SEQUENCE.indexOf(selectedDay);
-      if (dayIdx >= 0 && liveSpotifyTracks[dayIdx]) return liveSpotifyTracks[dayIdx];
-    }
-    return getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
-  }, [liveSpotifyTracks, normalizedLevel, selectedDay]);
+    return (
+      currentDayTrack ||
+      getDailySpotifyTrackForStudent(normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle) ||
+      levelPlaylistConfig.tracks.monday
+    );
+  }, [currentDayTrack, normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, levelPlaylistConfig]);
 
   const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
 
@@ -544,25 +569,39 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     !isLevelMismatchedAudio &&
     !isAssignedPlaylistMismatched &&
     assignedSpotify.url.trim() !== '' &&
-    assignedSpotify.url.trim() !== dailySpotifyTrack.url.trim()
+    assignedSpotify.url.trim() !== (currentDayTrack?.url || dailySpotifyTrack.url).trim()
   );
 
   const effectiveTrackTitle = hasTeacherCustomAudio && assignedSpotify?.title && assignedSpotify.title !== 'Teacher Recommended Audio'
     ? assignedSpotify.title
-    : dailySpotifyTrack.title;
+    : (currentDayTrack?.title || (isEn ? 'Rest Day' : 'Dia de Descanso'));
   const effectiveArtist = hasTeacherCustomAudio && assignedSpotify?.artistOrHost
     ? assignedSpotify.artistOrHost
-    : dailySpotifyTrack.artist;
+    : (currentDayTrack?.artist || "It's simple");
   const effectiveEmbedUrl = hasTeacherCustomAudio && assignedSpotify?.url
-    ? (getSpotifyEmbedUrl(assignedSpotify.url) || dailySpotifyTrack.embedUrl)
-    : dailySpotifyTrack.embedUrl;
+    ? (getSpotifyEmbedUrl(assignedSpotify.url) || currentDayTrack?.embedUrl || '')
+    : (currentDayTrack?.embedUrl || '');
+
+  // Strict daily exclusivity: Guarantee 1 single track embed (never full playlist)
+  const sanitizedEmbedUrl = useMemo(() => {
+    if (!effectiveEmbedUrl) return '';
+    if (effectiveEmbedUrl.includes('/embed/playlist/')) {
+      const trackId = currentDayTrack?.trackId && !currentDayTrack.trackId.startsWith('http')
+        ? currentDayTrack.trackId
+        : '7qiZfU4dY1lWllzX7mPBI3';
+      return `https://open.spotify.com/embed/track/${trackId}?utm_source=generator&theme=0`;
+    }
+    return effectiveEmbedUrl;
+  }, [effectiveEmbedUrl, currentDayTrack]);
   const effectiveDirectUrl = hasTeacherCustomAudio && assignedSpotify?.url
     ? getSpotifyDirectUrl(assignedSpotify.url)
-    : dailySpotifyTrack.url;
+    : (currentDayTrack?.url || levelPlaylistConfig.playlistUrl);
   const effectiveTeacherTip = hasTeacherCustomAudio && assignedSpotify?.instructions
     ? assignedSpotify.instructions
-    : (isEn ? dailySpotifyTrack.teacherTipEn : dailySpotifyTrack.teacherTipPt);
-  const currentDaySeqIndex = DAYS_SEQUENCE.indexOf(selectedDay) + 1;
+    : (currentDayTrack
+        ? (isEn ? currentDayTrack.teacherTipEn : currentDayTrack.teacherTipPt)
+        : (isEn ? 'Rest day in your weekly study plan.' : 'Dia de descanso no seu plano de estudos.'));
+  const currentDaySeqIndex = currentStudyDayIndex >= 0 ? currentStudyDayIndex + 1 : 1;
 
   // End of day reminder calculation
   const lastActivity = getLastActivityOfTheDay(sortedActivities);
@@ -1094,22 +1133,28 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
               if (!isActiveInPlan) {
                 return (
-                  <div
+                  <button
                     key={day}
-                    className="py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center opacity-30 bg-slate-100 text-slate-400 border border-dashed border-slate-300 cursor-not-allowed select-none transition"
+                    type="button"
+                    onClick={() => onSelectDay(day)}
+                    className={`py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center transition cursor-pointer select-none ${
+                      isSelected
+                        ? 'bg-[#000035] text-white shadow-sm border-2 border-[#1C4C96]'
+                        : 'opacity-40 hover:opacity-80 bg-slate-100 text-slate-500 border border-dashed border-slate-300'
+                    }`}
                     title={
                       isEn
-                        ? `Day not in your weekly study plan (${getDayLabel(day, 'en')})`
-                        : `Dia não selecionado no seu plano semanal (${getDayLabel(day, 'pt')})`
+                        ? `Rest day in your weekly study plan (${getDayLabel(day, 'en')})`
+                        : `Dia de descanso no seu plano semanal (${getDayLabel(day, 'pt')})`
                     }
                   >
-                    <span className="text-[10px] font-black uppercase text-slate-400">
+                    <span className="text-[10px] font-black uppercase">
                       {getDayShortLabel(day, currentLanguage)}
                     </span>
-                    <span className="text-[8px] font-bold text-slate-400 mt-0.5">
-                      {isEn ? 'Off' : 'Folga'}
+                    <span className="text-[8px] font-bold mt-0.5">
+                      {isEn ? 'Rest' : 'Folga'}
                     </span>
-                  </div>
+                  </button>
                 );
               }
 
@@ -1759,9 +1804,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   </span>
                 </div>
                 <p className="text-[10px] text-slate-500 font-medium">
-                  {isEn
-                    ? `${dailySpotifyTrack.dayLabelEn} • Track ${currentDaySeqIndex} of 7 • Adm Itissimple`
-                    : `${dailySpotifyTrack.dayLabelPt} • Faixa ${currentDaySeqIndex} de 7 • Adm Itissimple`}
+                  {isRestDay || !currentDayTrack
+                    ? (isEn
+                        ? `${getDayLabel(selectedDay, 'en')} • Rest Day • Relax & Recharge`
+                        : `${getDayLabel(selectedDay, 'pt')} • Dia de Descanso • Recarregue as energias`)
+                    : (isEn
+                        ? `${currentDayTrack.dayLabelEn} • Track ${currentStudyDayIndex + 1} of ${activeDaysInOrder.length} • Adm Itissimple`
+                        : `${currentDayTrack.dayLabelPt} • Faixa ${currentStudyDayIndex + 1} de ${activeDaysInOrder.length} • Adm Itissimple`)}
                 </p>
               </div>
             </div>
@@ -1806,49 +1855,30 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
             {spotifyPlayerMode === 'app' ? (
               <div className="flex items-center gap-1 text-[10px]">
-                <button
-                  type="button"
-                  onClick={() => setSpotifyEmbedView('track')}
-                  className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                    spotifyEmbedView === 'track'
-                      ? 'bg-emerald-600 text-white shadow-2xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
+                <span className="px-2 py-0.5 rounded font-bold bg-emerald-600 text-white shadow-2xs">
                   {isEn ? 'Song of the Day' : 'Música de Hoje'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSpotifyEmbedView('playlist')}
-                  className={`px-2 py-0.5 rounded font-bold transition cursor-pointer ${
-                    spotifyEmbedView === 'playlist'
-                      ? 'bg-emerald-600 text-white shadow-2xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  {isEn ? 'Full Playlist' : 'Playlist Completa'}
-                </button>
+                </span>
               </div>
             ) : (
               <div className="flex items-center gap-2">
                 <a
-                  href={levelPlaylistConfig.playlistUrl}
+                  href={effectiveDirectUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-1 shrink-0"
-                  title={isEn ? 'Open complete playlist on Spotify' : 'Abrir playlist completa no Spotify'}
+                  title={isEn ? 'Open song on Spotify' : 'Abrir música no Spotify'}
                 >
                   <span>{isEn ? 'Open in Spotify' : 'Abrir no Spotify'}</span>
                   <ExternalLink className="w-2.5 h-2.5" />
                 </a>
                 <a
-                  href="https://open.spotify.com/home?facet=music-chip"
+                  href={levelPlaylistConfig.playlistUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[10px] font-bold text-slate-500 hover:text-emerald-700 flex items-center gap-1 shrink-0"
-                  title="Spotify Web Home"
+                  title={isEn ? 'Open complete playlist on Spotify' : 'Abrir playlist completa no Spotify'}
                 >
-                  <span>Spotify Web</span>
+                  <span>{isEn ? 'Playlist' : 'Playlist'}</span>
                   <ExternalLink className="w-2.5 h-2.5" />
                 </a>
               </div>
@@ -1856,75 +1886,70 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           </div>
 
           {/* Spotify Item Card or Embed */}
-          {spotifyPlayerMode === 'app' ? (
-            spotifyEmbedView === 'playlist' ? (
-              <div className="space-y-1.5">
-                <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[280px] bg-black">
-                  <iframe
-                    src={levelPlaylistConfig.embedPlaylistUrl}
-                    width="100%"
-                    height="280"
-                    frameBorder="0"
-                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    loading="lazy"
-                    title="Spotify Playlist Player - It's simple"
-                  />
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
-                  <span className="font-semibold truncate">
-                    🎶 {levelPlaylistConfig.playlistTitle} • Adm Itissimple
+          {isRestDay || !currentDayTrack ? (
+            <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 flex flex-col items-center justify-center text-center space-y-2 py-8 my-auto">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-2xs">
+                <Music className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div className="space-y-0.5">
+                <h4 className="text-xs font-black text-[#000035]">
+                  {isEn ? 'Rest Day' : 'Dia de Descanso'}
+                </h4>
+                <p className="text-[11px] text-slate-500 max-w-xs leading-relaxed">
+                  {isEn
+                    ? 'No Spotify listening scheduled for today according to your weekly study plan. Take time to rest and consolidate what you learned!'
+                    : 'Nenhuma música do Spotify programada para hoje de acordo com seu plano de estudos. Aproveite para descansar e consolidar o aprendizado!'}
+                </p>
+              </div>
+              <div className="pt-1">
+                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/60 px-2.5 py-1 rounded-full">
+                  {isEn
+                    ? `Study Plan: ${activeDaysInOrder.length} days/week`
+                    : `Plano de estudos: ${activeDaysInOrder.length} dias/semana`}
+                </span>
+              </div>
+            </div>
+          ) : spotifyPlayerMode === 'app' ? (
+            <div className="space-y-1.5">
+              <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[152px] bg-black">
+                <iframe
+                  src={sanitizedEmbedUrl}
+                  width="100%"
+                  height="152"
+                  frameBorder="0"
+                  allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                  loading="lazy"
+                  title="Spotify Daily Track Player"
+                />
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
+                <span className="font-semibold truncate">
+                  🎵 {effectiveTrackTitle} • {effectiveArtist}
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    {isEn
+                      ? `Track ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`
+                      : `Faixa ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`}
                   </span>
                   <a
-                    href={levelPlaylistConfig.playlistUrl}
+                    href={effectiveDirectUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-0.5 shrink-0"
+                    className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-0.5"
                   >
-                    <span>{isEn ? 'Open Spotify' : 'No Spotify'}</span>
+                    <span>{isEn ? 'Open' : 'Abrir'}</span>
                     <ExternalLink className="w-2.5 h-2.5" />
                   </a>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-1.5">
-                <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[152px] bg-black">
-                  <iframe
-                    src={effectiveEmbedUrl}
-                    width="100%"
-                    height="152"
-                    frameBorder="0"
-                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    loading="lazy"
-                    title="Spotify Daily Track Player"
-                  />
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
-                  <span className="font-semibold truncate">
-                    🎵 {effectiveTrackTitle} • {effectiveArtist}
-                  </span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                      {isEn ? `Track ${currentDaySeqIndex}/7` : `Faixa ${currentDaySeqIndex}/7`}
-                    </span>
-                    <a
-                      href={effectiveDirectUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-0.5"
-                    >
-                      <span>{isEn ? 'Open' : 'Abrir'}</span>
-                      <ExternalLink className="w-2.5 h-2.5" />
-                    </a>
-                  </div>
-                </div>
-              </div>
-            )
+            </div>
           ) : (
             <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50/60 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                {dailySpotifyTrack.imageUrl ? (
+                {currentDayTrack.imageUrl ? (
                   <img
-                    src={dailySpotifyTrack.imageUrl}
+                    src={currentDayTrack.imageUrl}
                     alt={effectiveTrackTitle}
                     className="w-10 h-10 rounded-xl object-cover shrink-0 shadow-xs border border-emerald-300"
                     referrerPolicy="no-referrer"
@@ -1940,7 +1965,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                       {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
                     </span>
                     <span className="text-[9px] text-emerald-700 font-semibold">
-                      {isEn ? `Track ${currentDaySeqIndex}/7` : `Faixa ${currentDaySeqIndex}/7`}
+                      {isEn
+                        ? `Track ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`
+                        : `Faixa ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`}
                     </span>
                   </div>
                   <h4 className="text-xs font-black text-[#000035] truncate mt-0.5">
