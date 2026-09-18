@@ -53,6 +53,13 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
   const [newDate, setNewDate] = useState<string>(defaultDate);
   const [newStartTime, setNewStartTime] = useState<string>('10:00');
   const [reason, setReason] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsSubmitting(false);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (lesson?.startDateTime) {
@@ -161,6 +168,7 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
       return;
     }
 
+    setIsSubmitting(true);
     onConfirmReschedule(lesson.id, proposedIso.startIso, proposedIso.endIso, reason.trim());
     onClose();
   };
@@ -245,7 +253,7 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
           </div>
 
           {/* Conflict Alert Banner */}
-          {currentConflict && (
+          {!isSubmitting && currentConflict && (
             <div className="p-3.5 bg-rose-50 border-2 border-rose-400 rounded-xl text-xs text-rose-950 space-y-1 animate-in fade-in">
               <div className="flex items-center gap-1.5 font-black text-rose-800">
                 <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -291,7 +299,7 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={Boolean(currentConflict)}
+              disabled={isSubmitting || Boolean(currentConflict)}
               className={`px-5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
                 currentConflict
                   ? 'bg-slate-300 text-slate-500 border border-slate-300 cursor-not-allowed'
@@ -300,7 +308,9 @@ export const RescheduleModal: React.FC<RescheduleModalProps> = ({
             >
               <Send className="w-3.5 h-3.5" />
               <span>
-                {currentConflict
+                {isSubmitting
+                  ? (isEn ? 'Sending...' : 'Enviando...')
+                  : currentConflict
                   ? (isEn ? 'Slot Unavailable' : 'Horário Indisponível')
                   : isEn ? 'Send Reschedule Request' : 'Solicitar Reagendamento'}
               </span>

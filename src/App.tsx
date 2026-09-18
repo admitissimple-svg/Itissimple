@@ -260,6 +260,7 @@ export default function App() {
   const [isManageSubscriptionOpen, setIsManageSubscriptionOpen] = useState<boolean>(false);
   const [subscriptionTargetTutor, setSubscriptionTargetTutor] = useState<NativeFriendTutor | null>(null);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
+  const [isOnboardingCompleting, setIsOnboardingCompleting] = useState<boolean>(false);
 
   const [activeLessonForAction, setActiveLessonForAction] = useState<LiveLesson | null>(null);
   const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('itissimple.school@gmail.com');
@@ -635,6 +636,11 @@ export default function App() {
 
   // Handler: Complete Onboarding Wizard (Multi-step Assistant)
   const handleCompleteOnboarding = async (data: OnboardingResultData) => {
+    // 0. Imediatamente fecha o modal e direciona para o dashboard antes das chamadas assíncronas
+    setIsOnboardingCompleting(true);
+    setIsOnboardingModalOpen(false);
+    setViewMode('dashboard');
+
     try {
       let activeAccount = currentAccount;
 
@@ -829,6 +835,8 @@ export default function App() {
       if (!currentAccount) {
         setViewMode('landing');
       }
+    } finally {
+      setIsOnboardingCompleting(false);
     }
   };
 
@@ -3250,7 +3258,7 @@ export default function App() {
         onClose={() => {
           setIsOnboardingModalOpen(false);
           // If student gave up or closed onboarding before completion, or has no account, return to initial landing page
-          if (!currentAccount || viewMode === 'landing') {
+          if (!isOnboardingCompleting && (!currentAccount || viewMode === 'landing')) {
             setViewMode('landing');
           }
         }}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   X,
   Calendar as CalendarIcon,
@@ -192,6 +192,18 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   const [notes, setNotes] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [scheduleSuccess, setScheduleSuccess] = useState<boolean>(false);
+  const [isClosing, setIsClosing] = useState<boolean>(false);
+  const userInteractedWithTimeRef = useRef<boolean>(false);
+
+  // Explicitly reset submission and closing states when modal opens or closes
+  React.useEffect(() => {
+    if (!isOpen) {
+      setIsSubmitting(false);
+      setScheduleSuccess(false);
+      setIsClosing(false);
+      userInteractedWithTimeRef.current = false;
+    }
+  }, [isOpen]);
 
   const cleanTeacherName = (name: string) => {
     return name.replace(/\s*\(Amigo Nativo\)/gi, '').replace(/\s*\(Amiga Nativa\)/gi, '').replace(/\s*\(Native Friend\)/gi, '').trim();
@@ -372,24 +384,6 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     return Array.from(map.values());
   }, [lessons, teacherLessons]);
 
-  // 🌟 ANTI-DUPLICITY CONFLICT DETECTION (Individualized by teacher and student UIDs/emails)
-  const currentConflict = useMemo(() => {
-    if (!selectedDate || !selectedStartTime || (!selectedTeacherObj.email && !effectiveTeacherUid)) return null;
-    const startIso = calculateStartDateTime();
-    const endIso = calculateEndDateTime();
-    if (!startIso || !endIso) return null;
-    return findTeacherLessonConflict(
-      selectedTeacherObj.email,
-      startIso,
-      endIso,
-      combinedLessons,
-      undefined,
-      effectiveTeacherUid,
-      selectedStudentObj.email,
-      effectiveStudentUid
-    );
-  }, [selectedDate, selectedStartTime, durationMinutes, selectedTeacherObj.email, effectiveTeacherUid, selectedStudentObj.email, effectiveStudentUid, combinedLessons, activeTz]);
-
   // Slot conflict checker for dropdown options
   const checkSlotIsBooked = (slot: string) => {
     if (!selectedDate || (!selectedTeacherObj.email && !effectiveTeacherUid)) return false;
@@ -409,8 +403,51 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     return Boolean(conflict);
   };
 
+  // 🌟 ANTI-DUPLICITY CONFLICT DETECTION (Pure synchronous calculation, zero-frame delay)
+  // Preserves 100% of defined rules. Evaluated strictly when modal is active and NOT submitting/closing
+  const currentConflict = useMemo(() => {
+    if (!isOpen || isSubmitting || scheduleSuccess || isClosing) return null;
+    if (!selectedDate || !selectedStartTime || (!selectedTeacherObj.email && !effectiveTeacherUid)) return null;
+
+    // If slots are loaded and current slot is about to be auto-adjusted to an available slot, suppress premature flash
+    if (timeSlots.length > 0 && !timeSlots.includes(selectedStartTime)) return null;
+    const isAutoAdjusting = timeSlots.length > 0 && checkSlotIsBooked(selectedStartTime) && timeSlots.some((s) => !checkSlotIsBooked(s)) && !userInteractedWithTimeRef.current;
+    if (isAutoAdjusting) return null;
+
+    const startIso = calculateStartDateTime();
+    const endIso = calculateEndDateTime();
+    if (!startIso || !endIso) return null;
+
+    return findTeacherLessonConflict(
+      selectedTeacherObj.email,
+      startIso,
+      endIso,
+      combinedLessons,
+      undefined,
+      effectiveTeacherUid,
+      selectedStudentObj.email,
+      effectiveStudentUid
+    );
+  }, [
+    isOpen,
+    isSubmitting,
+    scheduleSuccess,
+    isClosing,
+    selectedDate,
+    selectedStartTime,
+    timeSlots,
+    durationMinutes,
+    selectedTeacherObj.email,
+    effectiveTeacherUid,
+    selectedStudentObj.email,
+    effectiveStudentUid,
+    combinedLessons,
+    activeTz,
+  ]);
+
   // Adjust selectedStartTime if not in timeSlots or if booked, auto-selecting the first available slot
   React.useEffect(() => {
+    if (!isOpen || isSubmitting || scheduleSuccess || isClosing) return;
     if (timeSlots.length === 0) return;
     const isCurrentBooked = checkSlotIsBooked(selectedStartTime);
     if (!timeSlots.includes(selectedStartTime) || isCurrentBooked) {
@@ -421,13 +458,27 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
         setSelectedStartTime(timeSlots[0]);
       }
     }
-  }, [timeSlots, selectedDate, combinedLessons, selectedTeacherObj.email, effectiveTeacherUid, selectedStudentObj.email, effectiveStudentUid]);
+  }, [timeSlots, selectedDate, combinedLessons, selectedTeacherObj.email, effectiveTeacherUid, selectedStudentObj.email, effectiveStudentUid, isOpen, isSubmitting, scheduleSuccess, isClosing]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Absolute conflict blocking
-    if (currentConflict) {
+    const startIso = calculateStartDateTime();
+    const endIso = calculateEndDateTime();
+
+    // Absolute conflict blocking before triggering submit (preserves 100% of defined rules)
+    const definitiveConflict = findTeacherLessonConflict(
+      selectedTeacherObj.email,
+      startIso,
+      endIso,
+      combinedLessons,
+      undefined,
+      effectiveTeacherUid,
+      selectedStudentObj.email,
+      effectiveStudentUid
+    );
+
+    if (definitiveConflict) {
       alert(
         isEn
           ? `Conflict Blocked: There is already a scheduled lesson at this time for this Native Friend or Student. Please choose another slot.`
@@ -454,10 +505,9 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
       return;
     }
 
+    // Immediately flag as submitting & closing to prevent any intermediate visual conflict state
     setIsSubmitting(true);
-
-    const startIso = calculateStartDateTime();
-    const endIso = calculateEndDateTime();
+    setIsClosing(true);
 
     try {
       await onSchedule({
@@ -471,17 +521,14 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
         teacherEmail: selectedTeacherObj.email,
         teacherName: selectedTeacherObj.name,
         teacherUid: effectiveTeacherUid,
-        meetLink: activeTeacherSettings.meetLink || 'https://meet.google.com/gmt-kxnw-zpq',
+        meetLink: activeTeacherSettings.meetLink || 'https://meet.google.com/dhe-erqu-dvb',
       });
 
       setScheduleSuccess(true);
-      setTimeout(() => {
-        setScheduleSuccess(false);
-        onClose();
-      }, 1800);
+      onClose();
     } catch (err) {
       console.error('Schedule error:', err);
-    } finally {
+      setIsClosing(false);
       setIsSubmitting(false);
     }
   };
@@ -602,7 +649,10 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 type="date"
                 required
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                onChange={(e) => {
+                  userInteractedWithTimeRef.current = false;
+                  setSelectedDate(e.target.value);
+                }}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               />
             </div>
@@ -613,7 +663,10 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               </label>
               <select
                 value={selectedStartTime}
-                onChange={(e) => setSelectedStartTime(e.target.value)}
+                onChange={(e) => {
+                  userInteractedWithTimeRef.current = true;
+                  setSelectedStartTime(e.target.value);
+                }}
                 className="w-full p-2.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:ring-2 focus:ring-[#1C4C96]"
               >
                 {timeSlots.map((slot) => {
@@ -641,7 +694,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
           )}
 
           {/* 🚨 CONFLICT ALERT BANNER (Rule 2) */}
-          {currentConflict && (
+          {!isSubmitting && !scheduleSuccess && !isClosing && Boolean(currentConflict) && (
             <div className="p-4 bg-rose-50 border-2 border-rose-400 rounded-2xl text-xs text-rose-950 space-y-1.5 animate-in fade-in">
               <div className="flex items-center gap-2 font-black text-rose-800">
                 <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
@@ -651,8 +704,8 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               </div>
               <p className="text-[11px] leading-relaxed text-rose-900 font-medium">
                 {isEn
-                  ? `The Native Friend ${cleanTeacherName(selectedTeacherObj.name)} already has another lesson scheduled on this exact slot (${formatTimeInTimeZone(currentConflict.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict.endDateTime, activeTz)}${currentConflict.studentName ? ` with ${currentConflict.studentName}` : ''}). Double bookings are strictly blocked by system rules.`
-                  : `O Amigo Nativo ${cleanTeacherName(selectedTeacherObj.name)} já possui uma aula agendada exatamente neste mesmo horário (${formatTimeInTimeZone(currentConflict.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict.endDateTime, activeTz)}${currentConflict.studentName ? ` com ${currentConflict.studentName}` : ''}). O sistema bloqueia conflitos e não permite duas aulas no mesmo slot.`}
+                  ? `The Native Friend ${cleanTeacherName(selectedTeacherObj.name)} already has another lesson scheduled on this exact slot (${formatTimeInTimeZone(currentConflict!.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict!.endDateTime, activeTz)}${currentConflict!.studentName ? ` with ${currentConflict!.studentName}` : ''}). Double bookings are strictly blocked by system rules.`
+                  : `O Amigo Nativo ${cleanTeacherName(selectedTeacherObj.name)} já possui uma aula agendada exatamente neste mesmo horário (${formatTimeInTimeZone(currentConflict!.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict!.endDateTime, activeTz)}${currentConflict!.studentName ? ` com ${currentConflict!.studentName}` : ''}). O sistema bloqueia conflitos e não permite duas aulas no mesmo slot.`}
               </p>
               <p className="text-[11px] font-black text-rose-700">
                 {isEn
@@ -753,10 +806,12 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
               <button
                 type="submit"
-                disabled={isSubmitting || Boolean(currentConflict)}
+                disabled={isSubmitting || scheduleSuccess || isClosing || Boolean(currentConflict)}
                 className={`px-6 py-2.5 rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-md ${
                   currentConflict
                     ? 'bg-slate-300 text-slate-500 border border-slate-300 cursor-not-allowed shadow-none'
+                    : (scheduleSuccess || isClosing)
+                    ? 'bg-emerald-600 text-white shadow-none'
                     : 'bg-[#1C4C96] hover:bg-[#062863] text-white cursor-pointer'
                 }`}
               >
@@ -764,6 +819,8 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                 <span>
                   {isSubmitting
                     ? (isEn ? 'Scheduling...' : 'Agendando...')
+                    : (scheduleSuccess || isClosing)
+                    ? (isEn ? 'Scheduled!' : 'Agendado!')
                     : currentConflict
                     ? (isEn ? 'Slot Unavailable (Already Booked)' : 'Horário Indisponível (Já Ocupado)')
                     : isEn ? 'Confirm & Schedule' : 'Confirmar Agendamento'}

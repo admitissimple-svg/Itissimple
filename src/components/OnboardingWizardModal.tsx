@@ -261,7 +261,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   // Step state: 1 to 6
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isClosing, setIsClosing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const wasOpenRef = React.useRef<boolean>(false);
 
   // English Level selection: Beginner | Intermediate | Advanced
   const [studentLevel, setStudentLevel] = useState<EnglishLevel>(() => {
@@ -329,57 +331,65 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isSavedSuccessfully, setIsSavedSuccessfully] = useState<boolean>(false);
 
-  // Reset or initialize on open
+  // Reset or initialize on open ONLY when transitioning from closed to open
   useEffect(() => {
     if (isOpen) {
-      setCurrentStep(1);
+      if (!wasOpenRef.current) {
+        wasOpenRef.current = true;
+        setCurrentStep(1);
+        setIsSubmitting(false);
+        setIsClosing(false);
+        setErrorMessage(null);
+        setIsSavedSuccessfully(false);
+
+        if (currentUserProfile) {
+          if (currentUserProfile.learningGoal) {
+            const match = PREDEFINED_GOALS.find((g) => g.titlePt === currentUserProfile.learningGoal || g.titleEn === currentUserProfile.learningGoal);
+            if (match) {
+              setSelectedGoalId(match.id);
+            } else {
+              setSelectedGoalId('other');
+              setCustomGoalText(currentUserProfile.learningGoal);
+            }
+          }
+          if (currentUserProfile.weeklyStudyDaysTarget) {
+            setSelectedDaysTarget(currentUserProfile.weeklyStudyDaysTarget);
+          }
+          if (currentUserProfile.weeklyStudyDays && currentUserProfile.weeklyStudyDays.length > 0) {
+            setSelectedDays(currentUserProfile.weeklyStudyDays);
+          }
+          if (currentUserProfile.routineVideoTime) {
+            setRoutineVideoTime(currentUserProfile.routineVideoTime);
+          }
+          if (currentUserProfile.routineAudioTime) {
+            setRoutineAudioTime(currentUserProfile.routineAudioTime);
+          }
+          if (currentUserProfile.dailyPhraseTime) {
+            setDailyPhraseTime(currentUserProfile.dailyPhraseTime);
+          }
+          if (currentUserProfile.teacherEmail) {
+            const matchTutor = tutorsList.find(
+              (t) => t.email.toLowerCase() === currentUserProfile.teacherEmail?.toLowerCase()
+            );
+            if (matchTutor) {
+              setSelectedTutorId(matchTutor.id || matchTutor.email);
+            }
+          }
+        }
+
+        if (currentAccount) {
+          setStudentName(currentAccount.name || '');
+          setStudentEmail(currentAccount.email || '');
+        }
+      }
+    } else {
+      wasOpenRef.current = false;
+      setIsClosing(false);
       setIsSubmitting(false);
-      setErrorMessage(null);
-      setIsSavedSuccessfully(false);
-
-      if (currentUserProfile) {
-        if (currentUserProfile.learningGoal) {
-          const match = PREDEFINED_GOALS.find((g) => g.titlePt === currentUserProfile.learningGoal || g.titleEn === currentUserProfile.learningGoal);
-          if (match) {
-            setSelectedGoalId(match.id);
-          } else {
-            setSelectedGoalId('other');
-            setCustomGoalText(currentUserProfile.learningGoal);
-          }
-        }
-        if (currentUserProfile.weeklyStudyDaysTarget) {
-          setSelectedDaysTarget(currentUserProfile.weeklyStudyDaysTarget);
-        }
-        if (currentUserProfile.weeklyStudyDays && currentUserProfile.weeklyStudyDays.length > 0) {
-          setSelectedDays(currentUserProfile.weeklyStudyDays);
-        }
-        if (currentUserProfile.routineVideoTime) {
-          setRoutineVideoTime(currentUserProfile.routineVideoTime);
-        }
-        if (currentUserProfile.routineAudioTime) {
-          setRoutineAudioTime(currentUserProfile.routineAudioTime);
-        }
-        if (currentUserProfile.dailyPhraseTime) {
-          setDailyPhraseTime(currentUserProfile.dailyPhraseTime);
-        }
-        if (currentUserProfile.teacherEmail) {
-          const matchTutor = tutorsList.find(
-            (t) => t.email.toLowerCase() === currentUserProfile.teacherEmail?.toLowerCase()
-          );
-          if (matchTutor) {
-            setSelectedTutorId(matchTutor.id || matchTutor.email);
-          }
-        }
-      }
-
-      if (currentAccount) {
-        setStudentName(currentAccount.name || '');
-        setStudentEmail(currentAccount.email || '');
-      }
     }
   }, [isOpen, currentUserProfile, currentAccount, tutorsList]);
 
-  if (!isOpen) return null;
+  if (!isOpen || isClosing) return null;
 
   // Selected tutor object
   const selectedTutor =
@@ -449,7 +459,12 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       return;
     }
 
+    // 1. Passa estado local de carregamento
     setIsSubmitting(true);
+    // 2. Fecha imediatamente o modal para evitar flashes de re-renderização antes da atualização global
+    setIsClosing(true);
+    onClose();
+
     try {
       await onCompleteOnboarding({
         learningGoal: getFinalLearningGoal(),
@@ -475,8 +490,9 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       });
 
       setIsSavedSuccessfully(true);
-      setCurrentStep(6);
     } catch (err: any) {
+      console.warn('Failed to save onboarding configuration:', err);
+      setIsClosing(false);
       setErrorMessage(err?.message || (isEn ? 'Failed to save configuration.' : 'Erro ao salvar configuração do perfil.'));
     } finally {
       setIsSubmitting(false);
