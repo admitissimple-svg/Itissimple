@@ -746,7 +746,7 @@ export default function App() {
         ...updatedProfile,
       }));
 
-      // Pre-fetch and cache Spotify playlist tracks for the selected student level (e.g. Intermediate -> 34E52K1dEJO5cZ7RPKlR4l)
+      // Pre-fetch and cache Spotify playlist tracks for the selected student level (e.g. Intermediate -> 34E52K1dEJO5CzZRPkIR4I)
       const normLevel = normalizeStudentLevel(selectedLevel);
       fetchTracksForStudentLevel(normLevel).catch(() => {});
 

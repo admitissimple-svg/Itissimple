@@ -26,6 +26,7 @@ import {
   getDailySpotifyTrackForStudent,
   DAYS_SEQUENCE,
   SPOTIFY_LEVEL_PLAYLISTS,
+  SPOTIFY_BEARER_TOKEN,
 } from './src/utils/spotify';
 import {
   extractYouTubeVideoId,
@@ -5153,7 +5154,7 @@ app.post('/api/student-spotify-assignments/listen', (req, res) => {
 
 // Endpoint to verify live Spotify Web API connection with the official token
 app.get('/api/spotify/verify', async (req, res) => {
-  const token = (req.query.token as string) || process.env.SPOTIFY_TOKEN || '';
+  const token = (req.query.token as string) || process.env.SPOTIFY_TOKEN || SPOTIFY_BEARER_TOKEN || '';
   if (!token) {
     return res.status(400).json({ connected: false, error: 'Spotify token not configured' });
   }
@@ -5312,12 +5313,17 @@ let lastSpotifySyncTime = 0;
 const SPOTIFY_CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
-  const token = process.env.SPOTIFY_TOKEN;
+  const token = process.env.SPOTIFY_TOKEN || SPOTIFY_BEARER_TOKEN;
   const db = readDb();
 
-  // Invalidate cached intermediate playlist if it still references an old playlistId
-  if (db.spotifyPlaylists?.intermediate?.playlistId && db.spotifyPlaylists.intermediate.playlistId !== '34E52K1dEJO5cZ7RPKlR4l') {
-    delete db.spotifyPlaylists.intermediate;
+  // Invalidate cached playlists if they still reference old playlist IDs
+  if (
+    db.spotifyPlaylists &&
+    (db.spotifyPlaylists.beginner?.playlistId !== '5MMU9H5oXDd7FCWr0gkzHE' ||
+     db.spotifyPlaylists.intermediate?.playlistId !== '34E52K1dEJO5CzZRPkIR4I' ||
+     db.spotifyPlaylists.advanced?.playlistId !== '6ScLXNefp8JFohezoJve2Z')
+  ) {
+    delete db.spotifyPlaylists;
     writeDb(db);
     lastSpotifySyncTime = 0;
   }
@@ -5327,15 +5333,20 @@ async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
   }
 
   if (!force && lastSpotifySyncTime && Date.now() - lastSpotifySyncTime < SPOTIFY_CACHE_TTL_MS) {
-    if (db.spotifyPlaylists && db.spotifyPlaylists.intermediate?.playlistId === '34E52K1dEJO5cZ7RPKlR4l') {
+    if (
+      db.spotifyPlaylists &&
+      db.spotifyPlaylists.beginner?.playlistId === '5MMU9H5oXDd7FCWr0gkzHE' &&
+      db.spotifyPlaylists.intermediate?.playlistId === '34E52K1dEJO5CzZRPkIR4I' &&
+      db.spotifyPlaylists.advanced?.playlistId === '6ScLXNefp8JFohezoJve2Z'
+    ) {
       return db.spotifyPlaylists;
     }
   }
 
   const playlistMap: Record<string, { level: 'beginner' | 'intermediate' | 'advanced'; title: string }> = {
-    '01gS0x1KOwrDp7pJq2dPCM': { level: 'beginner', title: "Beginner • It's simple" },
-    '34E52K1dEJO5cZ7RPKlR4l': { level: 'intermediate', title: "Intermediate • It's simple" },
-    '2bMnxz06NIK6dHeG9lwyUF': { level: 'advanced', title: "Advanced • It's simple" },
+    '5MMU9H5oXDd7FCWr0gkzHE': { level: 'beginner', title: "Beginner • It's simple" },
+    '34E52K1dEJO5CzZRPkIR4I': { level: 'intermediate', title: "Intermediate • It's simple" },
+    '6ScLXNefp8JFohezoJve2Z': { level: 'advanced', title: "Advanced • It's simple" },
   };
 
   try {

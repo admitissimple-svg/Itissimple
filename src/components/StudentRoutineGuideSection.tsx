@@ -51,6 +51,8 @@ import {
   isValidSpotifyUrl,
   checkAndInvalidateSpotifyCache,
   fetchTracksForStudentLevel,
+  getCachedPlaylistTracks,
+  SpotifyDailyTrack,
 } from '../utils/spotify';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
@@ -399,15 +401,41 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   // Automated level-based Spotify & YouTube curriculum sequential distribution
   const normalizedLevel = normalizeStudentLevel(userProfile?.level);
   const levelPlaylistConfig = getSpotifyPlaylistForLevel(normalizedLevel);
-  const dailySpotifyTrack = getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
-  const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
+  const [liveSpotifyTracks, setLiveSpotifyTracks] = useState<SpotifyDailyTrack[] | null>(() => {
+    return getCachedPlaylistTracks(normalizedLevel);
+  });
+  const [isLoadingSpotify, setIsLoadingSpotify] = useState<boolean>(false);
 
   // Dynamic Spotify track fetch and cache validation when student level is active
   useEffect(() => {
     checkAndInvalidateSpotifyCache();
-    // Triggers https://api.spotify.com/v1/playlists/34E52K1dEJO5cZ7RPKlR4l/tracks when student level is Intermediate
-    fetchTracksForStudentLevel(normalizedLevel).catch(() => {});
+    setIsLoadingSpotify(true);
+    // Triggers https://api.spotify.com/v1/playlists/{playlistId}/tracks (e.g. 34E52K1dEJO5CzZRPkIR4I for Intermediate)
+    fetchTracksForStudentLevel(normalizedLevel)
+      .then((tracks) => {
+        if (tracks && tracks.length > 0) {
+          setLiveSpotifyTracks(tracks);
+        }
+      })
+      .catch((err) => {
+        console.warn('Erro ao carregar faixas do Spotify em tempo real:', err);
+      })
+      .finally(() => {
+        setIsLoadingSpotify(false);
+      });
   }, [normalizedLevel]);
+
+  const dailySpotifyTrack = useMemo(() => {
+    if (liveSpotifyTracks && liveSpotifyTracks.length > 0) {
+      const found = liveSpotifyTracks.find((t) => t.dayOfWeek === selectedDay);
+      if (found) return found;
+      const dayIdx = DAYS_SEQUENCE.indexOf(selectedDay);
+      if (dayIdx >= 0 && liveSpotifyTracks[dayIdx]) return liveSpotifyTracks[dayIdx];
+    }
+    return getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
+  }, [liveSpotifyTracks, normalizedLevel, selectedDay]);
+
+  const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
 
@@ -503,7 +531,11 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     assignedSpotify &&
     (assignedSpotify as any).playlistId &&
     (assignedSpotify as any).playlistId !== levelPlaylistConfig.playlistId &&
-    ((assignedSpotify as any).playlistId === '01gS0x1KOwrDp7pJq2dPCM' || (assignedSpotify as any).playlistTitle?.includes('Beginner'))
+    ((assignedSpotify as any).playlistId === '01gS0x1KOwrDp7pJq2dPCM' ||
+     (assignedSpotify as any).playlistId === '34E52K1dEJO5cZ7RPKlR4l' ||
+     (assignedSpotify as any).playlistId === '2bMnxz06NIK6dHeG9lwyUF' ||
+     (assignedSpotify as any).playlistId === '5MMU9H5oXDd7FCWr0gkzHE' ||
+     (assignedSpotify as any).playlistTitle?.includes('Beginner'))
   );
 
   const hasTeacherCustomAudio = Boolean(
@@ -1890,9 +1922,18 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           ) : (
             <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50/60 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-[#1DB954] text-[#000035] flex items-center justify-center shrink-0 shadow-xs">
-                  <Music className="w-5 h-5" />
-                </div>
+                {dailySpotifyTrack.imageUrl ? (
+                  <img
+                    src={dailySpotifyTrack.imageUrl}
+                    alt={effectiveTrackTitle}
+                    className="w-10 h-10 rounded-xl object-cover shrink-0 shadow-xs border border-emerald-300"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-[#1DB954] text-[#000035] flex items-center justify-center shrink-0 shadow-xs">
+                    <Music className="w-5 h-5" />
+                  </div>
+                )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 uppercase">

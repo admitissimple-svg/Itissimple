@@ -17,6 +17,8 @@ export interface SpotifyDailyTrack {
   artist: string;
   url: string;
   embedUrl: string;
+  imageUrl?: string;
+  albumImages?: Array<{ url: string; height?: number; width?: number }>;
   teacherTipPt: string;
   teacherTipEn: string;
 }
@@ -47,570 +49,126 @@ export const DAYS_SEQUENCE: DayOfWeek[] = [
 
 /**
  * Curated, verified Spotify playlists and sequential daily tracks from It's simple official account (Adm Itissimple).
- * - Beginner: https://open.spotify.com/playlist/01gS0x1KOwrDp7pJq2dPCM
- * - Intermediate: https://open.spotify.com/playlist/34E52K1dEJO5cZ7RPKlR4l
- * - Advanced: https://open.spotify.com/playlist/2bMnxz06NIK6dHeG9lwyUF
+ * - Beginner: https://open.spotify.com/playlist/5MMU9H5oXDd7FCWr0gkzHE
+ * - Intermediate: https://open.spotify.com/playlist/34E52K1dEJO5CzZRPkIR4I
+ * - Advanced: https://open.spotify.com/playlist/6ScLXNefp8JFohezoJve2Z
  */
-export const SPOTIFY_IT_IS_SIMPLE_TOKEN = '';
+/**
+ * Official Bearer Token provided for Spotify Web API consumption
+ */
+export const SPOTIFY_BEARER_TOKEN =
+  'BQDZaOSauB_P1_dU6XQhoSrxpGaylICF2pDVY0_ujvV8FtfaNbTzr2Gg4N9Krdaw9juHr6wQchk3s9UyGhVWWzp-GaKVoo2b3cMixk1louMzpm4aLU2GMfrtxo4qR0lJEyamoOf6ZdwSaJKdvjGunIALjFFXOuT4O2wjuk_cBM82i99nFBdPgBaBmZX9pYkBGJ-ZIGkM5It_oi0a9cTikMRL8pamkTLIKHJsgOwv5cpQwopmJfo02haX-1G96bQpGiEdO4Q0J6xP4MSQZv7Vnevfk9paZFbX_gyNCWITYOsV74pCZL7Fhvc3dRPU-b9jyfddByQ';
 
-export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLevelPlaylistConfig> = {
-  beginner: {
-    level: 'beginner',
-    levelLabelPt: 'Iniciante',
-    levelLabelEn: 'Beginner',
-    playlistId: '01gS0x1KOwrDp7pJq2dPCM',
-    playlistTitle: "Beginner • It's simple",
-    playlistUrl: 'https://open.spotify.com/playlist/01gS0x1KOwrDp7pJq2dPCM',
-    embedPlaylistUrl: 'https://open.spotify.com/embed/playlist/01gS0x1KOwrDp7pJq2dPCM?utm_source=generator&theme=0',
-    descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Iniciantes: músicas com dicção clara, frases fundamentais e ritmo acolhedor.",
-    descriptionEn: "Official It's simple playlist (Adm Itissimple) for Beginners: songs featuring clear diction, foundational phrasing, and accessible rhythm.",
-    tracks: {
-      monday: {
-        dayOfWeek: 'monday',
-        dayLabelPt: 'Segunda-feira',
-        dayLabelEn: 'Monday',
-        trackId: '3B5UbSndRz907IZhhmUfLi',
-        title: 'Count on Me',
-        artist: 'Bruno Mars',
-        url: 'https://open.spotify.com/track/3B5UbSndRz907IZhhmUfLi',
-        embedUrl: 'https://open.spotify.com/embed/track/3B5UbSndRz907IZhhmUfLi?utm_source=generator&theme=0',
-        teacherTipPt: 'Canção alegre e com ritmo calmo. Preste atenção nas frases condicionais simples ("If you ever find yourself...") e na pronúncia clara de cada palavra.',
-        teacherTipEn: 'Uplifting song with an easy pace. Notice simple conditionals ("If you ever find yourself...") and clear articulation of every word.',
-      },
-      tuesday: {
-        dayOfWeek: 'tuesday',
-        dayLabelPt: 'Terça-feira',
-        dayLabelEn: 'Tuesday',
-        trackId: '0tgVpDi06FyKpA1z0VMD4v',
-        title: 'Perfect',
-        artist: 'Ed Sheeran',
-        url: 'https://open.spotify.com/track/0tgVpDi06FyKpA1z0VMD4v',
-        embedUrl: 'https://open.spotify.com/embed/track/0tgVpDi06FyKpA1z0VMD4v?utm_source=generator&theme=0',
-        teacherTipPt: 'Balada suave perfeita para treinar descrição de pessoas, sentimentos e pretéritos simples ("I found a love...").',
-        teacherTipEn: 'A gentle ballad perfect for practicing personal descriptions, emotions, and simple past tense ("I found a love...").',
-      },
-      wednesday: {
-        dayOfWeek: 'wednesday',
-        dayLabelPt: 'Quarta-feira',
-        dayLabelEn: 'Wednesday',
-        trackId: '4qsVPnhbvEooD1bSNqvvh0',
-        title: 'Let It Be',
-        artist: 'The Beatles',
-        url: 'https://open.spotify.com/track/4qsVPnhbvEooD1bSNqvvh0',
-        embedUrl: 'https://open.spotify.com/embed/track/4qsVPnhbvEooD1bSNqvvh0?utm_source=generator&theme=0',
-        teacherTipPt: 'Clássico mundial com dicção britânica exemplar e vocabulário acolhedor. Treine cantar o refrão em voz alta!',
-        teacherTipEn: 'Global classic with timeless British diction and welcoming vocabulary. Try singing along to the chorus out loud!',
-      },
-      thursday: {
-        dayOfWeek: 'thursday',
-        dayLabelPt: 'Quinta-feira',
-        dayLabelEn: 'Thursday',
-        trackId: '3AJwUDP919kvQ9QcozQPxg',
-        title: 'Yellow',
-        artist: 'Coldplay',
-        url: 'https://open.spotify.com/track/3AJwUDP919kvQ9QcozQPxg',
-        embedUrl: 'https://open.spotify.com/embed/track/3AJwUDP919kvQ9QcozQPxg?utm_source=generator&theme=0',
-        teacherTipPt: 'Música de melodia marcante. Foque nos adjetivos simples e nas expressões poéticas ("Look at the stars, look how they shine for you").',
-        teacherTipEn: 'Iconic melodic track. Focus on basic descriptive adjectives and poetic phrases ("Look at the stars, look how they shine for you").',
-      },
-      friday: {
-        dayOfWeek: 'friday',
-        dayLabelPt: 'Sexta-feira',
-        dayLabelEn: 'Friday',
-        trackId: '62PaSfnXSMyLshYJrlTuL3',
-        title: 'Hello',
-        artist: 'Adele',
-        url: 'https://open.spotify.com/track/62PaSfnXSMyLshYJrlTuL3',
-        embedUrl: 'https://open.spotify.com/embed/track/62PaSfnXSMyLshYJrlTuL3?utm_source=generator&theme=0',
-        teacherTipPt: 'Excelente para praticar entonação de cumprimentos e conversas ao telefone ("Hello, it\'s me... I was wondering if...").',
-        teacherTipEn: 'Great for listening to telephone greeting intonation and polite conversational openings ("Hello, it\'s me... I was wondering if...").',
-      },
-      saturday: {
-        dayOfWeek: 'saturday',
-        dayLabelPt: 'Sábado',
-        dayLabelEn: 'Saturday',
-        trackId: '7pKfPomDEeI4TPT6EOYjn9',
-        title: 'Imagine',
-        artist: 'John Lennon',
-        url: 'https://open.spotify.com/track/7pKfPomDEeI4TPT6EOYjn9',
-        embedUrl: 'https://open.spotify.com/embed/track/7pKfPomDEeI4TPT6EOYjn9?utm_source=generator&theme=0',
-        teacherTipPt: 'Ritmo contemplativo com frases curtas e diretas no modo hipotético ("Imagine there\'s no heaven...").',
-        teacherTipEn: 'Contemplative rhythm featuring short, direct hypothetical sentences ("Imagine there\'s no heaven...").',
-      },
-      sunday: {
-        dayOfWeek: 'sunday',
-        dayLabelPt: 'Domingo',
-        dayLabelEn: 'Sunday',
-        trackId: '6OzAkuRDmEpd52RF1g1WvU',
-        title: 'Stand By Me',
-        artist: 'Ben E. King',
-        url: 'https://open.spotify.com/track/6OzAkuRDmEpd52RF1g1WvU',
-        embedUrl: 'https://open.spotify.com/embed/track/6OzAkuRDmEpd52RF1g1WvU?utm_source=generator&theme=0',
-        teacherTipPt: 'Um dos maiores clássicos da música em inglês: ritmo marcado, phrasal verbs simples e excelente para cantar no domingo.',
-        teacherTipEn: 'One of the greatest English classics: steady rhythm, straightforward phrasal verbs, and joyful to sing on Sunday.',
-      },
-    },
-    pool: [
-      {
-        dayOfWeek: 'monday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '3B5UbSndRz907IZhhmUfLi',
-        title: 'Count on Me',
-        artist: 'Bruno Mars',
-        url: 'https://open.spotify.com/track/3B5UbSndRz907IZhhmUfLi',
-        embedUrl: 'https://open.spotify.com/embed/track/3B5UbSndRz907IZhhmUfLi?utm_source=generator&theme=0',
-        teacherTipPt: 'Música acolhedora com números e promessas cotidianas em inglês.',
-        teacherTipEn: 'Heartwarming track with simple numbers, conditionals, and conversational promises.',
-      },
-      {
-        dayOfWeek: 'tuesday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '7BqBn9nXd0udsf07vfr5qT',
-        title: 'Just the Way You Are',
-        artist: 'Bruno Mars',
-        url: 'https://open.spotify.com/track/7BqBn9nXd0udsf07vfr5qT',
-        embedUrl: 'https://open.spotify.com/embed/track/7BqBn9nXd0udsf07vfr5qT?utm_source=generator&theme=0',
-        teacherTipPt: 'Adjetivos descritivos simples e declarações diretas de apreço.',
-        teacherTipEn: 'Gentle descriptive adjectives and clear romantic vocabulary.',
-      },
-      {
-        dayOfWeek: 'wednesday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '0tgVpDi06FyKpA1z0VMD4v',
-        title: 'Perfect',
-        artist: 'Ed Sheeran',
-        url: 'https://open.spotify.com/track/0tgVpDi06FyKpA1z0VMD4v',
-        embedUrl: 'https://open.spotify.com/embed/track/0tgVpDi06FyKpA1z0VMD4v?utm_source=generator&theme=0',
-        teacherTipPt: 'Balada romântica com vocabulário de infância, amor e futuro.',
-        teacherTipEn: 'Acoustic ballad featuring narrative past tense and heartfelt diction.',
-      },
-      {
-        dayOfWeek: 'thursday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '7yq4QjY5Ag8pqpH8R1B5Tq',
-        title: 'Riptide',
-        artist: 'Vance Joy',
-        url: 'https://open.spotify.com/track/7yq4QjY5Ag8pqpH8R1B5Tq',
-        embedUrl: 'https://open.spotify.com/embed/track/7yq4QjY5Ag8pqpH8R1B5Tq?utm_source=generator&theme=0',
-        teacherTipPt: 'Folk pop alegre com frases curtas e ritmo contagiante.',
-        teacherTipEn: 'Upbeat folk pop with punchy, memorable lines and easy rhyming.',
-      },
-      {
-        dayOfWeek: 'friday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '1EzrEOo4wgjRsJuxVvEBR8',
-        title: "I'm Yours",
-        artist: 'Jason Mraz',
-        url: 'https://open.spotify.com/track/1EzrEOo4wgjRsJuxVvEBR8',
-        embedUrl: 'https://open.spotify.com/embed/track/1EzrEOo4wgjRsJuxVvEBR8?utm_source=generator&theme=0',
-        teacherTipPt: 'Jogo de palavras leve, phrasal verbs naturais e cadência descontraída.',
-        teacherTipEn: 'Playful acoustic rhythm, common idioms, and relaxed connected speech.',
-      },
-      {
-        dayOfWeek: 'saturday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '1BxfuPKGuaTgP7aM0XbdMe',
-        title: "Ain't No Sunshine",
-        artist: 'Bill Withers',
-        url: 'https://open.spotify.com/track/1BxfuPKGuaTgP7aM0XbdMe',
-        embedUrl: 'https://open.spotify.com/embed/track/1BxfuPKGuaTgP7aM0XbdMe?utm_source=generator&theme=0',
-        teacherTipPt: 'Soul atemporal com repetições fáceis para cantar junto.',
-        teacherTipEn: 'Timeless soul classic with simple, repetitive, high-impact phrasing.',
-      },
-      {
-        dayOfWeek: 'sunday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '4u7EnebtmKWzUH433cf5Qv',
-        title: 'Let It Be',
-        artist: 'The Beatles',
-        url: 'https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv',
-        embedUrl: 'https://open.spotify.com/embed/track/4u7EnebtmKWzUH433cf5Qv?utm_source=generator&theme=0',
-        teacherTipPt: 'Frases de sabedoria e acolhimento com pronúncia britânica cristalina.',
-        teacherTipEn: 'Wise, comforting verses with crystal-clear British enunciation.',
-      },
-    ],
-  },
-  intermediate: {
-    level: 'intermediate',
-    levelLabelPt: 'Intermediário',
-    levelLabelEn: 'Intermediate',
-    playlistId: '34E52K1dEJO5cZ7RPKlR4l',
-    playlistTitle: "Intermediate • It's simple",
-    playlistUrl: 'https://open.spotify.com/playlist/34E52K1dEJO5cZ7RPKlR4l',
-    embedPlaylistUrl: 'https://open.spotify.com/embed/playlist/34E52K1dEJO5cZ7RPKlR4l?utm_source=generator&theme=0',
-    descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Intermediários: sucessos contemporâneos com narrativa expressiva, idioms e cadência conversacional.",
-    descriptionEn: "Official It's simple playlist (Adm Itissimple) for Intermediates: contemporary hits with storytelling, everyday idioms, and conversational cadence.",
-    tracks: {
-      monday: {
-        dayOfWeek: 'monday',
-        dayLabelPt: 'Segunda-feira',
-        dayLabelEn: 'Monday',
-        trackId: '7qiZfU4dY1lWllzX7mPBI3',
-        title: 'Shape of You',
-        artist: 'Ed Sheeran',
-        url: 'https://open.spotify.com/track/7qiZfU4dY1lWllzX7mPBI3',
-        embedUrl: 'https://open.spotify.com/embed/track/7qiZfU4dY1lWllzX7mPBI3?utm_source=generator&theme=0',
-        teacherTipPt: 'Ritmo pop dinâmico. Repare nas contrações rápidas, connected speech ("come on now, follow my lead") e vocabulário de convivência.',
-        teacherTipEn: 'Upbeat pop cadence. Notice fast contractions, connected speech ("come on now, follow my lead"), and modern social vocabulary.',
-      },
-      tuesday: {
-        dayOfWeek: 'tuesday',
-        dayLabelPt: 'Terça-feira',
-        dayLabelEn: 'Tuesday',
-        trackId: '1zwMYTA5nlNjZxYrvBB2pV',
-        title: 'Someone Like You',
-        artist: 'Adele',
-        url: 'https://open.spotify.com/track/1zwMYTA5nlNjZxYrvBB2pV',
-        embedUrl: 'https://open.spotify.com/embed/track/1zwMYTA5nlNjZxYrvBB2pV?utm_source=generator&theme=0',
-        teacherTipPt: 'Interpretação emocionante com uso de pretérito perfeito e contrações ("Never mind, I\'ll find someone like you").',
-        teacherTipEn: 'Emotional delivery featuring conversational past expressions and idioms ("Never mind, I\'ll find someone like you").',
-      },
-      wednesday: {
-        dayOfWeek: 'wednesday',
-        dayLabelPt: 'Quarta-feira',
-        dayLabelEn: 'Wednesday',
-        trackId: '1c8gk2PeTE04A1pIDH9YMk',
-        title: 'Rolling in the Deep',
-        artist: 'Adele',
-        url: 'https://open.spotify.com/track/1c8gk2PeTE04A1pIDH9YMk',
-        embedUrl: 'https://open.spotify.com/embed/track/1c8gk2PeTE04A1pIDH9YMk?utm_source=generator&theme=0',
-        teacherTipPt: 'Expressões idiomáticas de intensidade ("rolling in the deep", "reach a fever pitch") e dicção poderosa.',
-        teacherTipEn: 'Intense idiomatic expressions ("rolling in the deep", "reach a fever pitch") with strong vocal diction.',
-      },
-      thursday: {
-        dayOfWeek: 'thursday',
-        dayLabelPt: 'Quinta-feira',
-        dayLabelEn: 'Thursday',
-        trackId: '73CMRj62VK8nUS4ezD2wvi',
-        title: 'Set Fire to the Rain',
-        artist: 'Adele',
-        url: 'https://open.spotify.com/track/73CMRj62VK8nUS4ezD2wvi',
-        embedUrl: 'https://open.spotify.com/embed/track/73CMRj62VK8nUS4ezD2wvi?utm_source=generator&theme=0',
-        teacherTipPt: 'Vocabulário metafórico e dramaticidade lírica. Ótimo para treinar a percepção auditiva de orações coordenadas.',
-        teacherTipEn: 'Metaphorical vocabulary and dramatic contrast. Excellent for listening to coordinate clause transitions.',
-      },
-      friday: {
-        dayOfWeek: 'friday',
-        dayLabelPt: 'Sexta-feira',
-        dayLabelEn: 'Friday',
-        trackId: '46IZ0fSY2mpAiktS3KOqds',
-        title: 'Easy On Me',
-        artist: 'Adele',
-        url: 'https://open.spotify.com/track/46IZ0fSY2mpAiktS3KOqds',
-        embedUrl: 'https://open.spotify.com/embed/track/46IZ0fSY2mpAiktS3KOqds?utm_source=generator&theme=0',
-        teacherTipPt: 'Frases de vulnerabilidade e reflexão pessoal ("Go easy on me, baby"). Foco na clareza vocal e ritmo desacelerado.',
-        teacherTipEn: 'Phrases of personal vulnerability and reflection ("Go easy on me, baby"). Focus on vocal clarity and deliberate pacing.',
-      },
-      saturday: {
-        dayOfWeek: 'saturday',
-        dayLabelPt: 'Sábado',
-        dayLabelEn: 'Saturday',
-        trackId: '01rRRl55mMq5gMnFvg8WYu',
-        title: 'Fix You',
-        artist: 'Coldplay',
-        url: 'https://open.spotify.com/track/01rRRl55mMq5gMnFvg8WYu',
-        embedUrl: 'https://open.spotify.com/embed/track/01rRRl55mMq5gMnFvg8WYu?utm_source=generator&theme=0',
-        teacherTipPt: 'Expressões idiomáticas de encorajamento e estruturas com "When you try your best, but you don\'t succeed".',
-        teacherTipEn: 'Supportive idioms and conditional structures ("When you try your best, but you don\'t succeed").',
-      },
-      sunday: {
-        dayOfWeek: 'sunday',
-        dayLabelPt: 'Domingo',
-        dayLabelEn: 'Sunday',
-        trackId: '75JFxkI2RXiU7L9VXzMkle',
-        title: 'The Scientist',
-        artist: 'Coldplay',
-        url: 'https://open.spotify.com/track/75JFxkI2RXiU7L9VXzMkle',
-        embedUrl: 'https://open.spotify.com/embed/track/75JFxkI2RXiU7L9VXzMkle?utm_source=generator&theme=0',
-        teacherTipPt: 'Balada ao piano com frases reflexivas sobre relacionamentos ("Nobody said it was easy", "Come up to meet you").',
-        teacherTipEn: 'Reflective piano ballad featuring conversational narrative idioms ("Nobody said it was easy", "Come up to meet you").',
-      },
-    },
-    pool: [
-      {
-        dayOfWeek: 'monday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '5Nm9ERj0sgw2AjSZE5DHNW',
-        title: 'Stay With Me',
-        artist: 'Sam Smith',
-        url: 'https://open.spotify.com/track/5Nm9ERj0sgw2AjSZE5DHNW',
-        embedUrl: 'https://open.spotify.com/embed/track/5Nm9ERj0sgw2AjSZE5DHNW?utm_source=generator&theme=0',
-        teacherTipPt: 'Voz expressiva com estruturas de diálogo sincero e connected speech.',
-        teacherTipEn: 'Expressive vocals with authentic emotional phrases and connected speech.',
-      },
-      {
-        dayOfWeek: 'tuesday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '34gCuhDGsG4bRPIf9bb02f',
-        title: 'Thinking Out Loud',
-        artist: 'Ed Sheeran',
-        url: 'https://open.spotify.com/track/34gCuhDGsG4bRPIf9bb02f',
-        embedUrl: 'https://open.spotify.com/embed/track/34gCuhDGsG4bRPIf9bb02f?utm_source=generator&theme=0',
-        teacherTipPt: 'Linguagem cotidiana sobre envelhecer e construir memórias.',
-        teacherTipEn: 'Warm conversational vocabulary about aging, love, and life memories.',
-      },
-      {
-        dayOfWeek: 'wednesday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '2VxeLyX666F8uXCJ0dZF8B',
-        title: 'Shallow',
-        artist: 'Lady Gaga & Bradley Cooper',
-        url: 'https://open.spotify.com/track/2VxeLyX666F8uXCJ0dZF8B',
-        embedUrl: 'https://open.spotify.com/embed/track/2VxeLyX666F8uXCJ0dZF8B?utm_source=generator&theme=0',
-        teacherTipPt: 'Diálogo poderoso entre duas vozes. Ótimo para perceber alternância de tom em inglês.',
-        teacherTipEn: 'Powerful two-voice dialogue with natural pitch shifts.',
-      },
-      {
-        dayOfWeek: 'thursday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '2tpWsVSb9UEmDRxAl1zhX1',
-        title: 'Counting Stars',
-        artist: 'OneRepublic',
-        url: 'https://open.spotify.com/track/2tpWsVSb9UEmDRxAl1zhX1',
-        embedUrl: 'https://open.spotify.com/embed/track/2tpWsVSb9UEmDRxAl1zhX1?utm_source=generator&theme=0',
-        teacherTipPt: 'Ritmo acelerado que desafia o reflexo auditivo intermediário com metáforas do cotidiano.',
-        teacherTipEn: 'Fast tempo that sharpens intermediate listening reflexes with everyday metaphors.',
-      },
-      {
-        dayOfWeek: 'friday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '32OlwWuMpZ6b0aN2RZOeMS',
-        title: 'Uptown Funk',
-        artist: 'Mark Ronson ft. Bruno Mars',
-        url: 'https://open.spotify.com/track/32OlwWuMpZ6b0aN2RZOeMS',
-        embedUrl: 'https://open.spotify.com/embed/track/32OlwWuMpZ6b0aN2RZOeMS?utm_source=generator&theme=0',
-        teacherTipPt: 'Groove animado com gírias urbanas e expressões de festa ("Too hot, hot damn").',
-        teacherTipEn: 'Energetic funk groove with urban slang and weekend party idioms.',
-      },
-      {
-        dayOfWeek: 'saturday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '7DSAEUvxU8FajXtRloy8M0',
-        title: 'Flowers',
-        artist: 'Miley Cyrus',
-        url: 'https://open.spotify.com/track/7DSAEUvxU8FajXtRloy8M0',
-        embedUrl: 'https://open.spotify.com/embed/track/7DSAEUvxU8FajXtRloy8M0?utm_source=generator&theme=0',
-        teacherTipPt: 'Vocabulário de autonomia e rotina diária ("I can buy myself flowers").',
-        teacherTipEn: 'Autonomy and self-care vocabulary with reflexive verbs.',
-      },
-      {
-        dayOfWeek: 'sunday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '0pqnGHJpmpxLKLy7a2WBxo',
-        title: 'Believer',
-        artist: 'Imagine Dragons',
-        url: 'https://open.spotify.com/track/0pqnGHJpmpxLKLy7a2WBxo',
-        embedUrl: 'https://open.spotify.com/embed/track/0pqnGHJpmpxLKLy7a2WBxo?utm_source=generator&theme=0',
-        teacherTipPt: 'Ritmo enérgico com palavras fortes sobre resiliência e dor superada.',
-        teacherTipEn: 'High-energy rhythmic delivery focusing on resilience and personal growth.',
-      },
-    ],
-  },
-  advanced: {
-    level: 'advanced',
-    levelLabelPt: 'Avançado',
-    levelLabelEn: 'Advanced',
-    playlistId: '2bMnxz06NIK6dHeG9lwyUF',
-    playlistTitle: "Advanced • It's simple",
-    playlistUrl: 'https://open.spotify.com/playlist/2bMnxz06NIK6dHeG9lwyUF',
-    embedPlaylistUrl: 'https://open.spotify.com/embed/playlist/2bMnxz06NIK6dHeG9lwyUF?utm_source=generator&theme=0',
-    descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Alunos Avançados: faixas complexas com vocabulário culto, velocidade de rap, connected speech e estruturas desafiadoras.",
-    descriptionEn: "Official It's simple playlist (Adm Itissimple) for Advanced Students: complex masterpieces, rapid delivery, connected speech, and sophisticated narrative.",
-    tracks: {
-      monday: {
-        dayOfWeek: 'monday',
-        dayLabelPt: 'Segunda-feira',
-        dayLabelEn: 'Monday',
-        trackId: '2JiDi0qAXsPwhPqA2qaKGt',
-        title: 'Bohemian Rhapsody',
-        artist: 'Queen',
-        url: 'https://open.spotify.com/track/2JiDi0qAXsPwhPqA2qaKGt',
-        embedUrl: 'https://open.spotify.com/embed/track/2JiDi0qAXsPwhPqA2qaKGt?utm_source=generator&theme=0',
-        teacherTipPt: 'Obra-prima com variações dramáticas de tom, vocabulário operístico e narrativa complexa em língua inglesa.',
-        teacherTipEn: 'Operatic rock masterpiece featuring theatrical mood shifts, advanced imagery, and dramatic speech rhythms.',
-      },
-      tuesday: {
-        dayOfWeek: 'tuesday',
-        dayLabelPt: 'Terça-feira',
-        dayLabelEn: 'Tuesday',
-        trackId: '40riOy7x9W7GXjyGp4pjAv',
-        title: 'Hotel California',
-        artist: 'Eagles',
-        url: 'https://open.spotify.com/track/40riOy7x9W7GXjyGp4pjAv',
-        embedUrl: 'https://open.spotify.com/embed/track/40riOy7x9W7GXjyGp4pjAv?utm_source=generator&theme=0',
-        teacherTipPt: 'Metáforas profundas da cultura americana, adjetivos descritivos ricos e connected speech em ritmo clássico.',
-        teacherTipEn: 'Rich American cultural allegories, vivid descriptive adjectives, and smooth connected speech.',
-      },
-      wednesday: {
-        dayOfWeek: 'wednesday',
-        dayLabelPt: 'Quarta-feira',
-        dayLabelEn: 'Wednesday',
-        trackId: '2M9ro2krNb7nr7HSprkEgo',
-        title: 'Fast Car',
-        artist: 'Tracy Chapman',
-        url: 'https://open.spotify.com/track/2M9ro2krNb7nr7HSprkEgo',
-        embedUrl: 'https://open.spotify.com/embed/track/2M9ro2krNb7nr7HSprkEgo?utm_source=generator&theme=0',
-        teacherTipPt: 'História em versos contínuos, com transição de tempos verbais e dilemas sociais retratados com delicadeza lírica.',
-        teacherTipEn: 'Subtle lyrical storytelling with fluid shifts between past, present aspirations, and real-life dilemmas.',
-      },
-      thursday: {
-        dayOfWeek: 'thursday',
-        dayLabelPt: 'Quinta-feira',
-        dayLabelEn: 'Thursday',
-        trackId: '2vTPnVToPdKP4W1irOlhz5',
-        title: 'Hallelujah (Live)',
-        artist: 'Bon Jovi',
-        url: 'https://open.spotify.com/track/2vTPnVToPdKP4W1irOlhz5',
-        embedUrl: 'https://open.spotify.com/embed/track/2vTPnVToPdKP4W1irOlhz5?utm_source=generator&theme=0',
-        teacherTipPt: 'Letra poética com referências literárias e metáforas ricas, exigindo percepção apurada de subtexto e entonação.',
-        teacherTipEn: 'Poetic verses filled with literary metaphors requiring nuanced perception of subtext and emotional cadence.',
-      },
-      friday: {
-        dayOfWeek: 'friday',
-        dayLabelPt: 'Sexta-feira',
-        dayLabelEn: 'Friday',
-        trackId: '0VjIjW4GlUZAMYd2vXMi3b',
-        title: 'Blinding Lights',
-        artist: 'The Weeknd',
-        url: 'https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b',
-        embedUrl: 'https://open.spotify.com/embed/track/0VjIjW4GlUZAMYd2vXMi3b?utm_source=generator&theme=0',
-        teacherTipPt: 'Synthwave acelerado com cadência verbal contemporânea, phrasal verbs rápidos e linguagem urbana moderna.',
-        teacherTipEn: 'High-speed modern synthwave featuring fast conversational reductions and urban pop expressions.',
-      },
-      saturday: {
-        dayOfWeek: 'saturday',
-        dayLabelPt: 'Sábado',
-        dayLabelEn: 'Saturday',
-        trackId: '1mea3bSkSGXuIRvnydlB5b',
-        title: 'Viva La Vida',
-        artist: 'Coldplay',
-        url: 'https://open.spotify.com/track/1mea3bSkSGXuIRvnydlB5b',
-        embedUrl: 'https://open.spotify.com/embed/track/1mea3bSkSGXuIRvnydlB5b?utm_source=generator&theme=0',
-        teacherTipPt: 'Narrativa em primeira pessoa com vocabulário erudito sobre história, poder e reflexão existencial.',
-        teacherTipEn: 'First-person retrospective with sophisticated historical vocabulary, inverted phrases, and existential themes.',
-      },
-      sunday: {
-        dayOfWeek: 'sunday',
-        dayLabelPt: 'Domingo',
-        dayLabelEn: 'Sunday',
-        trackId: '5Z01UMMf7V1o0MzF86s6WJ',
-        title: 'Lose Yourself',
-        artist: 'Eminem',
-        url: 'https://open.spotify.com/track/5Z01UMMf7V1o0MzF86s6WJ',
-        embedUrl: 'https://open.spotify.com/embed/track/5Z01UMMf7V1o0MzF86s6WJ?utm_source=generator&theme=0',
-        teacherTipPt: 'O desafio definitivo de listening avançado: rimas multissilábicas, velocidade extrema e expressões coloquiais autênticas.',
-        teacherTipEn: 'The ultimate advanced listening workout: rapid multisyllabic rhyming, connected slang, and raw conversational tempo.',
-      },
-    },
-    pool: [
-      {
-        dayOfWeek: 'monday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '3H7Ez7rddHnO6f4a3v07vA',
-        title: 'HUMBLE.',
-        artist: 'Kendrick Lamar',
-        url: 'https://open.spotify.com/track/3H7Ez7rddHnO6f4a3v07vA',
-        embedUrl: 'https://open.spotify.com/embed/track/3H7Ez7rddHnO6f4a3v07vA?utm_source=generator&theme=0',
-        teacherTipPt: 'Fluxo rápido com figuras de linguagem e comentário sociocultural afiado.',
-        teacherTipEn: 'Complex rhythmic articulation, cultural references, and high-velocity speech.',
-      },
-      {
-        dayOfWeek: 'tuesday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '4yugZvBYaoREkJKirIR8qq',
-        title: 'Empire State of Mind',
-        artist: 'JAY-Z, Alicia Keys',
-        url: 'https://open.spotify.com/track/4yugZvBYaoREkJKirIR8qq',
-        embedUrl: 'https://open.spotify.com/embed/track/4yugZvBYaoREkJKirIR8qq?utm_source=generator&theme=0',
-        teacherTipPt: 'Sotaque nova-iorquino autêntico, gírias urbanas e contrastes líricos.',
-        teacherTipEn: 'Authentic NYC vernacular, rapid rhymes, and celebratory anthemic cadence.',
-      },
-      {
-        dayOfWeek: 'wednesday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '0U0x4q6NaL6081VvH8c4mY',
-        title: 'Starboy',
-        artist: 'The Weeknd, Daft Punk',
-        url: 'https://open.spotify.com/track/0U0x4q6NaL6081VvH8c4mY',
-        embedUrl: 'https://open.spotify.com/embed/track/0U0x4q6NaL6081VvH8c4mY?utm_source=generator&theme=0',
-        teacherTipPt: 'Produção contemporânea com metáforas veladas e vocabulário de alta rotação.',
-        teacherTipEn: 'Contemporary electronic pop with layered metaphors and fluent speed.',
-      },
-      {
-        dayOfWeek: 'thursday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '2d8q3dZ14W170R0x5s01r9',
-        title: 'Godzilla',
-        artist: 'Eminem, Juice WRLD',
-        url: 'https://open.spotify.com/track/2d8q3dZ14W170R0x5s01r9',
-        embedUrl: 'https://open.spotify.com/embed/track/2d8q3dZ14W170R0x5s01r9?utm_source=generator&theme=0',
-        teacherTipPt: 'Velocidade extrema de sílabas por segundo: o teste supremo de compreensão fonética.',
-        teacherTipEn: 'Record-breaking syllable velocity: supreme test of phonetic pattern recognition.',
-      },
-      {
-        dayOfWeek: 'friday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '1zB4vmk8tFRJfSAgQUE7dr',
-        title: 'All of the Lights',
-        artist: 'Kanye West, Rihanna',
-        url: 'https://open.spotify.com/track/1zB4vmk8tFRJfSAgQUE7dr',
-        embedUrl: 'https://open.spotify.com/embed/track/1zB4vmk8tFRJfSAgQUE7dr?utm_source=generator&theme=0',
-        teacherTipPt: 'Múltiplas vozes intercaladas, elisões rápidas e narrativa cinematográfica.',
-        teacherTipEn: 'Interleaved vocal tracks with fast phonetic elisions and cinematic storytelling.',
-      },
-      {
-        dayOfWeek: 'saturday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '696DnlkuDOXcMbpE9MT1Gh',
-        title: 'ROXANNE',
-        artist: 'Arizona Zervas',
-        url: 'https://open.spotify.com/track/696DnlkuDOXcMbpE9MT1Gh',
-        embedUrl: 'https://open.spotify.com/embed/track/696DnlkuDOXcMbpE9MT1Gh?utm_source=generator&theme=0',
-        teacherTipPt: 'Gírias das redes sociais, redução fonética e ritmo de conversação moderna.',
-        teacherTipEn: 'Social media vernacular, connected reduction, and modern conversational tempo.',
-      },
-      {
-        dayOfWeek: 'sunday',
-        dayLabelPt: 'Faixa do Ciclo',
-        dayLabelEn: 'Cycle Track',
-        trackId: '7BKLCr3n6tQ2z1W5G4u7J9',
-        title: 'Blinding Lights',
-        artist: 'The Weeknd',
-        url: 'https://open.spotify.com/track/7BKLCr3n6tQ2z1W5G4u7J9',
-        embedUrl: 'https://open.spotify.com/embed/track/7BKLCr3n6tQ2z1W5G4u7J9?utm_source=generator&theme=0',
-        teacherTipPt: 'Synthwave acelerado com expressões de urgência e estados emocionais intensos.',
-        teacherTipEn: 'High-tempo synthwave featuring emotional urgency and natural vocal phrasing.',
-      },
-    ],
-  },
+export const SPOTIFY_IT_IS_SIMPLE_TOKEN = SPOTIFY_BEARER_TOKEN;
+
+export const DAY_LABELS: Record<DayOfWeek, { pt: string; en: string }> = {
+  monday: { pt: 'Segunda-feira', en: 'Monday' },
+  tuesday: { pt: 'Terça-feira', en: 'Tuesday' },
+  wednesday: { pt: 'Quarta-feira', en: 'Wednesday' },
+  thursday: { pt: 'Quinta-feira', en: 'Thursday' },
+  friday: { pt: 'Sexta-feira', en: 'Friday' },
+  saturday: { pt: 'Sábado', en: 'Saturday' },
+  sunday: { pt: 'Domingo', en: 'Sunday' },
 };
 
 /**
- * Alias for level-based playlists mapping
+ * Official Spotify Playlist IDs by level:
+ * - Beginner: 5MMU9H5oXDd7FCWr0gkzHE
+ * - Intermediate: 34E52K1dEJO5CzZRPkIR4I
+ * - Advanced: 6ScLXNefp8JFohezoJve2Z
  */
+export const SPOTIFY_PLAYLIST_IDS: Record<NormalizedStudentLevel, string> = {
+  beginner: '5MMU9H5oXDd7FCWr0gkzHE',
+  intermediate: '34E52K1dEJO5CzZRPkIR4I',
+  advanced: '6ScLXNefp8JFohezoJve2Z',
+};
+
+/**
+ * Creates a clean official playlist default entry for a day of week
+ * No mock/hardcoded tracks are used.
+ */
+export function createDefaultTrackForDay(
+  level: NormalizedStudentLevel,
+  dayOfWeek: DayOfWeek
+): SpotifyDailyTrack {
+  const playlistId = SPOTIFY_PLAYLIST_IDS[level] || SPOTIFY_PLAYLIST_IDS.beginner;
+  const label = DAY_LABELS[dayOfWeek] || { pt: 'Dia', en: 'Day' };
+  const levelTitle =
+    level === 'advanced'
+      ? "Advanced • It's simple"
+      : level === 'intermediate'
+      ? "Intermediate • It's simple"
+      : "Beginner • It's simple";
+
+  return {
+    dayOfWeek,
+    dayLabelPt: label.pt,
+    dayLabelEn: label.en,
+    trackId: playlistId,
+    title: levelTitle,
+    artist: "It's simple (Adm Itissimple)",
+    url: `https://open.spotify.com/playlist/${playlistId}`,
+    embedUrl: `https://open.spotify.com/embed/playlist/${playlistId}?utm_source=generator&theme=0`,
+    imageUrl: undefined,
+    albumImages: [],
+    teacherTipPt: "Ouça a playlist oficial da It's simple no Spotify para praticar sua compreensão auditiva diária.",
+    teacherTipEn: "Listen to the official It's simple Spotify playlist to practice your daily listening comprehension.",
+  };
+}
+
+export const createLevelTracksMap = (level: NormalizedStudentLevel): Record<DayOfWeek, SpotifyDailyTrack> => {
+  const map = {} as Record<DayOfWeek, SpotifyDailyTrack>;
+  DAYS_SEQUENCE.forEach((day) => {
+    map[day] = createDefaultTrackForDay(level, day);
+  });
+  return map;
+};
+
+export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLevelPlaylistConfig> = {
+  beginner: {
+    level: "beginner",
+    levelLabelPt: "Iniciante",
+    levelLabelEn: "Beginner",
+    playlistId: "5MMU9H5oXDd7FCWr0gkzHE",
+    playlistTitle: "Beginner • It's simple",
+    playlistUrl: "https://open.spotify.com/playlist/5MMU9H5oXDd7FCWr0gkzHE",
+    embedPlaylistUrl: "https://open.spotify.com/embed/playlist/5MMU9H5oXDd7FCWr0gkzHE?utm_source=generator&theme=0",
+    descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Iniciantes: músicas com dicção clara, frases fundamentais e ritmo acolhedor.",
+    descriptionEn: "Official It's simple playlist (Adm Itissimple) for Beginners: songs featuring clear diction, foundational phrasing, and accessible rhythm.",
+    tracks: createLevelTracksMap("beginner"),
+    pool: [],
+  },
+  intermediate: {
+    level: "intermediate",
+    levelLabelPt: "Intermediário",
+    levelLabelEn: "Intermediate",
+    playlistId: "34E52K1dEJO5CzZRPkIR4I",
+    playlistTitle: "Intermediate • It's simple",
+    playlistUrl: "https://open.spotify.com/playlist/34E52K1dEJO5CzZRPkIR4I",
+    embedPlaylistUrl: "https://open.spotify.com/embed/playlist/34E52K1dEJO5CzZRPkIR4I?utm_source=generator&theme=0",
+    descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Intermediários: vocabulário do cotidiano, expressões idiomáticas e estruturas gramaticais variadas.",
+    descriptionEn: "Official It's simple playlist (Adm Itissimple) for Intermediates: everyday vocabulary, idiomatic expressions, and diverse sentence structures.",
+    tracks: createLevelTracksMap("intermediate"),
+    pool: [],
+  },
+  advanced: {
+    level: "advanced",
+    levelLabelPt: "Avançado",
+    levelLabelEn: "Advanced",
+    playlistId: "6ScLXNefp8JFohezoJve2Z",
+    playlistTitle: "Advanced • It's simple",
+    playlistUrl: "https://open.spotify.com/playlist/6ScLXNefp8JFohezoJve2Z",
+    embedPlaylistUrl: "https://open.spotify.com/embed/playlist/6ScLXNefp8JFohezoJve2Z?utm_source=generator&theme=0",
+    descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Alunos Avançados: ritmo rápido, metáforas culturais, linguagem coloquial e rimas complexas.",
+    descriptionEn: "Official It's simple playlist (Adm Itissimple) for Advanced Students: fast cadence, cultural metaphors, colloquial speech, and intricate phrasing.",
+    tracks: createLevelTracksMap("advanced"),
+    pool: [],
+  },
+};
+
 export const SPOTIFY_PLAYLISTS = SPOTIFY_LEVEL_PLAYLISTS;
 
-export const SPOTIFY_CACHE_KEY_PREFIX = 'its_simple_spotify_playlist_v3_';
+export const SPOTIFY_CACHE_KEY_PREFIX = 'its_simple_spotify_playlist_v4_';
 export const SPOTIFY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export interface SpotifyPlaylistCacheEntry {
@@ -621,12 +179,15 @@ export interface SpotifyPlaylistCacheEntry {
 
 /**
  * Checks all levels in localStorage and purges entries whose playlistId no longer matches
- * the active configuration (such as Intermediate having been updated to 34E52K1dEJO5cZ7RPKlR4l).
+ * the active configuration.
  */
 export function checkAndInvalidateSpotifyCache(): void {
   if (typeof window === 'undefined' || !window.localStorage) return;
   (['beginner', 'intermediate', 'advanced'] as NormalizedStudentLevel[]).forEach((lvl) => {
     try {
+      // Purge old v3 cache if present
+      localStorage.removeItem(`its_simple_spotify_playlist_v3_${lvl}`);
+
       const raw = localStorage.getItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
       if (raw) {
         const parsed: SpotifyPlaylistCacheEntry = JSON.parse(raw);
@@ -729,7 +290,7 @@ if (typeof window !== 'undefined') {
 /**
  * Triggers the dynamic Spotify API request to search/fetch tracks for a playlist:
  * Endpoint: https://api.spotify.com/v1/playlists/${playlistId}/tracks
- * For Intermediate: https://api.spotify.com/v1/playlists/34E52K1dEJO5cZ7RPKlR4l/tracks
+ * For Intermediate: https://api.spotify.com/v1/playlists/34E52K1dEJO5CzZRPkIR4I/tracks
  */
 export async function fetchPlaylistTracksFromSpotifyApi(
   playlistId: string,
@@ -756,7 +317,7 @@ export async function fetchPlaylistTracksFromSpotifyApi(
 }
 
 /**
- * Triggers dynamic track fetching for student's level (especially Intermediate -> 34E52K1dEJO5cZ7RPKlR4l).
+ * Triggers dynamic track fetching for student's level (Intermediate -> 34E52K1dEJO5CzZRPkIR4I, etc.).
  * Checks and invalidates local cache if playlistId differs, then requests tracks from Spotify API.
  */
 export async function fetchTracksForStudentLevel(
@@ -774,7 +335,7 @@ export async function fetchTracksForStudentLevel(
   }
 
   // 2. Trigger dynamic request: https://api.spotify.com/v1/playlists/${config.playlistId}/tracks
-  // When norm === 'intermediate', this explicitly calls https://api.spotify.com/v1/playlists/34E52K1dEJO5cZ7RPKlR4l/tracks
+  // When norm === 'intermediate', this explicitly calls https://api.spotify.com/v1/playlists/34E52K1dEJO5CzZRPkIR4I/tracks
   const data = await fetchPlaylistTracksFromSpotifyApi(config.playlistId, token);
   if (data && Array.isArray(data.items) && data.items.length > 0) {
     const mappedTracks: SpotifyDailyTrack[] = data.items
@@ -783,21 +344,34 @@ export async function fetchTracksForStudentLevel(
         const t = item.track;
         const day = DAYS_SEQUENCE[idx % 7];
         const artistNames = t.artists?.map((a: any) => a.name).join(', ') || 'Adm Itissimple';
+        const albumImages = t.album?.images || [];
+        const imageUrl = albumImages[0]?.url || albumImages[1]?.url || undefined;
         return {
           dayOfWeek: day,
-          dayLabelPt: config.tracks[day]?.dayLabelPt || day,
-          dayLabelEn: config.tracks[day]?.dayLabelEn || day,
+          dayLabelPt: config.tracks[day]?.dayLabelPt || DAY_LABELS[day]?.pt || day,
+          dayLabelEn: config.tracks[day]?.dayLabelEn || DAY_LABELS[day]?.en || day,
           trackId: t.id,
           title: t.name,
           artist: artistNames,
           url: t.external_urls?.spotify || `https://open.spotify.com/track/${t.id}`,
           embedUrl: `https://open.spotify.com/embed/track/${t.id}?utm_source=generator&theme=0`,
+          imageUrl,
+          albumImages,
           teacherTipPt: `Prática auditiva com "${t.name}" (${artistNames}). Preste atenção na pronúncia, ritmo e vocabulário.`,
           teacherTipEn: `Active listening practice with "${t.name}" (${artistNames}). Focus on rhythm, pronunciation, and vocabulary.`,
         };
       });
 
     if (mappedTracks.length > 0) {
+      // Synchronize in-memory config for immediate access
+      DAYS_SEQUENCE.forEach((d, idx) => {
+        if (mappedTracks[idx]) {
+          config.tracks[d] = mappedTracks[idx];
+        }
+      });
+      if (mappedTracks.length > 7) {
+        config.pool = mappedTracks.slice(7);
+      }
       setCachedPlaylistTracks(norm, config.playlistId, mappedTracks);
       return mappedTracks;
     }
