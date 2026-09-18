@@ -49,6 +49,8 @@ import {
   getDailySpotifyTrackForStudent,
   DAYS_SEQUENCE,
   isValidSpotifyUrl,
+  checkAndInvalidateSpotifyCache,
+  fetchTracksForStudentLevel,
 } from '../utils/spotify';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
@@ -389,6 +391,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const levelPlaylistConfig = getSpotifyPlaylistForLevel(normalizedLevel);
   const dailySpotifyTrack = getDailySpotifyTrackForStudent(normalizedLevel, selectedDay);
   const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
+
+  // Dynamic Spotify track fetch and cache validation when student level is active
+  useEffect(() => {
+    checkAndInvalidateSpotifyCache();
+    // Triggers https://api.spotify.com/v1/playlists/34E52K1dEJO5cZ7RPKlR4l/tracks when student level is Intermediate
+    fetchTracksForStudentLevel(normalizedLevel).catch(() => {});
+  }, [normalizedLevel]);
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
 

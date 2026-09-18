@@ -48,7 +48,7 @@ export const DAYS_SEQUENCE: DayOfWeek[] = [
 /**
  * Curated, verified Spotify playlists and sequential daily tracks from It's simple official account (Adm Itissimple).
  * - Beginner: https://open.spotify.com/playlist/01gS0x1KOwrDp7pJq2dPCM
- * - Intermediate: https://open.spotify.com/playlist/1PdOI8azTqiywT5FWfimQM
+ * - Intermediate: https://open.spotify.com/playlist/34E52K1dEJO5cZ7RPKlR4l
  * - Advanced: https://open.spotify.com/playlist/2bMnxz06NIK6dHeG9lwyUF
  */
 export const SPOTIFY_IT_IS_SIMPLE_TOKEN = '';
@@ -241,10 +241,10 @@ export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLeve
     level: 'intermediate',
     levelLabelPt: 'Intermediário',
     levelLabelEn: 'Intermediate',
-    playlistId: '1PdOI8azTqiywT5FWfimQM',
+    playlistId: '34E52K1dEJO5cZ7RPKlR4l',
     playlistTitle: "Intermediate • It's simple",
-    playlistUrl: 'https://open.spotify.com/playlist/1PdOI8azTqiywT5FWfimQM',
-    embedPlaylistUrl: 'https://open.spotify.com/embed/playlist/1PdOI8azTqiywT5FWfimQM?utm_source=generator&theme=0',
+    playlistUrl: 'https://open.spotify.com/playlist/34E52K1dEJO5cZ7RPKlR4l',
+    embedPlaylistUrl: 'https://open.spotify.com/embed/playlist/34E52K1dEJO5cZ7RPKlR4l?utm_source=generator&theme=0',
     descriptionPt: "Playlist oficial da It's simple (Adm Itissimple) para Intermediários: sucessos contemporâneos com narrativa expressiva, idioms e cadência conversacional.",
     descriptionEn: "Official It's simple playlist (Adm Itissimple) for Intermediates: contemporary hits with storytelling, everyday idioms, and conversational cadence.",
     tracks: {
@@ -604,6 +604,207 @@ export const SPOTIFY_LEVEL_PLAYLISTS: Record<NormalizedStudentLevel, SpotifyLeve
     ],
   },
 };
+
+/**
+ * Alias for level-based playlists mapping
+ */
+export const SPOTIFY_PLAYLISTS = SPOTIFY_LEVEL_PLAYLISTS;
+
+export const SPOTIFY_CACHE_KEY_PREFIX = 'its_simple_spotify_playlist_';
+export const SPOTIFY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export interface SpotifyPlaylistCacheEntry {
+  playlistId: string;
+  tracks: SpotifyDailyTrack[];
+  timestamp: number;
+}
+
+/**
+ * Checks all levels in localStorage and purges entries whose playlistId no longer matches
+ * the active configuration (such as Intermediate having been updated to 34E52K1dEJO5cZ7RPKlR4l).
+ */
+export function checkAndInvalidateSpotifyCache(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  (['beginner', 'intermediate', 'advanced'] as NormalizedStudentLevel[]).forEach((lvl) => {
+    try {
+      const raw = localStorage.getItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
+      if (raw) {
+        const parsed: SpotifyPlaylistCacheEntry = JSON.parse(raw);
+        if (parsed.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[lvl].playlistId) {
+          console.info(
+            `[Spotify Cache] Invalidação automática para "${lvl}": removendo cache da playlist antiga "${parsed.playlistId}". Nova playlist: "${SPOTIFY_LEVEL_PLAYLISTS[lvl].playlistId}".`
+          );
+          localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
+        }
+      }
+    } catch {
+      localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
+    }
+  });
+}
+
+/**
+ * Retrieves cached playlist tracks from localStorage with strict playlistId validation.
+ * If the playlist ID stored in cache does not match the current level's playlist ID (e.g. updated Intermediate playlist),
+ * the cache is automatically invalidated, cleared from persistent storage, and null is returned to force fresh consumption.
+ */
+export function getCachedPlaylistTracks(rawLevel?: string | EnglishLevel | null): SpotifyDailyTrack[] | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
+  const norm = normalizeStudentLevel(rawLevel);
+  const currentConfig = SPOTIFY_LEVEL_PLAYLISTS[norm];
+  if (!currentConfig) return null;
+
+  try {
+    const raw = localStorage.getItem(`${SPOTIFY_CACHE_KEY_PREFIX}${norm}`);
+    if (!raw) return null;
+    const parsed: SpotifyPlaylistCacheEntry = JSON.parse(raw);
+
+    // Strict validation: Invalidate cache when playlist ID changed
+    if (parsed.playlistId !== currentConfig.playlistId) {
+      console.info(
+        `[Spotify Cache] Invalidação detectada no nível "${norm}": ID armazenado ("${parsed.playlistId}") diferente do atual ("${currentConfig.playlistId}"). Limpando cache.`
+      );
+      invalidateSpotifyPlaylistCache(norm);
+      return null;
+    }
+
+    if (Date.now() - parsed.timestamp > SPOTIFY_CACHE_TTL_MS) {
+      invalidateSpotifyPlaylistCache(norm);
+      return null;
+    }
+
+    return parsed.tracks;
+  } catch (e) {
+    invalidateSpotifyPlaylistCache(norm);
+    return null;
+  }
+}
+
+/**
+ * Saves tracks in localStorage cache alongside the playlistId for future invalidation checks.
+ */
+export function setCachedPlaylistTracks(
+  rawLevel: string | EnglishLevel | null | undefined,
+  playlistId: string,
+  tracks: SpotifyDailyTrack[]
+): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const norm = normalizeStudentLevel(rawLevel);
+  try {
+    const entry: SpotifyPlaylistCacheEntry = {
+      playlistId,
+      tracks,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(`${SPOTIFY_CACHE_KEY_PREFIX}${norm}`, JSON.stringify(entry));
+  } catch (e) {
+    console.warn('[Spotify Cache] Erro ao salvar cache de faixas:', e);
+  }
+}
+
+/**
+ * Explicitly clears/invalidates the Spotify playlist cache for a specific level or all levels.
+ */
+export function invalidateSpotifyPlaylistCache(level?: NormalizedStudentLevel | string): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    if (level) {
+      const norm = normalizeStudentLevel(level);
+      localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${norm}`);
+    } else {
+      (['beginner', 'intermediate', 'advanced'] as NormalizedStudentLevel[]).forEach((lvl) => {
+        localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
+      });
+    }
+  } catch (e) {
+    console.warn('[Spotify Cache] Erro ao invalidar cache:', e);
+  }
+}
+
+// Automatically purge outdated cache on module initialization in browser environment
+if (typeof window !== 'undefined') {
+  checkAndInvalidateSpotifyCache();
+}
+
+/**
+ * Triggers the dynamic Spotify API request to search/fetch tracks for a playlist:
+ * Endpoint: https://api.spotify.com/v1/playlists/${playlistId}/tracks
+ * For Intermediate: https://api.spotify.com/v1/playlists/34E52K1dEJO5cZ7RPKlR4l/tracks
+ */
+export async function fetchPlaylistTracksFromSpotifyApi(
+  playlistId: string,
+  token: string = SPOTIFY_IT_IS_SIMPLE_TOKEN
+): Promise<any> {
+  const url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks`;
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      console.warn(`[Spotify API] Requisição para ${url} retornou status [${res.status}]`);
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    console.warn(`[Spotify API] Erro ao buscar faixas em ${url}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Triggers dynamic track fetching for student's level (especially Intermediate -> 34E52K1dEJO5cZ7RPKlR4l).
+ * Checks and invalidates local cache if playlistId differs, then requests tracks from Spotify API.
+ */
+export async function fetchTracksForStudentLevel(
+  rawLevel?: string | EnglishLevel | null,
+  token: string = SPOTIFY_IT_IS_SIMPLE_TOKEN
+): Promise<SpotifyDailyTrack[] | null> {
+  const norm = normalizeStudentLevel(rawLevel);
+  const config = SPOTIFY_LEVEL_PLAYLISTS[norm];
+  if (!config) return null;
+
+  // 1. Verify and retrieve from valid cache (automatically invalidates if playlistId differs)
+  const cached = getCachedPlaylistTracks(norm);
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+
+  // 2. Trigger dynamic request: https://api.spotify.com/v1/playlists/${config.playlistId}/tracks
+  // When norm === 'intermediate', this explicitly calls https://api.spotify.com/v1/playlists/34E52K1dEJO5cZ7RPKlR4l/tracks
+  const data = await fetchPlaylistTracksFromSpotifyApi(config.playlistId, token);
+  if (data && Array.isArray(data.items) && data.items.length > 0) {
+    const mappedTracks: SpotifyDailyTrack[] = data.items
+      .filter((item: any) => item && item.track && item.track.id)
+      .map((item: any, idx: number) => {
+        const t = item.track;
+        const day = DAYS_SEQUENCE[idx % 7];
+        const artistNames = t.artists?.map((a: any) => a.name).join(', ') || 'Adm Itissimple';
+        return {
+          dayOfWeek: day,
+          dayLabelPt: config.tracks[day]?.dayLabelPt || day,
+          dayLabelEn: config.tracks[day]?.dayLabelEn || day,
+          trackId: t.id,
+          title: t.name,
+          artist: artistNames,
+          url: t.external_urls?.spotify || `https://open.spotify.com/track/${t.id}`,
+          embedUrl: `https://open.spotify.com/embed/track/${t.id}?utm_source=generator&theme=0`,
+          teacherTipPt: `Prática auditiva com "${t.name}" (${artistNames}). Preste atenção na pronúncia, ritmo e vocabulário.`,
+          teacherTipEn: `Active listening practice with "${t.name}" (${artistNames}). Focus on rhythm, pronunciation, and vocabulary.`,
+        };
+      });
+
+    if (mappedTracks.length > 0) {
+      setCachedPlaylistTracks(norm, config.playlistId, mappedTracks);
+      return mappedTracks;
+    }
+  }
+
+  return null;
+}
 
 /**
  * Spotify Web API integration helper using Spotify Authorization Bearer Token

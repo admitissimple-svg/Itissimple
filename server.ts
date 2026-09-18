@@ -5292,19 +5292,26 @@ async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
   const token = process.env.SPOTIFY_TOKEN;
   const db = readDb();
 
+  // Invalidate cached intermediate playlist if it still references an old playlistId
+  if (db.spotifyPlaylists?.intermediate?.playlistId && db.spotifyPlaylists.intermediate.playlistId !== '34E52K1dEJO5cZ7RPKlR4l') {
+    delete db.spotifyPlaylists.intermediate;
+    writeDb(db);
+    lastSpotifySyncTime = 0;
+  }
+
   if (!token) {
     return db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
   }
 
   if (!force && lastSpotifySyncTime && Date.now() - lastSpotifySyncTime < SPOTIFY_CACHE_TTL_MS) {
-    if (db.spotifyPlaylists) {
+    if (db.spotifyPlaylists && db.spotifyPlaylists.intermediate?.playlistId === '34E52K1dEJO5cZ7RPKlR4l') {
       return db.spotifyPlaylists;
     }
   }
 
   const playlistMap: Record<string, { level: 'beginner' | 'intermediate' | 'advanced'; title: string }> = {
     '01gS0x1KOwrDp7pJq2dPCM': { level: 'beginner', title: "Beginner • It's simple" },
-    '1PdOI8azTqiywT5FWfimQM': { level: 'intermediate', title: "Intermediate • It's simple" },
+    '34E52K1dEJO5cZ7RPKlR4l': { level: 'intermediate', title: "Intermediate • It's simple" },
     '2bMnxz06NIK6dHeG9lwyUF': { level: 'advanced', title: "Advanced • It's simple" },
   };
 
@@ -5314,7 +5321,7 @@ async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
     );
 
     for (const [playlistId, meta] of Object.entries(playlistMap)) {
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=50`, {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
