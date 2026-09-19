@@ -46,6 +46,7 @@ import {
 } from '../utils/spotify';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { defaultRoutinesByDay } from '../data/defaultRoutines';
+import { TeacherSpotifyRoutineTracker } from './TeacherSpotifyRoutineTracker';
 
 interface TeacherMediaAssignmentPanelProps {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
@@ -1411,6 +1412,19 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             )}
           </div>
         </div>
+      )}
+
+      {/* Real-time Spotify Song of the Day Synchronized Tracker (Firestore onSnapshot) */}
+      {(activeStudentUid || activeStudentEmail) && (
+        <TeacherSpotifyRoutineTracker
+          studentUid={activeStudentUid || activeStudentEmail}
+          studentEmail={activeStudentEmail}
+          studentName={activeStudentName}
+          teacherUid={currentAccount?.uid || currentAccount?.id || currentAccount?.email}
+          teacherName={currentAccount?.name || 'Native Friend'}
+          teacherEmail={currentAccount?.email}
+          activeStudyDaysCount={activeWeekDays.length}
+        />
       )}
 
       {/* TABLE 1: Assign YouTube Videos (Filtered to student active study days) */}

@@ -47,7 +47,6 @@ import { LiveMeetLessonsPanel } from './components/LiveMeetLessonsPanel';
 import { TeacherLiveLessonNotesPanel } from './components/TeacherLiveLessonNotesPanel';
 import { TeacherMediaAssignmentPanel } from './components/TeacherMediaAssignmentPanel';
 import { SFluencyTracker } from './components/SFluencyTracker';
-import { FloatingChatButton } from './components/FloatingChatButton';
 import { NotificationBanner } from './components/NotificationBanner';
 import { StudentHeaderSection } from './components/StudentHeaderSection';
 import { StudentRoutineGuideSection } from './components/StudentRoutineGuideSection';
@@ -2689,6 +2688,9 @@ export default function App() {
             onFindTutors={() => setViewMode('find-tutors')}
             onLogout={handleLogout}
             timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}
+            tutors={tutors}
+            lessons={lessons}
+            students={studentsList}
           />
 
           <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
@@ -2788,6 +2790,9 @@ export default function App() {
             onFindTutors={() => setViewMode('find-tutors')}
             onLogout={handleLogout}
             timeZone={isTeacher ? DEFAULT_TEACHER_TIMEZONE : DEFAULT_STUDENT_TIMEZONE}
+            tutors={tutors}
+            lessons={lessons}
+            students={studentsList}
           />
 
           {/* Notification Toast Banner */}
@@ -3027,17 +3032,8 @@ export default function App() {
               </div>
             )}
           </main>
-
-      {/* 4. Floating AI Chatbot Assistant */}
-      <FloatingChatButton
-        currentAccount={currentAccount}
-        currentActivity={currentActivity}
-        currentLanguage={currentLanguage}
-        userLevel={userProfile.level}
-        t={t}
-      />
-    </>
-  )}
+        </>
+      )}
 
   {/* 5. Modals & Dialogs (Accessible from anywhere) */}
   <AuthModal

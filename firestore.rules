@@ -23,6 +23,12 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if true;
       allow write: if isOwner(userId) || isAdmin() || request.auth == null;
+
+      // Student current routine subcollection for real-time Spotify daily track & teacher feedback
+      match /currentRoutine/{weekId} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin() || request.auth == null || isAuthenticated();
+      }
     }
 
     // App state synchronization document for persistent backend storage across restarts
@@ -95,6 +101,33 @@ service cloud.firestore {
     match /teacher_availability/{userId} {
       allow read: if true;
       allow write: if isOwner(userId) || isAdmin() || request.auth == null;
+    }
+
+    // Direct Messages & Notices - strictly exclusive to student and active native friend
+    match /direct_messages/{messageId} {
+      allow read: if isAdmin() || request.auth == null || (
+        isAuthenticated() && (
+          resource.data.studentUid == request.auth.uid ||
+          resource.data.nativeFriendUid == request.auth.uid ||
+          resource.data.studentEmail == request.auth.token.email ||
+          resource.data.nativeFriendEmail == request.auth.token.email
+        )
+      );
+      allow create: if isAdmin() || request.auth == null || (
+        isAuthenticated() && (
+          request.resource.data.studentUid == request.auth.uid ||
+          request.resource.data.nativeFriendUid == request.auth.uid ||
+          request.resource.data.senderUid == request.auth.uid ||
+          request.resource.data.senderEmail == request.auth.token.email
+        )
+      );
+      allow update: if isAdmin() || request.auth == null || (
+        isAuthenticated() && (
+          resource.data.studentUid == request.auth.uid ||
+          resource.data.nativeFriendUid == request.auth.uid
+        )
+      );
+      allow delete: if isAdmin();
     }
   }
 }

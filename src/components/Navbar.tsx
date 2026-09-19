@@ -10,13 +10,15 @@ import {
   Check,
   Edit3,
   Users,
+  MessageSquare,
 } from 'lucide-react';
-import { GoogleAccount, UserProfile, Language } from '../types';
+import { GoogleAccount, UserProfile, Language, NativeFriendTutor, LiveLesson } from '../types';
 import { Translations, SUPPORTED_LANGUAGES, getTranslations } from '../utils/i18n';
 import { BrandLogo } from './BrandLogo';
 import { getShortTzBadge } from '../utils/timezone';
+import { HeaderMessagesPopover } from './HeaderMessagesPopover';
 
-interface NavbarProps {
+export interface NavbarProps {
   userProfile: UserProfile;
   currentAccount: GoogleAccount | null;
   currentLanguage: Language;
@@ -32,6 +34,9 @@ interface NavbarProps {
   onGoToLanding?: () => void;
   onFindTutors?: () => void;
   onLogout?: () => void;
+  tutors?: NativeFriendTutor[];
+  lessons?: LiveLesson[];
+  students?: GoogleAccount[];
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -50,6 +55,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onGoToLanding,
   onFindTutors,
   onLogout,
+  tutors = [],
+  lessons = [],
+  students = [],
 }) => {
   const isTeacher = currentAccount?.role === 'teacher';
   const isAdmin = currentAccount?.role === 'admin';
@@ -66,6 +74,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [showLanguageSubmenu, setShowLanguageSubmenu] = useState<boolean>(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
+  // Discrete Asynchronous Direct Messages in Header
+  const [isMessagesOpen, setIsMessagesOpen] = useState<boolean>(false);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState<number>(0);
+  const messagesMenuRef = useRef<HTMLDivElement>(null);
+
   const effectiveTimeZone = timeZone || (isTeacherOrAdmin ? 'America/Toronto' : 'America/Sao_Paulo');
 
   const currentLangObj =
@@ -76,6 +89,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setIsUserMenuOpen(false);
         setShowLanguageSubmenu(false);
+      }
+      if (messagesMenuRef.current && !messagesMenuRef.current.contains(event.target as Node)) {
+        setIsMessagesOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -206,6 +222,51 @@ export const Navbar: React.FC<NavbarProps> = ({
                 )}
               </button>
             )}
+
+            {/* Discrete Minimalist Direct Messages & Notices Button */}
+            <div className="relative" ref={messagesMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsMessagesOpen((prev) => !prev)}
+                className={`relative p-2 sm:p-2.5 rounded-2xl border transition shadow-2xs cursor-pointer flex items-center justify-center group ${
+                  isMessagesOpen
+                    ? 'bg-[#062863] text-white border-[#062863]'
+                    : 'bg-white hover:bg-[#9AB4FF]/15 border-[#607EC9]/30 text-[#000035] hover:text-[#062863]'
+                }`}
+                title={isEn ? 'Direct Messages & Notices' : 'Recados e Mensagens com Amigo Nativo'}
+                aria-label={isEn ? 'Direct Messages & Notices' : 'Recados e Mensagens'}
+                id="header-direct-messages-btn"
+              >
+                <MessageSquare
+                  className={`w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-105 transition-transform ${
+                    isMessagesOpen ? 'text-white' : 'text-[#062863]'
+                  }`}
+                />
+
+                {/* Discrete Unread Indicator (Badge / Dot) */}
+                {unreadMessagesCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#1C4C96] text-white text-[8px] font-black items-center justify-center border border-white shadow-2xs">
+                      {unreadMessagesCount > 9 ? '9+' : unreadMessagesCount}
+                    </span>
+                  </span>
+                )}
+              </button>
+
+              {/* Direct Messages & Notices Dropdown / Popover */}
+              <HeaderMessagesPopover
+                isOpen={isMessagesOpen}
+                onClose={() => setIsMessagesOpen(false)}
+                currentAccount={currentAccount}
+                userProfile={userProfile}
+                tutors={tutors}
+                lessons={lessons}
+                students={students}
+                currentLanguage={currentLanguage}
+                onUnreadChange={setUnreadMessagesCount}
+              />
+            </div>
 
             {currentAccount ? (
               <div className="relative" ref={userMenuRef}>
@@ -445,6 +506,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     </header>
   );
 };
+
+export const Header = Navbar;
+export default Navbar;
 
 
 

@@ -373,6 +373,29 @@ export interface ChatMessage {
   read?: boolean;
 }
 
+export interface DirectMessage {
+  id: string;
+  studentUid: string;
+  studentEmail: string;
+  studentName?: string;
+  nativeFriendUid: string;
+  nativeFriendEmail: string;
+  nativeFriendName?: string;
+  nativeFriendAvatar?: string;
+  senderUid: string;
+  senderEmail: string;
+  senderName: string;
+  senderRole: 'student' | 'teacher' | 'admin' | 'system';
+  recipientUid: string;
+  recipientEmail?: string;
+  recipientName?: string;
+  text: string;
+  createdAt: string;
+  read: boolean;
+  lessonRefId?: string;
+  isNotice?: boolean;
+}
+
 export interface HomeworkVocabItem {
   word: string;
   translationPt: string;

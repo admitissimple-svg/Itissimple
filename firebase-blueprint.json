@@ -79,6 +79,36 @@
       },
       "required": ["teacherEmail"]
     },
+    "StudentCurrentRoutine": {
+      "title": "StudentCurrentRoutine",
+      "description": "Weekly routine tracking document containing the daily Spotify track and teacher comments/recommendations",
+      "type": "object",
+      "properties": {
+        "studentUid": { "type": "string", "description": "Student UID" },
+        "studentEmail": { "type": "string", "format": "email", "description": "Student email" },
+        "nativeFriendUid": { "type": "string", "description": "Assigned Native Friend / Teacher UID" },
+        "nativeFriendEmail": { "type": "string", "format": "email", "description": "Assigned Native Friend email" },
+        "weekId": { "type": "string", "description": "Week identifier, e.g. week-1" },
+        "currentSpotifyTrack": {
+          "type": "object",
+          "description": "Daily Spotify track synchronized in real time",
+          "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "artist": { "type": "string" },
+            "coverUrl": { "type": "string" },
+            "dayOfWeek": { "type": "string" }
+          },
+          "required": ["id", "title", "artist", "dayOfWeek"]
+        },
+        "teacherFeedback": {
+          "type": "object",
+          "description": "Native Friend comments and recommendations connected to the track and day"
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentUid", "weekId"]
+    },
     "AppState": {
       "title": "AppState",
       "description": "Server synchronization state document across application instances",
@@ -92,9 +122,41 @@
         "userProfiles": { "type": "object", "description": "Saved user profiles" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last synchronization timestamp" }
       }
+    },
+    "DirectMessage": {
+      "title": "DirectMessage",
+      "description": "Asynchronous direct messages and notices exclusive to student and active native friend pair",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message unique identifier" },
+        "studentUid": { "type": "string", "description": "Student user UID" },
+        "studentEmail": { "type": "string", "format": "email", "description": "Student email" },
+        "studentName": { "type": "string", "description": "Student display name" },
+        "nativeFriendUid": { "type": "string", "description": "Active Native Friend tutor UID" },
+        "nativeFriendEmail": { "type": "string", "format": "email", "description": "Active Native Friend email" },
+        "nativeFriendName": { "type": "string", "description": "Active Native Friend display name" },
+        "nativeFriendAvatar": { "type": "string", "description": "Active Native Friend avatar" },
+        "senderUid": { "type": "string", "description": "UID of the user who sent the message" },
+        "senderEmail": { "type": "string", "format": "email", "description": "Email of the sender" },
+        "senderName": { "type": "string", "description": "Display name of sender" },
+        "senderRole": { "type": "string", "enum": ["student", "teacher", "admin", "system"], "description": "Role of sender" },
+        "recipientUid": { "type": "string", "description": "UID of recipient" },
+        "recipientEmail": { "type": "string", "format": "email", "description": "Email of recipient" },
+        "recipientName": { "type": "string", "description": "Name of recipient" },
+        "text": { "type": "string", "maxLength": 2000, "description": "Message content" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of creation" },
+        "read": { "type": "boolean", "description": "Whether message has been read by recipient" },
+        "lessonRefId": { "type": "string", "description": "Optional lesson reference ID" },
+        "isNotice": { "type": "boolean", "description": "Whether message is an administrative notice" }
+      },
+      "required": ["studentUid", "nativeFriendUid", "senderUid", "text"]
     }
   },
   "firestore": {
+    "/direct_messages/{messageId}": {
+      "schema": "DirectMessage",
+      "description": "Direct asynchronous messages strictly partitioned between student and active native friend"
+    },
     "/app_state/{docId}": {
       "schema": "AppState",
       "description": "Application state document for server synchronization"
@@ -102,6 +164,10 @@
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profiles partitioned by user UID"
+    },
+    "/users/{userId}/currentRoutine/{weekId}": {
+      "schema": "StudentCurrentRoutine",
+      "description": "Weekly routine tracking with real-time Spotify track and teacher recommendations"
     },
     "/tutors/{tutorId}": {
       "schema": "Tutor",

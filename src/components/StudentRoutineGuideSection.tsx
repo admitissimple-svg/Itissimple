@@ -55,6 +55,8 @@ import {
   getCachedPlaylistTracks,
   SpotifyDailyTrack,
 } from '../utils/spotify';
+import { useStudentSpotifySync } from '../hooks/useStudentSpotifySync';
+import { CurrentSpotifyTrack } from '../utils/routineSync';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
 import { getInstantOrCachedWord, lookupWord, DictionaryLookupResult } from '../utils/dictionaryService';
@@ -602,6 +604,37 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         ? (isEn ? currentDayTrack.teacherTipEn : currentDayTrack.teacherTipPt)
         : (isEn ? 'Rest day in your weekly study plan.' : 'Dia de descanso no seu plano de estudos.'));
   const currentDaySeqIndex = currentStudyDayIndex >= 0 ? currentStudyDayIndex + 1 : 1;
+
+  // Real-time Firestore synchronization of the student's daily Spotify track (student -> Native Friend / Teacher)
+  const studentSyncUid = userProfile?.id || userProfile?.email || 'student';
+  const effectiveWeekId = `week-${weeklyCycle || userProfile?.weeklyCycle || 1}`;
+
+  const currentSpotifyTrackForSync: CurrentSpotifyTrack | null = useMemo(() => {
+    if (isRestDay || !currentDayTrack) return null;
+    const tId = (currentDayTrack as any).trackId || (currentDayTrack as any).id || 'spotify-track';
+    const tTitle = effectiveTrackTitle || currentDayTrack.title || 'Daily Track';
+    const tArtist = effectiveArtist || currentDayTrack.artist || "It's simple";
+    const tCover = currentDayTrack.imageUrl || (currentDayTrack.albumImages && currentDayTrack.albumImages[0]?.url) || '';
+    return {
+      id: tId,
+      title: tTitle,
+      artist: tArtist,
+      coverUrl: tCover,
+      dayOfWeek: selectedDay,
+      url: effectiveDirectUrl || currentDayTrack.url,
+      level: normalizedLevel,
+    };
+  }, [isRestDay, currentDayTrack, effectiveTrackTitle, effectiveArtist, selectedDay, effectiveDirectUrl, normalizedLevel]);
+
+  const { teacherFeedback } = useStudentSpotifySync({
+    studentUid: studentSyncUid,
+    studentEmail: userProfile?.email,
+    nativeFriendUid: userProfile?.teacherEmail,
+    weekId: effectiveWeekId,
+    currentTrack: currentSpotifyTrackForSync,
+  });
+
+  const activeNativeFriendFeedback = teacherFeedback?.[selectedDay];
 
   // End of day reminder calculation
   const lastActivity = getLastActivityOfTheDay(sortedActivities);
@@ -1998,6 +2031,35 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   {isEn ? 'Open Playlist' : 'Ver Playlist'}
                 </a>
               </div>
+
+              {/* Native Friend / Teacher Live Recommendations on Today's Song */}
+              {activeNativeFriendFeedback && (activeNativeFriendFeedback.comment || activeNativeFriendFeedback.recommendation) && (
+                <div className="mt-3 p-3 rounded-2xl bg-emerald-50/90 border border-emerald-300/80 text-xs space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-black text-[#000035] text-[11px]">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>
+                        {isEn ? 'Native Friend Note for Today’s Song:' : 'Dica do seu Amigo Nativo para esta música:'}
+                      </span>
+                    </div>
+                    {activeNativeFriendFeedback.teacherName && (
+                      <span className="text-[10px] text-emerald-800 font-bold bg-emerald-200/60 px-2 py-0.5 rounded-md">
+                        {activeNativeFriendFeedback.teacherName}
+                      </span>
+                    )}
+                  </div>
+                  {activeNativeFriendFeedback.comment && (
+                    <p className="text-slate-800 text-[11px] leading-relaxed">
+                      {activeNativeFriendFeedback.comment}
+                    </p>
+                  )}
+                  {activeNativeFriendFeedback.recommendation && (
+                    <p className="text-emerald-950 font-bold text-[11px]">
+                      💡 {activeNativeFriendFeedback.recommendation}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

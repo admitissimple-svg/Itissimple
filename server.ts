@@ -3948,6 +3948,80 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
   });
 });
 
+// Real-time Current Routine & Spotify Track Mirroring Endpoints
+app.post('/api/routines/current-routine', (req, res) => {
+  const { studentUid, weekId, currentSpotifyTrack, studentEmail, nativeFriendUid, nativeFriendEmail } = req.body;
+  if (!studentUid) {
+    return res.status(400).json({ error: 'studentUid is required' });
+  }
+
+  const db = readDb();
+  if (!(db as any).studentCurrentRoutines) {
+    (db as any).studentCurrentRoutines = {};
+  }
+
+  const cleanUid = String(studentUid).toLowerCase().trim();
+  const safeWeekId = weekId || 'week-1';
+  const key = `${cleanUid}:${safeWeekId}`;
+
+  const existing = (db as any).studentCurrentRoutines[key] || {};
+  (db as any).studentCurrentRoutines[key] = {
+    ...existing,
+    studentUid: cleanUid,
+    weekId: safeWeekId,
+    currentSpotifyTrack: currentSpotifyTrack !== undefined ? currentSpotifyTrack : existing.currentSpotifyTrack,
+    studentEmail: studentEmail || existing.studentEmail,
+    nativeFriendUid: nativeFriendUid || existing.nativeFriendUid,
+    nativeFriendEmail: nativeFriendEmail || existing.nativeFriendEmail,
+    updatedAt: new Date().toISOString(),
+  };
+
+  writeDb(db);
+  res.json({ success: true, routine: (db as any).studentCurrentRoutines[key] });
+});
+
+app.get('/api/routines/current-routine', (req, res) => {
+  const studentUid = (req.query.studentUid as string || '').toLowerCase().trim();
+  const weekId = (req.query.weekId as string || 'week-1').trim();
+  if (!studentUid) {
+    return res.status(400).json({ error: 'studentUid is required' });
+  }
+
+  const db = readDb();
+  const key = `${studentUid}:${weekId}`;
+  const routine = (db as any).studentCurrentRoutines?.[key] || null;
+  res.json({ success: true, routine });
+});
+
+app.post('/api/routines/current-routine/feedback', (req, res) => {
+  const { studentUid, weekId, feedback } = req.body;
+  if (!studentUid || !feedback || !feedback.dayOfWeek) {
+    return res.status(400).json({ error: 'studentUid and feedback with dayOfWeek are required' });
+  }
+
+  const db = readDb();
+  if (!(db as any).studentCurrentRoutines) {
+    (db as any).studentCurrentRoutines = {};
+  }
+
+  const cleanUid = String(studentUid).toLowerCase().trim();
+  const safeWeekId = weekId || 'week-1';
+  const key = `${cleanUid}:${safeWeekId}`;
+
+  const existing = (db as any).studentCurrentRoutines[key] || {
+    studentUid: cleanUid,
+    weekId: safeWeekId,
+  };
+
+  if (!existing.teacherFeedback) existing.teacherFeedback = {};
+  existing.teacherFeedback[feedback.dayOfWeek] = feedback;
+  existing.updatedAt = new Date().toISOString();
+
+  (db as any).studentCurrentRoutines[key] = existing;
+  writeDb(db);
+  res.json({ success: true, routine: existing });
+});
+
 // 5. Live Lessons Endpoints
 app.get(['/api/lessons', '/api/live-lessons'], (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
