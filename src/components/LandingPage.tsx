@@ -24,6 +24,8 @@ import { GoogleAccount, Language, UserRole, AdminLandingContent } from '../types
 import { BrandLogo } from './BrandLogo';
 import { FindTutorsSection } from './FindTutorsSection';
 import { SFluencyTracker } from './SFluencyTracker';
+import { HowItWorksModal } from './HowItWorksModal';
+import { getHowItWorksContent } from '../data/howItWorksContent';
 import { NativeFriendTutor } from '../data/tutors';
 import { SUPPORTED_LANGUAGES, getTranslations } from '../utils/i18n';
 
@@ -65,8 +67,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const isEn = currentLanguage === 'en';
   const isPt = currentLanguage === 'pt';
   const t = getTranslations(currentLanguage);
+  const howItWorksContent = getHowItWorksContent(currentLanguage);
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
   const langDropdownRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = currentAccount?.role === 'admin';
@@ -466,6 +470,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 </p>
               </div>
 
+              {/* Minimalist & Discreet "How It Works" Trigger Pill */}
+              <div className="pt-0.5 pb-1 flex items-center">
+                <button
+                  type="button"
+                  onClick={() => setIsHowItWorksOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#062863]/60 hover:bg-[#1C4C96]/80 border border-[#9AB4FF]/40 hover:border-[#F4CA54]/80 text-[#9AB4FF] hover:text-white text-xs font-bold tracking-wide backdrop-blur-md transition-all duration-200 shadow-xs hover:shadow-[0_0_15px_rgba(154,180,255,0.25)] cursor-pointer group active:scale-98"
+                  title={howItWorksContent.title}
+                >
+                  <span className="text-xs transition-transform duration-200 group-hover:scale-110">✨</span>
+                  <span>{howItWorksContent.buttonText}</span>
+                  <span className="text-[10px] text-[#9AB4FF]/70 group-hover:text-white transition-colors ml-0.5">→</span>
+                </button>
+              </div>
+
               {/* Call to Actions */}
               <div className="pt-1 flex flex-wrap items-center gap-2.5">
                 <button
@@ -702,6 +720,22 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
         </div>
       </footer>
+
+      {/* Interactive Presentation Modal: How It Works */}
+      <HowItWorksModal
+        isOpen={isHowItWorksOpen}
+        onClose={() => setIsHowItWorksOpen(false)}
+        onGetStarted={() => {
+          if (onStartLivingInEnglish) {
+            onStartLivingInEnglish();
+          } else if (currentAccount) {
+            onGoToDashboard();
+          } else {
+            onOpenAuthModal('signup');
+          }
+        }}
+        currentLanguage={currentLanguage}
+      />
     </div>
   );
 };
