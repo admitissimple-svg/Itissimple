@@ -572,7 +572,7 @@ app.get('/api/auth/admin-status', (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const db = readDb();
-  const { email, password, role: requestedRole, localBackup } = req.body;
+  const { email, password, role: requestedRole, localBackup, uid } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email or username is required' });
   }
@@ -590,10 +590,32 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
+  // If user is not yet in authUsers, check if user exists in Firestore
+  let firestoreDoc: any = null;
+  if (!authRecord) {
+    try {
+      firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid);
+      if (firestoreDoc) {
+        authRecord = {
+          uid: firestoreDoc.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          email: cleanEmail,
+          name: firestoreDoc.name || cleanEmail.split('@')[0],
+          password: firestoreDoc.password || password || '',
+          role: firestoreDoc.role || requestedRole || 'student',
+          createdAt: firestoreDoc.createdAt || new Date().toISOString(),
+        };
+        if (!db.authUsers) db.authUsers = {};
+        db.authUsers[cleanEmail] = authRecord;
+      }
+    } catch (fsErr) {
+      console.warn('Firestore hydration notice on login:', fsErr);
+    }
+  }
+
   // If user is not yet in authUsers, check if client provided a local localStorage backup to restore
   if (!authRecord && localBackup && localBackup.email && localBackup.email.toLowerCase().trim() === cleanEmail) {
     console.log('Restoring account from client localStorage backup:', cleanEmail);
-    const restoredUid = localBackup.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+    const restoredUid = localBackup.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
     authRecord = {
       uid: restoredUid,
       email: cleanEmail,
@@ -688,14 +710,15 @@ app.post('/api/auth/login', async (req, res) => {
   let role = requestedRole || 'student';
   let name = cleanEmail.split('@')[0];
 
-  // 1. Check if admin
-  if (authRecord?.role === 'admin' || cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin')) {
+  // 1. Check if admin: strictly for adm.itissimple@gmail.com or an explicitly verified admin record when requested as admin
+  if (cleanEmail === 'adm.itissimple@gmail.com' || (authRecord?.role === 'admin' && requestedRole === 'admin')) {
     role = 'admin';
     name = authRecord?.name || 'Admin It\'s Simple';
   } else if (
-    authRecord?.role === 'teacher' ||
-    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail) ||
-    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin')
+    (requestedRole === 'teacher' || (!requestedRole && authRecord?.role === 'teacher')) &&
+    (authRecord?.role === 'teacher' ||
+      (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail) ||
+      (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin'))
   ) {
     // 2. Native Friend / Teacher: strictly enforce Teacher role so student data is never leaked or mixed
     role = 'teacher';
@@ -708,6 +731,10 @@ app.post('/api/auth/login', async (req, res) => {
       delete db.userProfiles[cleanEmail];
       writeDb(db);
     }
+  } else if (firestoreDoc?.role === 'student' || requestedRole === 'student' || authRecord?.role === 'student') {
+    // 3. Student Access: guarantee role stays 'student' and never gets overridden to 'admin'
+    role = 'student';
+    name = firestoreDoc?.name || authRecord?.name || name;
   } else if (authRecord) {
     role = authRecord.role;
     name = authRecord.name || name;
@@ -718,11 +745,9 @@ app.post('/api/auth/login', async (req, res) => {
       if (teacherObj) name = teacherObj.name;
     } else if (role === 'student') {
       const studentObj = db.students?.find(
-        (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+        (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
       );
-      if (studentObj) {
-        name = studentObj.name || studentObj.studentName || name;
-      }
+      if (studentObj) name = studentObj.name || studentObj.studentName || name;
     }
   }
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { doc, setDoc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firestore';
 import { getDb, auth } from '../firebase';
-import { DayOfWeek } from '../types';
+import { DayOfWeek, TeacherOverrideTrack } from '../types';
 import { normalizeStudentIdForPath, handleFirestoreError, OperationType } from '../utils/routineSync';
 import { extractYouTubeVideoId, getYouTubeEmbedUrl } from '../utils/youtube';
 
@@ -18,6 +18,7 @@ export interface SavedRoutineVideo {
   instructions?: string;
   duration?: string;
   updatedAt?: string;
+  teacherOverrideTrack?: TeacherOverrideTrack | null;
 }
 
 const ALL_DAYS_OF_WEEK: DayOfWeek[] = [
@@ -299,7 +300,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
 
   const effectiveUid = studentUid ? normalizeStudentIdForPath(studentUid) : '';
 
-  // Load routines and watched history on mount / studentUid change
+  // Load routines and watched history on mount / studentUid change + real-time onSnapshot sync
   useEffect(() => {
     if (!effectiveUid) return;
 
@@ -322,8 +323,29 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
         if (isMounted) setIsLoading(false);
       });
 
+    // Subscribe in real-time to each day of the week to mirror teacher updates instantly
+    const db = getDb();
+    const unsubs = ALL_DAYS_OF_WEEK.map((day) => {
+      try {
+        const dayRef = doc(db, 'users', effectiveUid, 'routines', day);
+        return onSnapshot(
+          dayRef,
+          (snap) => {
+            if (snap.exists() && isMounted) {
+              const data = snap.data() as SavedRoutineVideo;
+              setRoutinesByDay((prev) => ({ ...prev, [day]: data }));
+            }
+          },
+          () => {}
+        );
+      } catch {
+        return () => {};
+      }
+    });
+
     return () => {
       isMounted = false;
+      unsubs.forEach((u) => u());
     };
   }, [effectiveUid]);
 

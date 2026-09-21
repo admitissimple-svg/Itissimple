@@ -30,6 +30,22 @@
         "dayOfWeek": { "type": "string", "description": "Day of week" },
         "activityId": { "type": "string", "description": "Activity identifier" },
         "isRepeatVideo": { "type": "boolean", "description": "Whether this video is repeating previous day" },
+        "teacherOverrideTrack": {
+          "type": "object",
+          "description": "Teacher Spotify override track recommendation for student routine",
+          "properties": {
+            "url": { "type": "string" },
+            "title": { "type": "string" },
+            "artist": { "type": "string" },
+            "artistOrHost": { "type": "string" },
+            "coverUrl": { "type": "string" },
+            "embedUrl": { "type": "string" },
+            "instructions": { "type": "string" },
+            "assignedBy": { "type": "string" },
+            "assignedByName": { "type": "string" },
+            "assignedAt": { "type": "string" }
+          }
+        },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
     },

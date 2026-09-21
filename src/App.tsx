@@ -37,6 +37,7 @@ import { executeStartNewWeek } from './utils/StartNewWeekHandler';
 // Components
 import { Navbar } from './components/Navbar';
 import { LandingPage } from './components/LandingPage';
+import { Footer } from './components/Footer';
 import { FindTutorsSection } from './components/FindTutorsSection';
 import { EnglishMomentsShowcase } from './components/EnglishMomentsShowcase';
 import { CleanActivitySidebar } from './components/CleanActivitySidebar';
@@ -334,6 +335,34 @@ export default function App() {
 
     loadInitialData();
   }, []);
+
+  // Check for direct /admin or #admin URL trigger
+  useEffect(() => {
+    const handleAdminRouteCheck = () => {
+      if (typeof window !== 'undefined') {
+        const path = window.location.pathname;
+        const hash = window.location.hash;
+        if (path === '/admin' || hash === '#admin') {
+          if (currentAccount?.role === 'admin') {
+            setIsAdminApprovalsOpen(true);
+          } else if (!currentAccount) {
+            // Only prompt admin modal if user is strictly not logged in
+            setAuthModalMode('login');
+            setAuthModalRole('admin');
+            setIsAuthModalOpen(true);
+          } else {
+            // Logged in as student or native friend: redirect safely to dashboard
+            try {
+              window.history.replaceState({}, '', '/dashboard');
+            } catch {}
+          }
+        }
+      }
+    };
+    handleAdminRouteCheck();
+    window.addEventListener('popstate', handleAdminRouteCheck);
+    return () => window.removeEventListener('popstate', handleAdminRouteCheck);
+  }, [currentAccount]);
 
   // Compute current day's routine items
   const currentDayRoutines = useMemo(() => {
@@ -1023,7 +1052,31 @@ export default function App() {
         })
         .catch(() => {});
     }
-    setViewMode('dashboard');
+    if (account.role === 'student') {
+      setViewMode('dashboard');
+      if (typeof window !== 'undefined') {
+        try {
+          window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+        } catch {}
+      }
+    } else if (account.role === 'teacher') {
+      setViewMode('dashboard');
+      if (typeof window !== 'undefined') {
+        try {
+          window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+        } catch {}
+      }
+    } else if (account.role === 'admin') {
+      setViewMode('dashboard');
+      setIsAdminApprovalsOpen(true);
+      if (typeof window !== 'undefined') {
+        try {
+          window.history.replaceState({ page: 'admin' }, '', '/admin');
+        } catch {}
+      }
+    } else {
+      setViewMode('dashboard');
+    }
     setNotifications((prev) => [
       {
         id: `login-${Date.now()}`,
@@ -1046,6 +1099,11 @@ export default function App() {
     setLessons([]);
     setStudents([]);
     setViewMode('landing');
+    if (typeof window !== 'undefined') {
+      try {
+        window.history.replaceState({}, '', '/');
+      } catch {}
+    }
     setNotifications((prev) => [
       {
         id: `logout-${Date.now()}`,
@@ -2649,6 +2707,7 @@ export default function App() {
               setViewMode('dashboard');
             } else {
               setAuthModalMode('login');
+              setAuthModalRole('student');
               setIsAuthModalOpen(true);
             }
           }}
@@ -2686,6 +2745,7 @@ export default function App() {
             onToggleLanguage={setCurrentLanguage}
             onOpenAccountModal={() => {
               setAuthModalMode('login');
+              setAuthModalRole('student');
               setIsAuthModalOpen(true);
             }}
             onOpenStudentProfile={() => setIsStudentProfileOpen(true)}
@@ -2782,6 +2842,7 @@ export default function App() {
             onToggleLanguage={setCurrentLanguage}
             onOpenAccountModal={() => {
               setAuthModalMode('login');
+              setAuthModalRole('student');
               setIsAuthModalOpen(true);
             }}
             onOpenStudentProfile={() => {
@@ -3044,6 +3105,23 @@ export default function App() {
               </div>
             )}
           </main>
+
+          {/* Footer with Discreet Easter Egg on © */}
+          <Footer
+            currentAccount={currentAccount}
+            currentLanguage={currentLanguage}
+            t={t}
+            footerSlogan={landingContent?.footerSlogan || t.footerSub}
+            scrollToSection={() => {}}
+            onOpenBecomeTutorModal={() => setIsBecomeTutorModalOpen(true)}
+            onOpenAuthModal={(mode, role) => {
+              setAuthModalMode(mode);
+              setAuthModalRole(role || 'student');
+              setIsAuthModalOpen(true);
+            }}
+            onOpenAdminApprovals={() => setIsAdminApprovalsOpen(true)}
+            onGoToDashboard={() => setViewMode('dashboard')}
+          />
         </>
       )}
 

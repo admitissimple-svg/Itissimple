@@ -1,6 +1,7 @@
 import { doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import { getDb, auth } from '../firebase';
-import { DayOfWeek } from '../types';
+import { DayOfWeek, TeacherOverrideTrack } from '../types';
+import { getSpotifyEmbedUrl } from './spotify';
 
 export enum OperationType {
   CREATE = 'create',
@@ -418,6 +419,135 @@ export async function saveNativeFriendTrackFeedback(
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanStudentUid}/currentRoutine/weekData`);
+    return false;
+  }
+}
+
+/**
+ * Saves a Spotify track recommendation / override from the Native Friend teacher
+ * for a specific day of the student's routine.
+ * Persists to Firestore at users/{studentUID}/routines/{dayOfWeek}.
+ */
+export async function saveTeacherSpotifyOverrideToFirestore(
+  studentUid: string,
+  dayOfWeek: DayOfWeek,
+  overrideTrack: TeacherOverrideTrack
+): Promise<boolean> {
+  const cleanStudentUid = normalizeStudentIdForPath(studentUid);
+  if (!cleanStudentUid || !dayOfWeek) return false;
+
+  const sanitizedTrack: TeacherOverrideTrack = {
+    id: overrideTrack.id || overrideTrack.trackId || 'override-track',
+    trackId: overrideTrack.trackId || overrideTrack.id || '',
+    title: overrideTrack.title || 'Recommended Track',
+    artist: overrideTrack.artist || overrideTrack.artistOrHost || 'Spotify Audio',
+    artistOrHost: overrideTrack.artist || overrideTrack.artistOrHost || 'Spotify Audio',
+    url: overrideTrack.url,
+    embedUrl: overrideTrack.embedUrl || getSpotifyEmbedUrl(overrideTrack.url),
+    coverUrl: overrideTrack.coverUrl || overrideTrack.imageUrl || '',
+    imageUrl: overrideTrack.coverUrl || overrideTrack.imageUrl || '',
+    instructions: overrideTrack.instructions || '',
+    teacherUid: overrideTrack.teacherUid || '',
+    teacherName: overrideTrack.teacherName || 'Native Friend',
+    teacherEmail: overrideTrack.teacherEmail || '',
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    const db = getDb();
+    // 1. Write to users/{studentUID}/routines/{dayOfWeek}
+    const dayRef = doc(db, 'users', cleanStudentUid, 'routines', dayOfWeek);
+    await setDoc(
+      dayRef,
+      {
+        teacherOverrideTrack: sanitizedTrack,
+        dayOfWeek,
+        updatedAt: sanitizedTrack.updatedAt,
+      },
+      { merge: true }
+    );
+
+    // 2. Also write to users/{studentUID}/currentRoutine/weekData
+    const weekDataRef = doc(db, 'users', cleanStudentUid, 'currentRoutine', 'weekData');
+    await setDoc(
+      weekDataRef,
+      {
+        teacherOverrides: {
+          [dayOfWeek]: sanitizedTrack,
+        },
+        updatedAt: sanitizedTrack.updatedAt,
+      },
+      { merge: true }
+    );
+
+    // 3. Optional REST notification
+    fetch('/api/routines/override-track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentUid: cleanStudentUid,
+        dayOfWeek,
+        teacherOverrideTrack: sanitizedTrack,
+      }),
+    }).catch(() => {});
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanStudentUid}/routines/${dayOfWeek}`);
+    return false;
+  }
+}
+
+/**
+ * Removes a Spotify track recommendation / override from the Native Friend teacher
+ * for a specific day of the student's routine, restoring the curriculum track.
+ */
+export async function removeTeacherSpotifyOverrideFromFirestore(
+  studentUid: string,
+  dayOfWeek: DayOfWeek
+): Promise<boolean> {
+  const cleanStudentUid = normalizeStudentIdForPath(studentUid);
+  if (!cleanStudentUid || !dayOfWeek) return false;
+
+  try {
+    const db = getDb();
+    const now = new Date().toISOString();
+
+    const dayRef = doc(db, 'users', cleanStudentUid, 'routines', dayOfWeek);
+    await setDoc(
+      dayRef,
+      {
+        teacherOverrideTrack: null,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+
+    const weekDataRef = doc(db, 'users', cleanStudentUid, 'currentRoutine', 'weekData');
+    await setDoc(
+      weekDataRef,
+      {
+        teacherOverrides: {
+          [dayOfWeek]: null,
+        },
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+
+    fetch('/api/routines/override-track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentUid: cleanStudentUid,
+        dayOfWeek,
+        teacherOverrideTrack: null,
+      }),
+    }).catch(() => {});
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanStudentUid}/routines/${dayOfWeek}`);
     return false;
   }
 }

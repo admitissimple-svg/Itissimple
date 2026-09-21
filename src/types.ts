@@ -149,6 +149,23 @@ export interface TeacherAssignedSpotify {
   addedAt?: string;
 }
 
+export interface TeacherOverrideTrack {
+  id?: string;
+  trackId?: string;
+  title: string;
+  artist?: string;
+  artistOrHost?: string;
+  url: string;
+  embedUrl?: string;
+  coverUrl?: string;
+  imageUrl?: string;
+  instructions?: string;
+  teacherUid?: string;
+  teacherName?: string;
+  teacherEmail?: string;
+  updatedAt?: string;
+}
+
 export interface RoutineItem {
   id: string;
   dayType?: DayType;

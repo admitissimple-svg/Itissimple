@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { GoogleAccount, Language, UserRole, AdminLandingContent } from '../types';
 import { BrandLogo } from './BrandLogo';
+import { Header } from './Header';
+import { Footer } from './Footer';
 import { FindTutorsSection } from './FindTutorsSection';
 import { SFluencyTracker } from './SFluencyTracker';
 import { HowItWorksModal } from './HowItWorksModal';
@@ -68,25 +70,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const isPt = currentLanguage === 'pt';
   const t = getTranslations(currentLanguage);
   const howItWorksContent = getHowItWorksContent(currentLanguage);
-  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
-  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
-  const langDropdownRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = currentAccount?.role === 'admin';
-
-  const currentLangObj =
-    SUPPORTED_LANGUAGES.find((l) => l.code === currentLanguage) || SUPPORTED_LANGUAGES[0];
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (langDropdownRef.current && !langDropdownRef.current.contains(event.target as Node)) {
-        setIsLangDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   const scrollToSection = (sectionId: string) => {
     const el = document.getElementById(sectionId);
@@ -169,273 +155,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       )}
 
-      {/* 1. Top Header */}
-      <header className="sticky top-0 z-40 bg-[#000035]/95 backdrop-blur-md border-b border-[#1C4C96]/60 shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-14 sm:h-16">
-            {/* Logo */}
-            <div className="flex items-center gap-3">
-              <BrandLogo size="sm" showText={true} textColor="text-white" />
-            </div>
-
-            {/* Center Nav Links (Desktop) */}
-            <nav className="hidden md:flex items-center gap-6 text-xs sm:text-sm font-bold text-[#9AB4FF]">
-              <button
-                type="button"
-                onClick={() => scrollToSection('find-native-friend')}
-                className="hover:text-white transition cursor-pointer flex items-center gap-1.5"
-              >
-                <span>{t.findTutors}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => scrollToSection('philosophy')}
-                className="hover:text-white transition cursor-pointer"
-              >
-                {currentLanguage === 'pt' ? 'Nossa Filosofia' : 'Philosophy'}
-              </button>
-              <button
-                type="button"
-                onClick={onOpenBecomeTutorModal}
-                className="text-[#F4CA54] hover:text-white transition cursor-pointer font-extrabold"
-              >
-                {t.becomeTutor}
-              </button>
-            </nav>
-
-            {/* Right Controls: Language Selector, Help & Preply-style Log In */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              {/* 12-Language Switcher */}
-              <div className="relative" ref={langDropdownRef}>
-                <button
-                  type="button"
-                  onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
-                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-[#062863] hover:bg-[#1C4C96] border border-[#607EC9]/50 rounded-xl text-xs font-bold text-white transition shadow-xs cursor-pointer"
-                  title={t.language}
-                >
-                  <span className="text-base leading-none">{currentLangObj.flag}</span>
-                  <span className="hidden sm:inline font-black uppercase text-[11px] text-[#9AB4FF]">{currentLangObj.code}</span>
-                  <ChevronDown className={`w-3.5 h-3.5 text-[#9AB4FF] transition-transform duration-200 ${isLangDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {isLangDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-64 bg-[#000035] rounded-2xl shadow-2xl border border-[#607EC9] p-2 z-50 animate-in fade-in zoom-in-95 duration-150 max-h-96 overflow-y-auto">
-                    <div className="px-2.5 py-1.5 border-b border-[#1C4C96] text-[10px] font-bold text-[#9AB4FF] uppercase tracking-wider flex items-center justify-between">
-                      <span>{t.language} (12)</span>
-                      <Globe className="w-3 h-3 text-[#9AB4FF]" />
-                    </div>
-                    <div className="grid grid-cols-1 gap-1 pt-1.5">
-                      {SUPPORTED_LANGUAGES.map((lang) => {
-                        const isSelected = lang.code === currentLanguage;
-                        return (
-                          <button
-                            key={lang.code}
-                            type="button"
-                            onClick={() => {
-                              onToggleLanguage(lang.code);
-                              setIsLangDropdownOpen(false);
-                            }}
-                            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition cursor-pointer ${
-                              isSelected
-                                ? 'bg-[#1C4C96] text-white font-bold shadow-xs border border-[#9AB4FF]/50'
-                                : 'text-slate-200 hover:bg-[#062863] hover:text-white'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <span className="text-lg">{lang.flag}</span>
-                              <div className="text-left">
-                                <span className="block text-xs font-bold">{lang.nativeName}</span>
-                                <span className={`text-[10px] ${isSelected ? 'text-[#F4CA54]' : 'text-[#9AB4FF]/70'}`}>
-                                  {lang.name} • {lang.region}
-                                </span>
-                              </div>
-                            </div>
-                            {isSelected && <Check className="w-3.5 h-3.5 text-[#F4CA54]" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Preply-style Help Circle Icon Button (?) */}
-              <button
-                type="button"
-                onClick={() => setIsHelpOpen(true)}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full border border-[#607EC9]/50 hover:border-white bg-[#062863]/50 hover:bg-[#1C4C96]/60 flex items-center justify-center text-white transition cursor-pointer"
-                title={isEn ? 'Help & How it works' : 'Ajuda e Como funciona'}
-                aria-label="Help"
-              >
-                <HelpCircle className="w-5 h-5 text-[#9AB4FF] hover:text-white" />
-              </button>
-
-              {/* Admin Portal Quick Access Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (currentAccount?.role === 'admin') {
-                    if (onOpenAdminApprovals) onOpenAdminApprovals();
-                  } else {
-                    onOpenAuthModal('login', 'admin');
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#062863] hover:bg-[#1C4C96] border border-[#607EC9]/50 text-xs font-bold text-[#F4CA54] transition cursor-pointer shadow-xs"
-                title={isEn ? 'Administrator Access' : 'Acesso do Administrador'}
-              >
-                <ShieldCheck className="w-4 h-4 text-[#F4CA54]" />
-                <span className="hidden lg:inline">{isEn ? 'Admin' : 'Administrador'}</span>
-                {pendingApprovalsCount !== undefined && pendingApprovalsCount > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-[#F4CA54] text-[#000035] text-[9px] font-black flex items-center justify-center">
-                    {pendingApprovalsCount}
-                  </span>
-                )}
-              </button>
-
-              {/* Preply-style Single Unified Log In / Dashboard Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (currentAccount) {
-                    onGoToDashboard();
-                  } else {
-                    onOpenAuthModal('login');
-                  }
-                }}
-                className="flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-white hover:bg-slate-100 text-[#000035] font-black text-xs sm:text-sm shadow-md transition cursor-pointer border-2 border-white active:scale-98"
-                title={
-                  currentAccount
-                    ? currentAccount.role === 'admin'
-                      ? isEn ? 'Administrator Dashboard' : 'Painel do Administrador'
-                      : currentAccount.role === 'teacher'
-                      ? isEn ? 'Native Friend Dashboard' : 'Painel do Amigo Nativo'
-                      : isEn ? 'My Dashboard' : 'Meu Painel'
-                    : isEn ? 'Log in to your account' : 'Acessar sua conta'
-                }
-              >
-                {/* Preply-style ->] icon */}
-                <LogIn className="w-4 h-4 text-[#000035] stroke-[2.5]" />
-                <span>
-                  {currentAccount
-                    ? currentAccount.role === 'admin'
-                      ? isEn ? 'Admin Dashboard' : 'Painel Admin'
-                      : currentAccount.role === 'teacher'
-                      ? isEn ? 'Teacher Dashboard' : 'Painel Amigo Nativo'
-                      : isEn ? 'My Dashboard' : 'Meu Painel'
-                    : isEn ? 'Log In' : 'Entrar'}
-                </span>
-              </button>
-
-              {/* Botão Sair da Conta (Quando o usuário já está logado) */}
-              {currentAccount && onLogout && (
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/50 text-rose-300 hover:text-white font-bold text-xs sm:text-sm transition cursor-pointer shadow-xs active:scale-98"
-                  title={isEn ? 'Log out of current account' : 'Sair da conta atual'}
-                >
-                  <LogOut className="w-4 h-4 text-rose-400" />
-                  <span>{isEn ? 'Log Out' : 'Sair'}</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Quick Help Modal (Preply style) */}
-      {isHelpOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white text-[#000035] rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-200 relative my-6 animate-in fade-in zoom-in duration-150">
-            <button
-              type="button"
-              onClick={() => setIsHelpOpen(false)}
-              className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-800 transition cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 rounded-2xl bg-[#062863] text-white flex items-center justify-center">
-                <HelpCircle className="w-6 h-6 text-[#9AB4FF]" />
-              </div>
-              <div>
-                <h3 className="text-xl font-black text-[#000035]">
-                  {isEn ? 'How It\'s Simple Works' : 'Como Funciona o It\'s Simple'}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium">
-                  {isEn ? 'Quick guide to logging in and learning' : 'Guia rápido de login e aprendizado'}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3.5 text-xs text-slate-600">
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start gap-3">
-                <LogIn className="w-5 h-5 text-[#1C4C96] shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm mb-0.5">
-                    {isEn ? '1. Log In / Sign Up' : '1. Login e Cadastro'}
-                  </h4>
-                  <p className="leading-relaxed">
-                    {isEn
-                      ? 'Click the Log In button to access with Google or create an email/password account. Students are directed to their Routine Workspace, while Native Friends access their Master Schedule.'
-                      : 'Clique no botão Entrar (Log In) para acessar via Google ou criar sua conta. Alunos são direcionados ao Painel de Rotinas, e Amigos Nativos ao Controle de Aulas.'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start gap-3">
-                <Calendar className="w-5 h-5 text-[#1C4C96] shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm mb-0.5">
-                    {isEn ? '2. Live 25 or 50-min Sessions' : '2. Aulas Ao Vivo de 25 ou 50 minutos'}
-                  </h4>
-                  <p className="leading-relaxed">
-                    {isEn
-                      ? 'Schedule 1-on-1 practical conversations with friendly Native Friends via Google Meet.'
-                      : 'Agende sessões individuais práticas de conversação da vida real via Google Meet com seu mentor.'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-start gap-3">
-                <BookOpen className="w-5 h-5 text-[#1C4C96] shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm mb-0.5">
-                    {isEn ? '3. Daily Routine & 5 Words' : '3. Rotinas e 5 Palavras Diárias'}
-                  </h4>
-                  <p className="leading-relaxed">
-                    {isEn
-                      ? 'Turn daily habits (coffee, commute, workout) into English moments. Record 5 words and finish your day with the Sentence of the Day.'
-                      : 'Transforme seus hábitos diários em momentos de inglês, anote 5 palavras e crie sua Frase do Dia.'}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 flex gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsHelpOpen(false);
-                  onOpenAuthModal('login');
-                }}
-                className="flex-1 py-3 rounded-xl bg-[#000035] hover:bg-[#062863] text-white font-extrabold text-xs sm:text-sm transition cursor-pointer flex items-center justify-center gap-2"
-              >
-                <LogIn className="w-4 h-4" />
-                <span>{isEn ? 'Go to Log In' : 'Fazer Login'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsHelpOpen(false)}
-                className="py-3 px-5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm transition cursor-pointer"
-              >
-                {isEn ? 'Close' : 'Fechar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 1. Top Header (Cleaned: no help circle, no conspicuous Admin button) */}
+      <Header
+        currentAccount={currentAccount}
+        currentLanguage={currentLanguage}
+        t={t}
+        onToggleLanguage={onToggleLanguage}
+        onOpenAuthModal={onOpenAuthModal}
+        onOpenBecomeTutorModal={onOpenBecomeTutorModal}
+        onGoToDashboard={onGoToDashboard}
+        onLogout={onLogout}
+        scrollToSection={scrollToSection}
+      />
 
       {/* 2. Hero Section */}
       <section className="relative overflow-hidden pt-5 pb-8 sm:pt-6 sm:pb-10 bg-gradient-to-b from-[#000035] via-[#062863] to-[#000035]">
@@ -670,56 +401,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       </section>
 
-      {/* 7. Footer */}
-      <footer className="bg-[#000025] border-t border-[#1C4C96]/50 py-12 text-slate-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex flex-col items-center md:items-start gap-2">
-              <BrandLogo size="sm" showText={true} textColor="text-white" />
-              <p className="text-xs text-[#9AB4FF]/75 font-medium">
-                {footerSlogan}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-center gap-6 text-xs font-bold text-[#9AB4FF]">
-              <button
-                type="button"
-                onClick={() => scrollToSection('find-native-friend')}
-                className="hover:text-white cursor-pointer transition"
-              >
-                {t.findTutors}
-              </button>
-              <button
-                type="button"
-                onClick={onOpenBecomeTutorModal}
-                className="hover:text-white cursor-pointer transition"
-              >
-                {t.becomeTutor}
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenAuthModal('login')}
-                className="hover:text-white cursor-pointer transition"
-              >
-                {t.studentAccess}
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenAuthModal('login', 'admin')}
-                className="hover:text-white cursor-pointer transition flex items-center gap-1 text-[#F4CA54]"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>{isEn ? 'Admin Access' : 'Acesso Administrador'}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-8 pt-6 border-t border-[#1C4C96]/30 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#9AB4FF]/60">
-            <span>© 2026 It's Simple. All rights reserved.</span>
-            <span>English Learning by Living your Life • Powered by Gemini AI</span>
-          </div>
-        </div>
-      </footer>
+      {/* 7. Footer with Discreet Easter Egg on © */}
+      <Footer
+        currentAccount={currentAccount}
+        currentLanguage={currentLanguage}
+        t={t}
+        footerSlogan={footerSlogan}
+        scrollToSection={scrollToSection}
+        onOpenBecomeTutorModal={onOpenBecomeTutorModal}
+        onOpenAuthModal={onOpenAuthModal}
+        onOpenAdminApprovals={onOpenAdminApprovals}
+        onGoToDashboard={onGoToDashboard}
+      />
 
       {/* Interactive Presentation Modal: How It Works */}
       <HowItWorksModal

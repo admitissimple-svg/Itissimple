@@ -206,23 +206,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* 3. Right: Clean User Card & Logout Button */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {isAdmin && onOpenAdminApprovals && (
-              <button
-                type="button"
-                onClick={onOpenAdminApprovals}
-                className="relative hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300/80 text-amber-900 text-xs font-extrabold transition cursor-pointer shadow-2xs"
-                title={isEn ? 'Native Friend Approvals' : 'Aprovações de Amigos Nativos'}
-              >
-                <ShieldCheck className="w-4 h-4 text-amber-600" />
-                <span>{isEn ? 'Approvals' : 'Aprovações'}</span>
-                {pendingTutorsCount > 0 && (
-                  <span className="ml-0.5 px-1.5 py-0.2 bg-amber-600 text-white rounded-full text-[10px] font-black">
-                    {pendingTutorsCount}
-                  </span>
-                )}
-              </button>
-            )}
-
             {/* Discrete Minimalist Direct Messages & Notices Button */}
             <div className="relative" ref={messagesMenuRef}>
               <button

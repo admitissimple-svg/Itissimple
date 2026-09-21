@@ -629,24 +629,35 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
      (assignedSpotify as any).playlistTitle?.includes('Beginner'))
   );
 
+  const teacherOverride = persistedVideo?.teacherOverrideTrack || null;
+  const hasTeacherOverride = Boolean(teacherOverride?.url);
+
   const hasTeacherCustomAudio = Boolean(
-    assignedSpotify?.url &&
-    !isLegacyTemplateAudio &&
-    !isLevelMismatchedAudio &&
-    !isAssignedPlaylistMismatched &&
-    assignedSpotify.url.trim() !== '' &&
-    assignedSpotify.url.trim() !== (currentDayTrack?.url || dailySpotifyTrack.url).trim()
+    hasTeacherOverride || (
+      assignedSpotify?.url &&
+      !isLegacyTemplateAudio &&
+      !isLevelMismatchedAudio &&
+      !isAssignedPlaylistMismatched &&
+      assignedSpotify.url.trim() !== '' &&
+      assignedSpotify.url.trim() !== (currentDayTrack?.url || dailySpotifyTrack.url).trim()
+    )
   );
 
-  const effectiveTrackTitle = hasTeacherCustomAudio && assignedSpotify?.title && assignedSpotify.title !== 'Teacher Recommended Audio'
-    ? assignedSpotify.title
-    : (currentDayTrack?.title || (isEn ? 'Rest Day' : 'Dia de Descanso'));
-  const effectiveArtist = hasTeacherCustomAudio && assignedSpotify?.artistOrHost
-    ? assignedSpotify.artistOrHost
-    : (currentDayTrack?.artist || "It's simple");
-  const effectiveEmbedUrl = hasTeacherCustomAudio && assignedSpotify?.url
-    ? (getSpotifyEmbedUrl(assignedSpotify.url) || currentDayTrack?.embedUrl || '')
-    : (currentDayTrack?.embedUrl || '');
+  const effectiveTrackTitle = teacherOverride?.title
+    ? teacherOverride.title
+    : (hasTeacherCustomAudio && assignedSpotify?.title && assignedSpotify.title !== 'Teacher Recommended Audio'
+      ? assignedSpotify.title
+      : (currentDayTrack?.title || (isEn ? 'Rest Day' : 'Dia de Descanso')));
+  const effectiveArtist = (teacherOverride?.artist || teacherOverride?.artistOrHost)
+    ? (teacherOverride.artist || teacherOverride.artistOrHost)
+    : (hasTeacherCustomAudio && assignedSpotify?.artistOrHost
+      ? assignedSpotify.artistOrHost
+      : (currentDayTrack?.artist || "It's simple"));
+  const effectiveEmbedUrl = teacherOverride?.url
+    ? (teacherOverride.embedUrl || getSpotifyEmbedUrl(teacherOverride.url))
+    : (hasTeacherCustomAudio && assignedSpotify?.url
+      ? (getSpotifyEmbedUrl(assignedSpotify.url) || currentDayTrack?.embedUrl || '')
+      : (currentDayTrack?.embedUrl || ''));
 
   // Strict daily exclusivity: Guarantee 1 single track embed (never full playlist)
   const sanitizedEmbedUrl = useMemo(() => {
@@ -659,14 +670,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     }
     return effectiveEmbedUrl;
   }, [effectiveEmbedUrl, currentDayTrack]);
-  const effectiveDirectUrl = hasTeacherCustomAudio && assignedSpotify?.url
-    ? getSpotifyDirectUrl(assignedSpotify.url)
-    : (currentDayTrack?.url || levelPlaylistConfig.playlistUrl);
-  const effectiveTeacherTip = hasTeacherCustomAudio && assignedSpotify?.instructions
-    ? assignedSpotify.instructions
-    : (currentDayTrack
-        ? (isEn ? currentDayTrack.teacherTipEn : currentDayTrack.teacherTipPt)
-        : (isEn ? 'Rest day in your weekly study plan.' : 'Dia de descanso no seu plano de estudos.'));
+  const effectiveDirectUrl = teacherOverride?.url
+    ? getSpotifyDirectUrl(teacherOverride.url)
+    : (hasTeacherCustomAudio && assignedSpotify?.url
+      ? getSpotifyDirectUrl(assignedSpotify.url)
+      : (currentDayTrack?.url || levelPlaylistConfig.playlistUrl));
+  const effectiveCoverUrl = teacherOverride?.coverUrl || teacherOverride?.imageUrl || currentDayTrack?.imageUrl || (currentDayTrack?.albumImages && currentDayTrack.albumImages[0]?.url) || '';
+  const effectiveTeacherTip = teacherOverride?.instructions
+    ? teacherOverride.instructions
+    : (hasTeacherCustomAudio && assignedSpotify?.instructions
+      ? assignedSpotify.instructions
+      : (currentDayTrack
+          ? (isEn ? currentDayTrack.teacherTipEn : currentDayTrack.teacherTipPt)
+          : (isEn ? 'Rest day in your weekly study plan.' : 'Dia de descanso no seu plano de estudos.')));
   const currentDaySeqIndex = currentStudyDayIndex >= 0 ? currentStudyDayIndex + 1 : 1;
 
   // Real-time Firestore synchronization of the student's daily Spotify track (student -> Native Friend / Teacher)
@@ -675,10 +691,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   const currentSpotifyTrackForSync: CurrentSpotifyTrack | null = useMemo(() => {
     if (isRestDay || !currentDayTrack) return null;
-    const tId = (currentDayTrack as any).trackId || (currentDayTrack as any).id || 'spotify-track';
+    const tId = teacherOverride?.id || teacherOverride?.trackId || (currentDayTrack as any).trackId || (currentDayTrack as any).id || 'spotify-track';
     const tTitle = effectiveTrackTitle || currentDayTrack.title || 'Daily Track';
     const tArtist = effectiveArtist || currentDayTrack.artist || "It's simple";
-    const tCover = currentDayTrack.imageUrl || (currentDayTrack.albumImages && currentDayTrack.albumImages[0]?.url) || '';
+    const tCover = effectiveCoverUrl;
     return {
       id: tId,
       title: tTitle,
@@ -688,7 +704,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       url: effectiveDirectUrl || currentDayTrack.url,
       level: normalizedLevel,
     };
-  }, [isRestDay, currentDayTrack, effectiveTrackTitle, effectiveArtist, selectedDay, effectiveDirectUrl, normalizedLevel]);
+  }, [isRestDay, currentDayTrack, teacherOverride, effectiveTrackTitle, effectiveArtist, effectiveCoverUrl, selectedDay, effectiveDirectUrl, normalizedLevel]);
 
   const { teacherFeedback } = useStudentSpotifySync({
     studentUid: studentSyncUid,
@@ -2113,6 +2129,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   🎵 {effectiveTrackTitle} • {effectiveArtist}
                 </span>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {teacherOverride && (
+                    <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5">
+                      <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                      <span>{isEn ? 'Teacher Pick' : 'Recomendação'}</span>
+                    </span>
+                  )}
                   <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
                     {isEn
                       ? `Track ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`
@@ -2129,13 +2151,25 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   </a>
                 </div>
               </div>
+
+              {teacherOverride?.instructions && (
+                <div className="p-2 rounded-xl bg-emerald-50/90 border border-emerald-300 text-xs text-emerald-950 flex items-start gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] leading-relaxed">
+                    <span className="font-bold text-emerald-900 mr-1">
+                      {teacherOverride.teacherName ? `${teacherOverride.teacherName}:` : (isEn ? 'Teacher Note:' : 'Dica do Professor:')}
+                    </span>
+                    <span>{teacherOverride.instructions}</span>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50/60 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                {currentDayTrack.imageUrl ? (
+                {effectiveCoverUrl ? (
                   <img
-                    src={currentDayTrack.imageUrl}
+                    src={effectiveCoverUrl}
                     alt={effectiveTrackTitle}
                     className="w-10 h-10 rounded-xl object-cover shrink-0 shadow-xs border border-emerald-300"
                     referrerPolicy="no-referrer"
@@ -2147,9 +2181,16 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 uppercase">
-                      {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
-                    </span>
+                    {teacherOverride ? (
+                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-600 text-white uppercase flex items-center gap-0.5">
+                        <Sparkles className="w-2.5 h-2.5" />
+                        <span>{isEn ? 'Teacher Pick' : 'Recomendação'}</span>
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 uppercase">
+                        {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
+                      </span>
+                    )}
                     <span className="text-[9px] text-emerald-700 font-semibold">
                       {isEn
                         ? `Track ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`

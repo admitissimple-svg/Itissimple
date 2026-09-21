@@ -203,24 +203,23 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-8 shadow-2xl border border-[#607EC9]/30 relative my-8 animate-in fade-in zoom-in duration-200">
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 hover:text-slate-900 transition cursor-pointer z-10"
-          aria-label="Close"
-          title="Fechar (Esc)"
-        >
-          <X className="w-4 h-4" />
-        </button>
-
+      <div className="bg-white rounded-3xl max-w-2xl sm:max-w-3xl w-full shadow-2xl border border-[#607EC9]/30 relative my-auto max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
         {isSubmitted ? (
-          <div className="text-center py-8 space-y-4">
+          <div className="p-6 sm:p-8 flex-1 overflow-y-auto custom-scrollbar flex flex-col items-center justify-center text-center space-y-4 relative">
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 hover:text-slate-900 transition cursor-pointer z-10"
+              aria-label="Close"
+              title="Fechar (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
             <div className="w-16 h-16 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
               <CheckCircle2 className="w-9 h-9" />
             </div>
@@ -252,64 +251,78 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
             </div>
           </div>
         ) : (
-          <div>
-            {/* Header - 100% in English */}
-            <div className="space-y-1 mb-6">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#062863]/10 text-[#062863] text-xs font-bold">
-                <Sparkles className="w-3.5 h-3.5 text-[#1C4C96]" />
-                <span>Become a Native Friend</span>
+          <>
+            {/* Fixed Header */}
+            <div className="shrink-0 p-5 sm:p-6 pb-4 bg-white border-b border-slate-100 relative z-10">
+              <button
+                type="button"
+                onClick={onClose}
+                className="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-600 hover:text-slate-900 transition cursor-pointer z-20"
+                aria-label="Close"
+                title="Fechar (Esc)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              {/* Header Title & Description */}
+              <div className="space-y-1 mb-4 pr-10">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#062863]/10 text-[#062863] text-xs font-bold">
+                  <Sparkles className="w-3.5 h-3.5 text-[#1C4C96]" />
+                  <span>Become a Native Friend</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-[#000035] tracking-tight">
+                  Teach English by Living Life
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-600">
+                  No boring grammar textbooks. Connect with Brazilian learners through practical, real-world conversation about daily routines and habits.
+                </p>
               </div>
-              <h2 className="text-2xl sm:text-3xl font-black text-[#000035] tracking-tight">
-                Teach English by Living Life
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-600">
-                No boring grammar textbooks. Connect with Brazilian learners through practical, real-world conversation about daily routines and habits.
-              </p>
+
+              {/* Fixed Stepper Tabs */}
+              <div className="flex items-center justify-between text-xs font-bold pt-1">
+                <button
+                  type="button"
+                  onClick={() => setStep(1)}
+                  className={`flex items-center gap-1.5 pb-1 border-b-2 transition cursor-pointer ${
+                    step === 1
+                      ? 'border-[#1C4C96] text-[#000035]'
+                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">1</span>
+                  <span>Personal Info</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStep(2)}
+                  className={`flex items-center gap-1.5 pb-1 border-b-2 transition cursor-pointer ${
+                    step === 2
+                      ? 'border-[#1C4C96] text-[#000035]'
+                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">2</span>
+                  <span>Bio & Video Intro</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStep(3)}
+                  className={`flex items-center gap-1.5 pb-1 border-b-2 transition cursor-pointer ${
+                    step === 3
+                      ? 'border-[#1C4C96] text-[#000035]'
+                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">3</span>
+                  <span>Schedule & Pricing</span>
+                </button>
+              </div>
             </div>
 
-            {/* Stepper */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6 text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className={`flex items-center gap-1.5 pb-1 border-b-2 transition ${
-                  step === 1
-                    ? 'border-[#1C4C96] text-[#000035]'
-                    : 'border-transparent text-slate-400'
-                }`}
-              >
-                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">1</span>
-                <span>Personal Info</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStep(2)}
-                className={`flex items-center gap-1.5 pb-1 border-b-2 transition ${
-                  step === 2
-                    ? 'border-[#1C4C96] text-[#000035]'
-                    : 'border-transparent text-slate-400'
-                }`}
-              >
-                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">2</span>
-                <span>Bio & Video Intro</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStep(3)}
-                className={`flex items-center gap-1.5 pb-1 border-b-2 transition ${
-                  step === 3
-                    ? 'border-[#1C4C96] text-[#000035]'
-                    : 'border-transparent text-slate-400'
-                }`}
-              >
-                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center text-[10px]">3</span>
-                <span>Schedule & Pricing</span>
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Scrollable Form Body */}
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 custom-scrollbar scrollbar-thin">
               {errorMessage && (
                 <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2 animate-in fade-in">
                   <span className="font-bold shrink-0 text-sm leading-none">⚠️</span>
@@ -600,7 +613,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                 </div>
               )}
             </form>
-          </div>
+          </>
         )}
       </div>
     </div>
