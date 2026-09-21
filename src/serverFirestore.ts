@@ -90,6 +90,35 @@ export async function saveUserToFirestore(user: any): Promise<boolean> {
   }
 }
 
+export async function fetchUserFromFirestore(email: string, uid?: string): Promise<any | null> {
+  const db = getFirestoreDb();
+  if (!db || (!email && !uid)) return null;
+  try {
+    const cleanDocId = email ? email.toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '-') : '';
+    const fetchPromise = (async () => {
+      if (uid) {
+        const snapUid = await getDoc(doc(db, 'users', uid));
+        if (snapUid.exists()) return snapUid.data();
+      }
+      if (cleanDocId) {
+        const snapEmail = await getDoc(doc(db, 'users', cleanDocId));
+        if (snapEmail.exists()) return snapEmail.data();
+      }
+      return null;
+    })();
+    return await withTimeout(fetchPromise, 1500);
+  } catch (err) {
+    console.warn('Firestore fetchUser error:', err);
+    return null;
+  }
+}
+
+export async function checkUserExistsInFirestore(email: string): Promise<boolean> {
+  if (!email) return false;
+  const user = await fetchUserFromFirestore(email);
+  return Boolean(user);
+}
+
 /**
  * Dedicated persistence for Student Media Assignments (YouTube & Spotify) directly linked to UID.
  * Guarantees that even across reloads, disconnects, or new logins, the assigned content is retained in Firestore.

@@ -9,6 +9,8 @@ import {
   fetchAppStateFromFirestore,
   saveAppStateToFirestore,
   saveUserToFirestore,
+  fetchUserFromFirestore,
+  checkUserExistsInFirestore,
   getFirestoreDb,
   saveStudentAssignmentsByUid,
   fetchStudentAssignmentsByUid,
@@ -722,22 +724,140 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
-  const userProfile = db.userProfiles?.[cleanEmail];
-  const userPicture = (role === 'teacher' ? (tutorObj?.avatar || '') : '') || (userProfile?.picture || userProfile?.avatar || '');
 
   const account = {
     uid: authRecord?.uid || (tutorObj as any)?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`),
     email: cleanEmail,
     name: name.charAt(0).toUpperCase() + name.slice(1),
     role,
-    picture: userPicture,
+    picture: '',
   };
+
+  let studentProfile: any = null;
+  let studentObj: any = null;
+
+  if (role === 'student') {
+    studentObj = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    );
+
+    studentProfile = db.userProfiles?.[cleanEmail] || null;
+
+    // If profile is missing or lacks target settings, hydrate from Firestore
+    if (!studentProfile || studentProfile.weeklyStudyDaysTarget === undefined || !studentProfile.level) {
+      try {
+        const firestoreUser = await fetchUserFromFirestore(cleanEmail, account.uid);
+        const firestoreAssignments = await fetchStudentAssignmentsByUid(account.uid);
+        if (firestoreUser || firestoreAssignments) {
+          studentProfile = {
+            ...(studentProfile || {}),
+            ...(firestoreUser || {}),
+            ...(firestoreAssignments || {}),
+          };
+        }
+      } catch (err) {
+        console.warn('Could not hydrate student from Firestore:', err);
+      }
+    }
+
+    const defaultLevel = studentObj?.level || studentObj?.studentLevel || 'iniciante';
+    const targetDays =
+      studentProfile?.weeklyStudyDaysTarget ??
+      studentObj?.weeklyStudyDaysTarget ??
+      db.weeklyStudyDaysTargets?.[cleanEmail] ??
+      (account.uid ? db.weeklyStudyDaysTargets?.[account.uid] : undefined) ??
+      7;
+
+    const studyDays =
+      studentProfile?.weeklyStudyDays ??
+      studentObj?.weeklyStudyDays ??
+      db.weeklyStudyDays?.[cleanEmail] ??
+      (account.uid ? db.weeklyStudyDays?.[account.uid] : undefined) ??
+      ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+    if (!studentProfile) {
+      studentProfile = {
+        id: account.uid,
+        name: account.name,
+        email: cleanEmail,
+        level: defaultLevel,
+        userLevel: defaultLevel,
+        englishLevel: defaultLevel,
+        learningGoal: studentObj?.goal || studentObj?.learningGoal || 'English for everyday life & work',
+        routineVideoTime: studentObj?.routineVideoTime || '09:00',
+        routineAudioTime: studentObj?.routineAudioTime || '14:00',
+        dailyPhraseTime: studentObj?.dailyPhraseTime || '20:00',
+        weeklyStudyDaysTarget: targetDays,
+        weeklyStudyDays: studyDays,
+        selectedStudyDays: studyDays,
+        teacherEmail: studentObj?.teacherEmail || null,
+        teacherName: studentObj?.teacherName || null,
+        contractedLessons: studentObj?.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 1,
+        completedLessonsCount: studentObj?.completedLessonsCount ?? 0,
+        enrollmentStatus: studentObj?.status || 'active',
+        streakDays: 0,
+        streakCount: 0,
+        points: 0,
+        dailyGoalMinutes: 30,
+        completedTodayMinutes: 0,
+        createdAt: studentObj?.createdAt || new Date().toISOString(),
+      };
+    } else {
+      studentProfile = {
+        ...studentProfile,
+        id: studentProfile.id || account.uid,
+        name: studentProfile.name || account.name,
+        email: cleanEmail,
+        level: studentProfile.level || defaultLevel,
+        userLevel: studentProfile.userLevel || studentProfile.level || defaultLevel,
+        englishLevel: studentProfile.englishLevel || studentProfile.level || defaultLevel,
+        learningGoal: studentProfile.learningGoal || studentObj?.goal || studentObj?.learningGoal || 'English for everyday life & work',
+        weeklyStudyDaysTarget: targetDays,
+        weeklyStudyDays: studyDays,
+        selectedStudyDays: studyDays,
+        routineVideoTime: studentProfile.routineVideoTime || studentObj?.routineVideoTime || '09:00',
+        routineAudioTime: studentProfile.routineAudioTime || studentObj?.routineAudioTime || '14:00',
+        dailyPhraseTime: studentProfile.dailyPhraseTime || studentObj?.dailyPhraseTime || '20:00',
+        teacherEmail: studentProfile.teacherEmail ?? studentObj?.teacherEmail ?? null,
+        teacherName: studentProfile.teacherName ?? studentObj?.teacherName ?? null,
+        contractedLessons: studentProfile.contractedLessons ?? studentObj?.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 1,
+      };
+    }
+
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[cleanEmail] = studentProfile;
+
+    // Distribute Spotify and YouTube media if not yet assigned for this student
+    const normLevel = normalizeStudentLevel(studentProfile.level).key;
+    if (!db.studentSpotifyAssignments?.[cleanEmail] || !db.studentVideoAssignments?.[cleanEmail]) {
+      distributeWeeklySpotifyForStudent(db, cleanEmail, account.uid, normLevel, undefined, undefined, studyDays);
+      distributeWeeklyYouTubeForStudent(db, cleanEmail, account.uid, normLevel, undefined, undefined, studyDays);
+    }
+
+    account.picture = studentProfile.picture || studentProfile.avatar || studentObj?.picture || studentObj?.avatar || '';
+
+    // Persist to Firestore asynchronously
+    saveUserToFirestore(studentProfile).catch(() => {});
+    saveStudentAssignmentsByUid(account.uid, {
+      uid: account.uid,
+      email: cleanEmail,
+      level: studentProfile.level,
+      weeklyStudyDaysTarget: studentProfile.weeklyStudyDaysTarget,
+      weeklyStudyDays: studentProfile.weeklyStudyDays,
+      videoAssignments: db.studentVideoAssignments?.[cleanEmail] || [],
+      spotifyAssignments: db.studentSpotifyAssignments?.[cleanEmail] || [],
+    }).catch(() => {});
+
+    writeDb(db);
+  } else if (role === 'teacher') {
+    account.picture = tutorObj?.avatar || tutorObj?.picture || '';
+  }
 
   res.json({
     success: true,
     account,
-    profile: role === 'teacher' ? null : (db.userProfiles?.[cleanEmail] || null),
-    student: role === 'teacher' ? null : (db.students?.find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null),
+    profile: role === 'teacher' ? null : studentProfile,
+    student: role === 'teacher' ? null : (studentObj || (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null),
     tutor: tutorObj || null,
   });
 });
@@ -780,7 +900,7 @@ app.post('/api/auth/reset-password', (req, res) => {
   res.json({ success: true, message: 'Senha atualizada com sucesso!' });
 });
 
-app.get('/api/auth/check-user', (req, res) => {
+app.get('/api/auth/check-user', async (req, res) => {
   const db = readDb();
   const email = ((req.query.email as string) || '').toLowerCase().trim();
   const name = ((req.query.name as string) || '').toLowerCase().trim();
@@ -797,11 +917,44 @@ app.get('/api/auth/check-user', (req, res) => {
       (s: any) => (s.email || s.studentEmail || '').toLowerCase() === email
     );
     const inTutors = (db.tutorsList || []).find((t: any) => t.email?.toLowerCase() === email);
+    const inProfiles = db.userProfiles?.[email] || null;
 
-    if (inAuth || inStudents || inTutors) {
+    if (inAuth || inStudents || inTutors || inProfiles) {
       emailExists = true;
-      existingRole = inAuth?.role || (inTutors ? 'teacher' : inStudents ? 'student' : null);
-      existingUser = inAuth || inTutors || inStudents;
+      existingRole = inAuth?.role || (inTutors ? 'teacher' : inStudents ? 'student' : inProfiles?.role || null);
+      existingUser = inAuth || inTutors || inStudents || inProfiles;
+    } else {
+      // Check Firebase Firestore persistence directly
+      try {
+        const firestoreUser = await fetchUserFromFirestore(email);
+        if (firestoreUser) {
+          emailExists = true;
+          existingRole = firestoreUser.role || (firestoreUser.isTeacher ? 'teacher' : 'student');
+          existingUser = firestoreUser;
+          // Hydrate in memory database for ultra-fast subsequent checks
+          if (!db.authUsers) db.authUsers = {};
+          if (!db.authUsers[email]) {
+            db.authUsers[email] = {
+              uid: firestoreUser.uid || firestoreUser.id || `usr-${email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+              email,
+              name: firestoreUser.name || email.split('@')[0],
+              role: existingRole || 'student',
+              createdAt: firestoreUser.createdAt || new Date().toISOString(),
+            };
+          }
+          if (existingRole === 'student') {
+            if (!db.userProfiles) db.userProfiles = {};
+            if (!db.userProfiles[email]) db.userProfiles[email] = firestoreUser;
+            if (!db.students) db.students = [];
+            if (!db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === email)) {
+              db.students.push(firestoreUser);
+            }
+          }
+          writeDb(db);
+        }
+      } catch (err) {
+        console.warn('Error checking user in Firestore:', err);
+      }
     }
   }
 
@@ -1089,8 +1242,8 @@ const handleRegistration = async (req: any, res: any) => {
   // ----------------------------------------------------
   // 3. STUDENT REGISTRATION
   // ----------------------------------------------------
-  // 3.1 Check duplicate email across any platform table
-  const isExistingStudentEmail =
+  // 3.1 Check duplicate email across any platform table and Firebase Firestore
+  let isExistingStudentEmail =
     (db.students || []).some(
       (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
     ) ||
@@ -1098,9 +1251,20 @@ const handleRegistration = async (req: any, res: any) => {
     Boolean(db.userProfiles?.[cleanEmail]) ||
     (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
 
+  if (!isExistingStudentEmail && !req.body.isUpdate) {
+    try {
+      const existsInFirestore = await checkUserExistsInFirestore(cleanEmail);
+      if (existsInFirestore) {
+        isExistingStudentEmail = true;
+      }
+    } catch (err) {
+      console.warn('Firestore duplicate check error:', err);
+    }
+  }
+
   if (isExistingStudentEmail && !req.body.isUpdate) {
     return res.status(409).json({
-      error: 'Este e-mail já está cadastrado no sistema. Por favor, faça login com sua conta ou utilize outro e-mail para cadastrar um novo aluno.',
+      error: 'Este e-mail já possui uma conta cadastrada.',
       duplicateField: 'email',
       isExistingUser: true,
     });
@@ -1271,18 +1435,42 @@ const handleRegistration = async (req: any, res: any) => {
     };
   }
 
-  await writeDbSync(db);
-  await saveUserToFirestore({
+  writeDb(db);
+
+  // Persist 100% of student profile settings to Firestore in background
+  const fullProfileToSave = {
     uid: userUid,
+    id: userUid,
     email: cleanEmail,
     name: cleanName,
     role: 'student',
     picture: userAvatar,
     avatar: userAvatar,
     level,
+    userLevel: level,
+    englishLevel: level,
     learningGoal: goal,
+    routineVideoTime,
+    routineAudioTime,
+    dailyPhraseTime,
+    weeklyStudyDaysTarget: db.userProfiles[cleanEmail].weeklyStudyDaysTarget,
+    weeklyStudyDays: db.userProfiles[cleanEmail].weeklyStudyDays,
+    teacherEmail: initialTeacherEmail,
+    teacherName: initialTeacherName,
+    contractedLessons: initialContracted,
     createdAt: new Date().toISOString(),
-  });
+  };
+
+  saveUserToFirestore(fullProfileToSave).catch(() => {});
+  saveStudentAssignmentsByUid(userUid, {
+    uid: userUid,
+    email: cleanEmail,
+    level,
+    weeklyStudyDaysTarget: db.userProfiles[cleanEmail].weeklyStudyDaysTarget,
+    weeklyStudyDays: db.userProfiles[cleanEmail].weeklyStudyDays,
+    videoAssignments: db.studentVideoAssignments?.[cleanEmail] || [],
+    spotifyAssignments: db.studentSpotifyAssignments?.[cleanEmail] || [],
+  }).catch(() => {});
 
   const account = {
     uid: userUid,

@@ -71,6 +71,7 @@ import { PersonalDictionaryModal } from './components/PersonalDictionaryModal';
 import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
 import { OnboardingWizardModal, OnboardingResultData } from './components/OnboardingWizardModal';
+import { StartLivingEmailModal } from './components/StartLivingEmailModal';
 import { ShieldCheck, Edit3 } from 'lucide-react';
 
 const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfile => ({
@@ -260,6 +261,9 @@ export default function App() {
   const [subscriptionTargetTutor, setSubscriptionTargetTutor] = useState<NativeFriendTutor | null>(null);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
   const [isOnboardingCompleting, setIsOnboardingCompleting] = useState<boolean>(false);
+  const [isStartLivingModalOpen, setIsStartLivingModalOpen] = useState<boolean>(false);
+  const [onboardingInitialEmail, setOnboardingInitialEmail] = useState<string>('');
+  const [authInitialEmail, setAuthInitialEmail] = useState<string>('');
 
   const [activeLessonForAction, setActiveLessonForAction] = useState<LiveLesson | null>(null);
   const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('itissimple.school@gmail.com');
@@ -633,85 +637,45 @@ export default function App() {
     }
   };
 
+  // Handler: Start Living in English (Opens Email Verification Modal or redirects if student is logged in)
+  const handleStartLivingInEnglish = () => {
+    if (currentAccount?.role === 'student') {
+      setViewMode('dashboard');
+      return;
+    }
+    setIsStartLivingModalOpen(true);
+  };
+
   // Handler: Complete Onboarding Wizard (Multi-step Assistant)
   const handleCompleteOnboarding = async (data: OnboardingResultData) => {
-    // 0. Imediatamente fecha o modal e direciona para o dashboard antes das chamadas assíncronas
-    setIsOnboardingCompleting(true);
-    setIsOnboardingModalOpen(false);
-    setViewMode('dashboard');
-
     try {
-      let activeAccount = currentAccount;
-
       // 1. Student identity resolution
       const isRegisteringStudent = Boolean(data.studentAccount?.email && data.studentAccount.email.trim() !== '');
       const cleanEmail = isRegisteringStudent
         ? data.studentAccount!.email.trim().toLowerCase()
-        : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : (userProfile.email || activeAccount?.email || ''));
+        : (currentAccount?.role === 'student' && currentAccount.email ? currentAccount.email.trim().toLowerCase() : (userProfile.email || currentAccount?.email || ''));
       const effectiveName = isRegisteringStudent
         ? (data.studentAccount!.name || data.studentAccount!.email.split('@')[0]).trim()
-        : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile.name || activeAccount?.name || 'Aluno'));
+        : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile.name || currentAccount?.name || 'Aluno'));
       const studentUid = (currentAccount?.role === 'student' && currentAccount.email?.toLowerCase() === cleanEmail && currentAccount.uid)
         ? currentAccount.uid
         : (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id ? userProfile.id : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
 
       const selectedLevel = (data.englishLevel || data.userLevel || data.level || EnglishLevel.BEGINNER) as EnglishLevel;
 
-      // 2. Perform student registration/activation on server and set local session
-      if (isRegisteringStudent) {
-        try {
-          const signupRes = await fetch('/api/auth/signup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: effectiveName,
-              email: cleanEmail,
-              password: data.studentAccount?.password || '123456',
-              role: 'student',
-              level: selectedLevel,
-              englishLevel: selectedLevel,
-              userLevel: selectedLevel,
-              learningGoal: data.learningGoal,
-              weeklyPracticeDays: data.weeklyStudyDaysTarget,
-              routineActivities: data.weeklyStudyDays,
-              routineVideoTime: data.routineVideoTime,
-              routineAudioTime: data.routineAudioTime,
-              dailyPhraseTime: data.dailyPhraseTime,
-              selectedTutorEmail: data.selectedTutor?.email,
-              selectedTutorName: data.selectedTutor?.name,
-              teacherEmail: data.selectedTutor?.email,
-              teacherName: data.selectedTutor?.name,
-              contractedLessons: 1,
-            }),
-          });
+      const newStudentAccount: GoogleAccount = {
+        uid: studentUid,
+        id: studentUid,
+        name: effectiveName,
+        email: cleanEmail,
+        role: 'student',
+        picture: '',
+        avatar: '',
+      };
 
-          if (signupRes.ok) {
-            const authData = await signupRes.json();
-            if (authData.account) {
-              activeAccount = authData.account;
-            }
-          }
-        } catch (authErr) {
-          console.warn('Signup during onboarding failed:', authErr);
-        }
-
-        const newStudentAccount: GoogleAccount = {
-          uid: studentUid,
-          id: studentUid,
-          name: effectiveName,
-          email: cleanEmail,
-          role: 'student',
-          picture: '',
-          avatar: '',
-        };
-        activeAccount = newStudentAccount;
-        setCurrentAccount(newStudentAccount);
-        localStorage.setItem('currentUserAccount', JSON.stringify(newStudentAccount));
-      }
-
-      // 3. Prepare user profile data with assigned Native Friend and trial lesson balance
+      // 2. Prepare user profile data with assigned Native Friend and trial lesson balance
       const updatedProfile: UserProfile = {
-        ...createDefaultStudentProfile(activeAccount),
+        ...createDefaultStudentProfile(newStudentAccount),
         id: studentUid,
         name: effectiveName,
         email: cleanEmail,
@@ -733,29 +697,16 @@ export default function App() {
         subscriptionType: 'trial',
       };
 
-      // 4. Persist to /api/user-profile
-      if (cleanEmail) {
-        await fetch('/api/user-profile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: cleanEmail,
-            profile: updatedProfile,
-          }),
-        }).catch(() => {});
-      }
+      // 3. INSTANT SYNCHRONOUS STATE BATCHING:
+      // Eliminate any delay between onboarding completion and student dashboard access
+      setIsOnboardingCompleting(false);
+      setIsOnboardingModalOpen(false);
+      setViewMode('dashboard');
+      setCurrentAccount(newStudentAccount);
+      setUserProfile(updatedProfile);
+      localStorage.setItem('currentUserAccount', JSON.stringify(newStudentAccount));
 
-      // 5. Update local state & pre-load Spotify tracks matching student level
-      setUserProfile((prev) => ({
-        ...prev,
-        ...updatedProfile,
-      }));
-
-      // Pre-fetch and cache Spotify playlist tracks for the selected student level (e.g. Intermediate -> 34E52K1dEJO5CzZRPkIR4I)
-      const normLevel = normalizeStudentLevel(selectedLevel);
-      fetchTracksForStudentLevel(normLevel).catch(() => {});
-
-      // Update contractedLessons map with trial lesson
+      // Update contractedLessons map with trial lesson immediately
       if (cleanEmail) {
         setContractedLessons((prev) => ({
           ...prev,
@@ -795,11 +746,11 @@ export default function App() {
         });
       }
 
-      // 6. Direct student to dashboard and close wizard
-      setIsOnboardingModalOpen(false);
-      setViewMode('dashboard');
+      // Pre-fetch and cache Spotify playlist tracks for the selected student level
+      const normLevel = normalizeStudentLevel(selectedLevel);
+      fetchTracksForStudentLevel(normLevel).catch(() => {});
 
-      // 7. Push welcome notification
+      // Push welcome notification immediately
       setNotifications((prev) => [
         {
           id: `onboarding-${Date.now()}`,
@@ -816,7 +767,7 @@ export default function App() {
         ...prev,
       ]);
 
-      // 8. Auto-open lesson schedule modal for this tutor with student info ready
+      // Auto-open lesson schedule modal for this tutor with student info ready (smooth transition)
       if (data.selectedTutor?.email) {
         setTeacherEmailForConfig(data.selectedTutor.email);
         setScheduleStudentInfo({
@@ -826,10 +777,56 @@ export default function App() {
         });
         setTimeout(() => {
           setIsScheduleModalOpen(true);
-        }, 400);
+        }, 350);
       }
+
+      // 4. NON-BLOCKING BACKGROUND ASYNC PERSISTENCE:
+      // Persist credentials & full student profile to backend & Firestore asynchronously
+      (async () => {
+        try {
+          if (isRegisteringStudent) {
+            await fetch('/api/auth/signup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: effectiveName,
+                email: cleanEmail,
+                password: data.studentAccount?.password || '123456',
+                role: 'student',
+                level: selectedLevel,
+                englishLevel: selectedLevel,
+                userLevel: selectedLevel,
+                learningGoal: data.learningGoal,
+                weeklyPracticeDays: data.weeklyStudyDaysTarget,
+                routineActivities: data.weeklyStudyDays,
+                routineVideoTime: data.routineVideoTime,
+                routineAudioTime: data.routineAudioTime,
+                dailyPhraseTime: data.dailyPhraseTime,
+                selectedTutorEmail: data.selectedTutor?.email,
+                selectedTutorName: data.selectedTutor?.name,
+                teacherEmail: data.selectedTutor?.email,
+                teacherName: data.selectedTutor?.name,
+                contractedLessons: 1,
+              }),
+            });
+          }
+
+          if (cleanEmail) {
+            await fetch('/api/user-profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: cleanEmail,
+                profile: updatedProfile,
+              }),
+            });
+          }
+        } catch (err) {
+          console.warn('Background persistence notice:', err);
+        }
+      })();
     } catch (err) {
-      console.warn('Error completing onboarding:', err);
+      console.warn('Onboarding completion error:', err);
       setIsOnboardingModalOpen(false);
       if (!currentAccount) {
         setViewMode('landing');
@@ -985,10 +982,24 @@ export default function App() {
         email: account.email,
         picture: cleanPic,
         avatar: cleanPic,
-        level: initialProfile?.level || EnglishLevel.BEGINNER,
+        level: initialProfile?.level || (initialProfile as any)?.englishLevel || (initialProfile as any)?.userLevel || EnglishLevel.BEGINNER,
+        userLevel: initialProfile?.level || (initialProfile as any)?.englishLevel || (initialProfile as any)?.userLevel || EnglishLevel.BEGINNER,
+        englishLevel: initialProfile?.level || (initialProfile as any)?.englishLevel || (initialProfile as any)?.userLevel || EnglishLevel.BEGINNER,
         learningGoal: initialProfile?.learningGoal || '',
+        weeklyStudyDaysTarget: (initialProfile as any)?.weeklyStudyDaysTarget ?? 7,
+        weeklyStudyDays: (initialProfile as any)?.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+        routineVideoTime: (initialProfile as any)?.routineVideoTime || '09:00',
+        routineAudioTime: (initialProfile as any)?.routineAudioTime || '14:00',
+        dailyPhraseTime: (initialProfile as any)?.dailyPhraseTime || '20:00',
+        teacherEmail: (initialProfile as any)?.teacherEmail || null,
+        teacherName: (initialProfile as any)?.teacherName || null,
+        contractedLessons: (initialProfile as any)?.contractedLessons ?? 1,
       };
       setUserProfile(freshProfile);
+
+      // Pre-fetch Spotify tracks matching student level
+      const normLevel = normalizeStudentLevel(freshProfile.level);
+      fetchTracksForStudentLevel(normLevel).catch(() => {});
     } else {
       setUserProfile(createDefaultStudentProfile(null));
     }
@@ -2628,7 +2639,7 @@ export default function App() {
           onOpenAdminApprovals={() => setIsAdminApprovalsOpen(true)}
           pendingApprovalsCount={pendingApprovalsCount}
           onLogout={handleLogout}
-          onStartLivingInEnglish={() => setIsOnboardingModalOpen(true)}
+          onStartLivingInEnglish={handleStartLivingInEnglish}
           onOpenAuthModal={(mode, role = 'student') => {
             setAuthModalMode(mode);
             setAuthModalRole(role);
@@ -3041,8 +3052,22 @@ export default function App() {
     onClose={() => setIsAuthModalOpen(false)}
     initialMode={authModalMode}
     initialRole={authModalRole}
+    initialEmail={authInitialEmail}
     currentLanguage={currentLanguage}
     onLoginSuccess={handleLoginSuccess}
+    onShowToast={(title, message, type) => {
+      setNotifications((prev) => [
+        {
+          id: `toast-${Date.now()}`,
+          title,
+          message,
+          type: type || 'warning',
+          timestamp: new Date().toISOString(),
+          read: false,
+        },
+        ...prev,
+      ]);
+    }}
   />
 
   <BecomeTutorModal
@@ -3248,9 +3273,65 @@ export default function App() {
         }}
       />
 
+      {/* Pre-onboarding Email Verification Modal */}
+      <StartLivingEmailModal
+        isOpen={isStartLivingModalOpen}
+        onClose={() => setIsStartLivingModalOpen(false)}
+        currentLanguage={currentLanguage}
+        onEmailVerified={(cleanEmail) => {
+          setIsStartLivingModalOpen(false);
+          setOnboardingInitialEmail(cleanEmail);
+          setIsOnboardingModalOpen(true);
+        }}
+        onEmailAlreadyExists={(existingEmail) => {
+          setIsStartLivingModalOpen(false);
+          setNotifications((prev) => [
+            {
+              id: `toast-${Date.now()}`,
+              title: currentLanguage === 'en' ? 'Account exists' : 'Conta já cadastrada',
+              message: 'Este e-mail já possui uma conta cadastrada.',
+              type: 'warning',
+              timestamp: new Date().toISOString(),
+              read: false,
+            },
+            ...prev,
+          ]);
+          setAuthInitialEmail(existingEmail);
+          setAuthModalMode('login');
+          setAuthModalRole('student');
+          setIsAuthModalOpen(true);
+        }}
+        onSwitchToLogin={(email) => {
+          setIsStartLivingModalOpen(false);
+          setAuthInitialEmail(email || '');
+          setAuthModalMode('login');
+          setAuthModalRole('student');
+          setIsAuthModalOpen(true);
+        }}
+      />
+
       {/* Multi-step Onboarding Assistant Wizard */}
       <OnboardingWizardModal
         isOpen={isOnboardingModalOpen}
+        initialEmail={onboardingInitialEmail}
+        onEmailAlreadyExists={(existingEmail) => {
+          setIsOnboardingModalOpen(false);
+          setNotifications((prev) => [
+            {
+              id: `toast-${Date.now()}`,
+              title: currentLanguage === 'en' ? 'Account exists' : 'Conta já cadastrada',
+              message: 'Este e-mail já possui uma conta cadastrada.',
+              type: 'warning',
+              timestamp: new Date().toISOString(),
+              read: false,
+            },
+            ...prev,
+          ]);
+          setAuthInitialEmail(existingEmail);
+          setAuthModalMode('login');
+          setAuthModalRole('student');
+          setIsAuthModalOpen(true);
+        }}
         onClose={() => {
           setIsOnboardingModalOpen(false);
           // If student gave up or closed onboarding before completion, or has no account, return to initial landing page

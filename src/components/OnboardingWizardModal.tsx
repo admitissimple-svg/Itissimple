@@ -65,7 +65,9 @@ export interface OnboardingWizardModalProps {
   tutorsList: NativeFriendTutor[];
   currentUserProfile?: UserProfile | null;
   currentAccount?: GoogleAccount | null;
-  onCompleteOnboarding: (onboardingData: OnboardingResultData) => Promise<void>;
+  initialEmail?: string;
+  onEmailAlreadyExists?: (email: string) => void;
+  onCompleteOnboarding: (onboardingData: OnboardingResultData) => void | Promise<void>;
   onOpenScheduleTrialLesson?: (tutor: NativeFriendTutor, studentInfo?: { name: string; email: string; uid?: string }) => void;
   onOpenStartNewWeek?: () => void;
 }
@@ -252,6 +254,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
   tutorsList,
   currentUserProfile,
   currentAccount,
+  initialEmail,
+  onEmailAlreadyExists,
   onCompleteOnboarding,
   onOpenScheduleTrialLesson,
   onOpenStartNewWeek,
@@ -333,6 +337,12 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
 
   // Reset or initialize on open ONLY when transitioning from closed to open
   useEffect(() => {
+    if (initialEmail && initialEmail.trim()) {
+      setStudentEmail(initialEmail.trim());
+    }
+  }, [initialEmail]);
+
+  useEffect(() => {
     if (isOpen) {
       if (!wasOpenRef.current) {
         wasOpenRef.current = true;
@@ -341,6 +351,10 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         setIsClosing(false);
         setErrorMessage(null);
         setIsSavedSuccessfully(false);
+
+        if (initialEmail && initialEmail.trim()) {
+          setStudentEmail(initialEmail.trim());
+        }
 
         if (currentUserProfile) {
           if (currentUserProfile.learningGoal) {
@@ -459,11 +473,33 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       return;
     }
 
-    // 1. Passa estado local de carregamento
+    const cleanEmail = (studentEmail.trim() || currentAccount?.email || '').toLowerCase();
+    const isNewRegistration = !currentAccount || currentAccount.role !== 'student' || cleanEmail !== (currentAccount.email || '').toLowerCase();
+
+    // Check if email already exists in Firebase Auth or Firestore
+    if (isNewRegistration && cleanEmail) {
+      setIsSubmitting(true);
+      try {
+        const checkRes = await fetch(`/api/auth/check-user?email=${encodeURIComponent(cleanEmail)}`);
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.emailExists) {
+            setIsSubmitting(false);
+            if (onEmailAlreadyExists) {
+              onEmailAlreadyExists(cleanEmail);
+            } else {
+              setErrorMessage(isEn ? 'This email is already registered.' : 'Este e-mail já possui uma conta cadastrada.');
+            }
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Check email error in onboarding:', err);
+      }
+    }
+
+    // Passa estado local de carregamento
     setIsSubmitting(true);
-    // 2. Fecha imediatamente o modal para evitar flashes de re-renderização antes da atualização global
-    setIsClosing(true);
-    onClose();
 
     try {
       await onCompleteOnboarding({
@@ -477,10 +513,10 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
         routineAudioTime,
         dailyPhraseTime,
         selectedTutor,
-        studentAccount: (!currentAccount || currentAccount.role !== 'student' || studentEmail !== currentAccount.email)
+        studentAccount: (!currentAccount || currentAccount.role !== 'student' || cleanEmail !== (currentAccount.email || '').toLowerCase())
           ? {
               name: studentName.trim() || currentAccount?.name || '',
-              email: (studentEmail.trim() || currentAccount?.email || '').toLowerCase(),
+              email: cleanEmail,
               password: studentPassword,
             }
           : {
@@ -492,7 +528,6 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
       setIsSavedSuccessfully(true);
     } catch (err: any) {
       console.warn('Failed to save onboarding configuration:', err);
-      setIsClosing(false);
       setErrorMessage(err?.message || (isEn ? 'Failed to save configuration.' : 'Erro ao salvar configuração do perfil.'));
     } finally {
       setIsSubmitting(false);

@@ -85,7 +85,9 @@ interface AuthModalProps {
   onClose: () => void;
   initialMode?: 'login' | 'signup';
   initialRole?: UserRole;
+  initialEmail?: string;
   currentLanguage: Language;
+  onShowToast?: (title: string, message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onLoginSuccess: (
     account: GoogleAccount,
     initialProfile?: Partial<UserProfile>,
@@ -220,7 +222,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   initialMode = 'login',
   initialRole = 'student',
+  initialEmail = '',
   currentLanguage,
+  onShowToast,
   onLoginSuccess,
 }) => {
   const isEn = currentLanguage === 'en';
@@ -228,7 +232,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
   const [role, setRole] = useState<UserRole>(initialRole);
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(initialEmail || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
@@ -286,11 +290,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.emailExists) {
-          const roleLabel = data.existingRole === 'teacher' ? 'Amigo Nativo' : data.existingRole === 'admin' ? 'Administrador' : 'aluno(a)';
           setEmailWarning(
             isEn
-              ? `This email (${clean}) is already registered in the system as ${roleLabel}. Please log in.`
-              : `Este e-mail (${clean}) já está cadastrado no sistema como ${roleLabel}. Por favor, faça login.`
+              ? 'This email is already registered. Please log in.'
+              : 'Este e-mail já possui uma conta cadastrada.'
           );
         } else {
           setEmailWarning('');
@@ -332,11 +335,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   useEffect(() => {
+    if (initialEmail && initialEmail.trim()) {
+      setEmail(initialEmail.trim());
+    }
+  }, [initialEmail]);
+
+  useEffect(() => {
     if (isOpen) {
       setMode(initialMode);
       setRole(initialRole);
       setErrorMsg('');
       setSuccessMsg('');
+      if (initialEmail && initialEmail.trim()) {
+        setEmail(initialEmail.trim());
+      }
 
       // Check if admin already exists to guide user properly
       fetch('/api/auth/admin-status')
@@ -428,8 +440,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
-    if (mode === 'signup' && (emailWarning || nameWarning)) {
-      setErrorMsg(emailWarning || nameWarning);
+    if (mode === 'signup' && emailWarning) {
+      const toastMsg = isEn ? 'This email is already registered.' : 'Este e-mail já possui uma conta cadastrada.';
+      if (onShowToast) {
+        onShowToast(isEn ? 'Account exists' : 'Conta já cadastrada', toastMsg, 'warning');
+      }
+      setMode('login');
+      setPassword('');
+      setErrorMsg(toastMsg);
+      return;
+    }
+
+    if (mode === 'signup' && nameWarning) {
+      setErrorMsg(nameWarning);
       return;
     }
 
@@ -522,14 +545,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         } else {
           const errData = await res.json().catch(() => ({}));
           if (res.status === 409) {
-            setErrorMsg(
-              errData.error ||
-                (isEn
-                  ? 'This email is already registered. Please log in.'
-                  : `Este e-mail (${cleanEmail}) já está cadastrado no sistema como ${
-                      role === 'teacher' ? 'Amigo Nativo' : role === 'admin' ? 'Administrador' : 'aluno(a)'
-                    }. Por favor, faça login ou use outro e-mail.`)
-            );
+            const toastMsg = isEn ? 'This email is already registered.' : 'Este e-mail já possui uma conta cadastrada.';
+            if (onShowToast) {
+              onShowToast(isEn ? 'Account exists' : 'Conta já cadastrada', toastMsg, 'warning');
+            }
+            setMode('login');
+            setPassword('');
+            setErrorMsg(toastMsg);
+            return;
           } else if (res.status === 403) {
             setErrorMsg(
               errData.error ||
