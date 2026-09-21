@@ -9,6 +9,8 @@ import {
   Check,
   Info,
 } from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
+import { getDb } from '../firebase';
 import { GoogleAccount, UserRole, Language } from '../types';
 import { googleSignIn } from '../utils/auth';
 
@@ -29,16 +31,16 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 }) => {
   const isEn = currentLanguage === 'en';
 
-  const [selectedRole, setSelectedRole] = useState<UserRole>(preferredRole);
+  const [selectedRole, setSelectedRole] = useState<UserRole>('student');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [noticeMsg, setNoticeMsg] = useState<string>('');
   const [isUnauthorizedDomain, setIsUnauthorizedDomain] = useState<boolean>(false);
   const [copiedDomain, setCopiedDomain] = useState<boolean>(false);
 
-  // Sync selectedRole when preferredRole changes
+  // Sync selectedRole when preferredRole changes (defaulting strictly to 'student')
   useEffect(() => {
-    if (preferredRole) setSelectedRole(preferredRole);
+    setSelectedRole(preferredRole === 'teacher' ? 'teacher' : preferredRole === 'admin' ? 'admin' : 'student');
   }, [preferredRole]);
 
   // Reset messages when opening modal
@@ -92,6 +94,40 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
         );
       }
 
+      // 1. Query user document in users/{uid} in Firestore to read field role
+      let firestoreUserDoc: any = null;
+      try {
+        const db = getDb();
+        const userDocRef = doc(db, 'users', user.uid);
+        const snap = await Promise.race([
+          getDoc(userDocRef),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+        ]);
+        if (snap && 'exists' in snap && snap.exists()) {
+          firestoreUserDoc = snap.data();
+        }
+      } catch (fsErr) {
+        console.warn('Firestore fetch notice during Google sign-in:', fsErr);
+      }
+
+      // 2. Strict role determination from Firestore document
+      const docRole = (firestoreUserDoc?.role || '').toLowerCase();
+      let verifiedRole: UserRole = 'student';
+
+      if (docRole === 'student') {
+        verifiedRole = 'student';
+      } else if (docRole === 'native_friend' || docRole === 'teacher') {
+        verifiedRole = 'teacher';
+      } else if (docRole === 'admin' || user.email.toLowerCase() === 'adm.itissimple@gmail.com') {
+        if (user.email.toLowerCase() === 'adm.itissimple@gmail.com' || docRole === 'admin') {
+          verifiedRole = 'admin';
+        } else {
+          verifiedRole = 'student';
+        }
+      } else {
+        verifiedRole = selectedRole === 'teacher' ? 'teacher' : (selectedRole === 'admin' && user.email.toLowerCase() === 'adm.itissimple@gmail.com' ? 'admin' : 'student');
+      }
+
       // Synchronize authenticated user with backend profile and persistence
       const res = await fetch('/api/auth/google', {
         method: 'POST',
@@ -100,7 +136,7 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
           uid: user.uid,
           email: user.email,
           name: user.displayName || user.email.split('@')[0],
-          role: selectedRole,
+          role: verifiedRole,
           picture: user.photoURL || undefined,
         }),
       });
@@ -114,7 +150,31 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       }
 
       const data = await res.json();
-      onLoginSuccess(data.account, data.profile);
+      const account: GoogleAccount = data.account;
+      account.role = verifiedRole;
+
+      // 3. Redirection
+      if (verifiedRole === 'student') {
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+          } catch {}
+        }
+      } else if (verifiedRole === 'teacher') {
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+          } catch {}
+        }
+      } else if (verifiedRole === 'admin') {
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'admin' }, '', '/admin');
+          } catch {}
+        }
+      }
+
+      onLoginSuccess(account, data.profile);
       onClose();
     } catch (err: any) {
       const errCode = err?.code || '';

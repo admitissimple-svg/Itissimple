@@ -21,6 +21,7 @@ import {
   UserRole,
   UserProfile,
   NativeFriendTutor,
+  EnglishLevel,
 } from '../types';
 import { BrandLogo } from './BrandLogo';
 import { GoogleSignInModal } from './GoogleSignInModal';
@@ -96,24 +97,24 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [showGoogleSignIn, setShowGoogleSignIn] = useState<boolean>(false);
 
-  // Initialize and reset on modal open
+  // Initialize and reset on modal open - strictly defaulting to 'student'
   useEffect(() => {
     if (isOpen) {
-      // Default to student unless explicitly opened for another role
-      setSelectedRole(initialRole || 'student');
+      // Mandatory requirement: Default role selected when opening modal MUST BE 'student'
+      setSelectedRole('student');
       setErrorMsg('');
       setIsLoading(false);
       if (initialEmail) {
         setEmail(initialEmail.trim());
       }
       // If window path is stuck on /admin from a previous session, clean it up when opening
-      if (typeof window !== 'undefined' && initialRole !== 'admin' && window.location.pathname === '/admin') {
+      if (typeof window !== 'undefined' && window.location.pathname === '/admin') {
         try {
           window.history.replaceState({}, '', '/');
         } catch {}
       }
     }
-  }, [isOpen, initialRole, initialEmail]);
+  }, [isOpen, initialEmail]);
 
   // Support ESC key
   useEffect(() => {
@@ -129,7 +130,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Handle role card selection: strictly updates visual selection without any auto-override
+  // Handle role card selection: strictly updates visual selection without any auto-override to 'admin'
   const handleRoleSelect = (role: UserRole) => {
     setSelectedRole(role);
     setErrorMsg('');
@@ -158,33 +159,53 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       let firebaseUid: string | undefined;
       try {
         const authResult = await firebaseSignInWithEmail(cleanEmail, password);
-        firebaseUid = authResult.user.uid;
+        firebaseUid = authResult?.user?.uid;
       } catch (authErr: any) {
         console.log('Firebase Auth sign-in notice:', authErr?.code || authErr?.message);
       }
 
-      // 2. Query user document in users/{uid} in Firestore to read field role ('student', 'native_friend'/'teacher', or 'admin')
+      // 2. Query user document in users/{uid} in Firestore to read field role ('student', 'native_friend', or 'admin')
       let firestoreUserDoc: any = null;
+      const db = getDb();
+
       if (firebaseUid) {
         try {
-          const db = getDb();
           const userDocRef = doc(db, 'users', firebaseUid);
-          // 3-second safe timeout to prevent infinite freezes
           const snap = await Promise.race([
             getDoc(userDocRef),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
           ]);
           if (snap && 'exists' in snap && snap.exists()) {
             firestoreUserDoc = snap.data();
           }
         } catch (fsErr) {
-          console.warn('Firestore user fetch notice:', fsErr);
+          console.warn('Firestore user fetch by UID notice in LoginModal:', fsErr);
         }
       }
 
-      // 3. Fallback or primary sync with backend API
+      // Fallback query by sanitized email ID if not found by UID
+      if (!firestoreUserDoc && cleanEmail) {
+        try {
+          const cleanDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+          const emailDocRef = doc(db, 'users', cleanDocId);
+          const snapEmail = await Promise.race([
+            getDoc(emailDocRef),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+          ]);
+          if (snapEmail && 'exists' in snapEmail && snapEmail.exists()) {
+            firestoreUserDoc = snapEmail.data();
+          }
+        } catch (fsErr) {
+          console.warn('Firestore user fetch by email notice in LoginModal:', fsErr);
+        }
+      }
+
+      // 3. Fallback or primary sync with backend API with timeout protection
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      // Determine role to send to backend: prioritize Firestore document role or user selected role
+      const roleToSend = firestoreUserDoc?.role || selectedRole;
 
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -192,11 +213,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         body: JSON.stringify({
           email: cleanEmail,
           password,
-          role: firestoreUserDoc?.role || selectedRole,
-          uid: firebaseUid,
+          role: roleToSend,
+          uid: firebaseUid || firestoreUserDoc?.uid,
         }),
         signal: controller.signal,
-      }).catch((fetchErr) => {
+      }).catch(() => {
         clearTimeout(timeoutId);
         throw new Error(
           isEn
@@ -207,20 +228,21 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
       clearTimeout(timeoutId);
 
+      // Eliminate freeze: If user doc does not exist or login fails, close loader and show clear toast error
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         const userFriendlyError =
           errData.error ||
           (res.status === 401
             ? (isEn
-                ? 'Profile not found. Please register your account.'
+                ? 'Profile not found. Please register before logging in.'
                 : 'Perfil não encontrado. Por favor, cadastre-se.')
-            : (isEn ? 'Authentication failed.' : 'Falha na autenticação.'));
+            : (isEn ? 'Failed to authenticate credentials.' : 'Falha ao autenticar credenciais.'));
 
         setErrorMsg(userFriendlyError);
         if (onShowToast) {
           onShowToast(
-            isEn ? 'Account not found' : 'Conta não encontrada',
+            isEn ? 'Profile not found' : 'Perfil não encontrado',
             userFriendlyError,
             'warning'
           );
@@ -232,21 +254,37 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       const data = await res.json();
       const account: GoogleAccount = data.account;
 
-      // 4. Dynamic Verification and Redirection by UID / Document role
-      const rawRole = firestoreUserDoc?.role || account.role || selectedRole;
+      // 4. Dynamic Verification and Redirection by UID in Firestore
+      // Read role directly from Firestore document as the primary source of truth
+      const docRole = (firestoreUserDoc?.role || '').toLowerCase();
       let verifiedRole: UserRole = 'student';
 
-      if (rawRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
-        verifiedRole = 'admin';
-      } else if (rawRole === 'teacher' || rawRole === 'native_friend') {
-        verifiedRole = 'teacher';
-      } else {
+      if (docRole === 'student') {
         verifiedRole = 'student';
+      } else if (docRole === 'native_friend' || docRole === 'teacher') {
+        verifiedRole = 'teacher';
+      } else if (docRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
+        if (cleanEmail === 'adm.itissimple@gmail.com' || docRole === 'admin') {
+          verifiedRole = 'admin';
+        } else {
+          verifiedRole = 'student';
+        }
+      } else {
+        // When no Firestore doc is present, respect account role or selectedRole without forcing admin
+        if (account.role === 'admin' && cleanEmail === 'adm.itissimple@gmail.com') {
+          verifiedRole = 'admin';
+        } else if (account.role === 'teacher' || selectedRole === 'teacher') {
+          verifiedRole = 'teacher';
+        } else {
+          verifiedRole = 'student';
+        }
       }
 
       account.role = verifiedRole;
 
-      // Load routines, level, study plan, and unique Native Friend UID
+      // 5. Redirection & Hydration:
+      // SE role === 'student': Redirecione INSTANTANEAMENTE para a Dashboard do Aluno (/dashboard).
+      // Carregue o estado da rotina, nível, plano de estudos e o vínculo com seu Amigo Nativo único (nativeFriendUID).
       let resolvedProfile: Partial<UserProfile> | undefined = data.profile;
       if (verifiedRole === 'student') {
         resolvedProfile = {
@@ -266,28 +304,38 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             null,
           teacherEmail: firestoreUserDoc?.teacherEmail || data.profile?.teacherEmail || null,
           teacherName: firestoreUserDoc?.teacherName || data.profile?.teacherName || null,
-          level: firestoreUserDoc?.level || data.profile?.level,
+          level: firestoreUserDoc?.level || data.profile?.level || EnglishLevel.BEGINNER,
           studyPlan: firestoreUserDoc?.studyPlan || firestoreUserDoc?.learningGoal || data.profile?.learningGoal || '',
           learningGoal: firestoreUserDoc?.learningGoal || data.profile?.learningGoal || '',
           weeklyStudyDaysTarget: firestoreUserDoc?.weeklyStudyDaysTarget ?? data.profile?.weeklyStudyDaysTarget ?? 7,
-          weeklyStudyDays: firestoreUserDoc?.weeklyStudyDays || data.profile?.weeklyStudyDays,
+          weeklyStudyDays: firestoreUserDoc?.weeklyStudyDays || data.profile?.weeklyStudyDays || [
+            'monday',
+            'tuesday',
+            'wednesday',
+            'thursday',
+            'friday',
+            'saturday',
+            'sunday',
+          ],
+          routineVideoTime: firestoreUserDoc?.routineVideoTime || data.profile?.routineVideoTime || '09:00',
+          routineAudioTime: firestoreUserDoc?.routineAudioTime || data.profile?.routineAudioTime || '14:00',
+          dailyPhraseTime: firestoreUserDoc?.dailyPhraseTime || data.profile?.dailyPhraseTime || '20:00',
         };
 
-        // Redirection: Student Dashboard
         if (typeof window !== 'undefined') {
           try {
             window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
           } catch {}
         }
       } else if (verifiedRole === 'teacher') {
-        // Redirection: Native Friend Panel
+        // SE role === 'native_friend': Redirecione para o Painel do Amigo Nativo (/teacher).
         if (typeof window !== 'undefined') {
           try {
             window.history.replaceState({ page: 'teacher' }, '', '/teacher');
           } catch {}
         }
       } else if (verifiedRole === 'admin') {
-        // Redirection: Administrator Panel
+        // SE role === 'admin': Redirecione para o Painel de Administração (/admin).
         if (typeof window !== 'undefined') {
           try {
             window.history.replaceState({ page: 'admin' }, '', '/admin');

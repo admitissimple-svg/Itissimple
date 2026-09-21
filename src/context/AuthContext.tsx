@@ -78,10 +78,15 @@ function withTimeout<T>(promise: Promise<T>, ms = 4500): Promise<T | null> {
     timer = setTimeout(() => resolve(null), ms);
   });
   return Promise.race([
-    promise.then((res) => {
-      clearTimeout(timer);
-      return res;
-    }),
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        return res;
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        throw err;
+      }),
     timeoutPromise,
   ]);
 }
@@ -223,24 +228,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await res.json();
       const account: GoogleAccount = data.account;
 
-      // Determine verified role from Firestore doc (source of truth) or backend verified account
+      // 4. Determine verified role strictly from Firestore doc (source of truth)
+      const docRole = (firestoreDoc?.role || '').toLowerCase();
       let verifiedRole: UserRole = 'student';
-      if (firestoreDoc?.role === 'admin' || account.role === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
-        verifiedRole = 'admin';
-      } else if (
-        firestoreDoc?.role === 'teacher' ||
-        firestoreDoc?.role === 'native_friend' ||
-        account.role === 'teacher'
-      ) {
-        verifiedRole = 'teacher';
-      } else {
+
+      if (docRole === 'student') {
         verifiedRole = 'student';
+      } else if (docRole === 'native_friend' || docRole === 'teacher') {
+        verifiedRole = 'teacher';
+      } else if (docRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
+        if (cleanEmail === 'adm.itissimple@gmail.com' || docRole === 'admin') {
+          verifiedRole = 'admin';
+        } else {
+          verifiedRole = 'student';
+        }
+      } else {
+        // Fallback to backend account or requested role without overriding to admin
+        if (account.role === 'admin' && cleanEmail === 'adm.itissimple@gmail.com') {
+          verifiedRole = 'admin';
+        } else if (account.role === 'teacher' || preferredRole === 'teacher') {
+          verifiedRole = 'teacher';
+        } else {
+          verifiedRole = 'student';
+        }
       }
 
       account.role = verifiedRole;
       setCurrentAccount(account);
 
-      // Hydrate student profile with nativeFriendUID
+      // Hydrate student profile with routine state, level, study plan, and unique Native Friend link (nativeFriendUID)
       let profile: Partial<UserProfile> | undefined = data.profile;
       if (verifiedRole === 'student') {
         profile = {
@@ -252,7 +268,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           teacherUid: firestoreDoc?.teacherUid || firestoreDoc?.nativeFriendUID || (data.profile as any)?.teacherUid || null,
           teacherEmail: firestoreDoc?.teacherEmail || data.profile?.teacherEmail || null,
           teacherName: firestoreDoc?.teacherName || data.profile?.teacherName || null,
-          level: firestoreDoc?.level as any || data.profile?.level || EnglishLevel.BEGINNER,
+          level: (firestoreDoc?.level as any) || data.profile?.level || EnglishLevel.BEGINNER,
           studyPlan: firestoreDoc?.studyPlan || firestoreDoc?.learningGoal || data.profile?.learningGoal || '',
           learningGoal: firestoreDoc?.learningGoal || data.profile?.learningGoal || '',
           weeklyStudyDaysTarget: firestoreDoc?.weeklyStudyDaysTarget ?? data.profile?.weeklyStudyDaysTarget ?? 7,
@@ -265,7 +281,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             'saturday',
             'sunday',
           ],
+          routineVideoTime: firestoreDoc?.routineVideoTime || data.profile?.routineVideoTime || '09:00',
+          routineAudioTime: firestoreDoc?.routineAudioTime || data.profile?.routineAudioTime || '14:00',
+          dailyPhraseTime: firestoreDoc?.dailyPhraseTime || data.profile?.dailyPhraseTime || '20:00',
         };
+
+        // Redirection INSTANTLY to Student Dashboard (/dashboard)
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+          } catch {}
+        }
+      } else if (verifiedRole === 'teacher') {
+        // Redirection to Native Friend Panel (/teacher)
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+          } catch {}
+        }
+      } else if (verifiedRole === 'admin') {
+        // Redirection to Administrator Panel (/admin)
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'admin' }, '', '/admin');
+          } catch {}
+        }
       }
 
       return {
@@ -308,13 +348,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Check Firestore doc by UID
       const firestoreDoc = await fetchFirestoreUser(user.uid, user.email);
 
-      let targetRole: UserRole = preferredRole || 'student';
-      if (firestoreDoc?.role === 'admin' || user.email.toLowerCase() === 'adm.itissimple@gmail.com') {
-        targetRole = 'admin';
-      } else if (firestoreDoc?.role === 'teacher' || firestoreDoc?.role === 'native_friend') {
-        targetRole = 'teacher';
-      } else if (firestoreDoc?.role === 'student') {
+      let targetRole: UserRole = 'student';
+      const docRole = (firestoreDoc?.role || '').toLowerCase();
+      if (docRole === 'student') {
         targetRole = 'student';
+      } else if (docRole === 'teacher' || docRole === 'native_friend') {
+        targetRole = 'teacher';
+      } else if (docRole === 'admin' || user.email.toLowerCase() === 'adm.itissimple@gmail.com') {
+        if (user.email.toLowerCase() === 'adm.itissimple@gmail.com' || docRole === 'admin') {
+          targetRole = 'admin';
+        } else {
+          targetRole = 'student';
+        }
+      } else {
+        targetRole = preferredRole === 'teacher' ? 'teacher' : (preferredRole === 'admin' && user.email.toLowerCase() === 'adm.itissimple@gmail.com' ? 'admin' : 'student');
       }
 
       // Synchronize with server backend
@@ -348,6 +395,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
       account.role = targetRole;
       setCurrentAccount(account);
+
+      // Strict Redirection by verified role
+      if (targetRole === 'student') {
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+          } catch {}
+        }
+      } else if (targetRole === 'teacher') {
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+          } catch {}
+        }
+      } else if (targetRole === 'admin') {
+        if (typeof window !== 'undefined') {
+          try {
+            window.history.replaceState({ page: 'admin' }, '', '/admin');
+          } catch {}
+        }
+      }
 
       return {
         success: true,

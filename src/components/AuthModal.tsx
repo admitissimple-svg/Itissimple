@@ -345,8 +345,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setMode(initialMode || 'login');
-      // Default selected role is always 'student' unless explicitly specified
-      setRole(initialRole || 'student');
+      // Mandatory requirement: Default role selected when opening modal MUST BE 'student'
+      setRole('student');
       setErrorMsg('');
       setSuccessMsg('');
       setIsLoading(false);
@@ -355,7 +355,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       // If URL is stuck on /admin from a previous session, clean it up
-      if (typeof window !== 'undefined' && initialRole !== 'admin' && window.location.pathname === '/admin') {
+      if (typeof window !== 'undefined' && window.location.pathname === '/admin') {
         try {
           window.history.replaceState({}, '', '/');
         } catch {}
@@ -632,15 +632,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           const account: GoogleAccount = data.account;
 
           // 4. Dynamic Verification and Redirection by UID / Document role
-          const rawRole = firestoreUserDoc?.role || account.role || role;
+          const docRole = (firestoreUserDoc?.role || '').toLowerCase();
           let verifiedRole: UserRole = 'student';
 
-          if (rawRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
-            verifiedRole = 'admin';
-          } else if (rawRole === 'teacher' || rawRole === 'native_friend') {
-            verifiedRole = 'teacher';
-          } else {
+          if (docRole === 'student') {
             verifiedRole = 'student';
+          } else if (docRole === 'native_friend' || docRole === 'teacher') {
+            verifiedRole = 'teacher';
+          } else if (docRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
+            if (cleanEmail === 'adm.itissimple@gmail.com' || docRole === 'admin') {
+              verifiedRole = 'admin';
+            } else {
+              verifiedRole = 'student';
+            }
+          } else {
+            if (account.role === 'admin' && cleanEmail === 'adm.itissimple@gmail.com') {
+              verifiedRole = 'admin';
+            } else if (account.role === 'teacher' || role === 'teacher') {
+              verifiedRole = 'teacher';
+            } else {
+              verifiedRole = 'student';
+            }
           }
 
           account.role = verifiedRole;

@@ -56,6 +56,7 @@ import { StudentWeeklyActivitySection } from './components/StudentWeeklyActivity
 
 // Modals
 import { AuthModal } from './components/AuthModal';
+import { LoginModal } from './components/LoginModal';
 import { BecomeTutorModal } from './components/BecomeTutorModal';
 import { WeeklyHomeworkModal } from './components/WeeklyHomeworkModal';
 import { LiveLessonScheduleModal } from './components/LiveLessonScheduleModal';
@@ -3126,28 +3127,56 @@ export default function App() {
       )}
 
   {/* 5. Modals & Dialogs (Accessible from anywhere) */}
-  <AuthModal
-    isOpen={isAuthModalOpen}
-    onClose={() => setIsAuthModalOpen(false)}
-    initialMode={authModalMode}
-    initialRole={authModalRole}
-    initialEmail={authInitialEmail}
-    currentLanguage={currentLanguage}
-    onLoginSuccess={handleLoginSuccess}
-    onShowToast={(title, message, type) => {
-      setNotifications((prev) => [
-        {
-          id: `toast-${Date.now()}`,
-          title,
-          message,
-          type: type || 'warning',
-          timestamp: new Date().toISOString(),
-          read: false,
-        },
-        ...prev,
-      ]);
-    }}
-  />
+  {isAuthModalOpen && authModalMode === 'login' ? (
+    <LoginModal
+      isOpen={isAuthModalOpen && authModalMode === 'login'}
+      onClose={() => setIsAuthModalOpen(false)}
+      initialRole={authModalRole}
+      initialEmail={authInitialEmail}
+      currentLanguage={currentLanguage}
+      onLoginSuccess={handleLoginSuccess}
+      onShowToast={(title, message, type) => {
+        setNotifications((prev) => [
+          {
+            id: `toast-${Date.now()}`,
+            title,
+            message,
+            type: type || 'warning',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+      }}
+      onSwitchToSignUp={(role) => {
+        setAuthModalMode('signup');
+        setAuthModalRole(role || 'student');
+      }}
+    />
+  ) : (
+    <AuthModal
+      isOpen={isAuthModalOpen}
+      onClose={() => setIsAuthModalOpen(false)}
+      initialMode={authModalMode}
+      initialRole={authModalRole}
+      initialEmail={authInitialEmail}
+      currentLanguage={currentLanguage}
+      onLoginSuccess={handleLoginSuccess}
+      onShowToast={(title, message, type) => {
+        setNotifications((prev) => [
+          {
+            id: `toast-${Date.now()}`,
+            title,
+            message,
+            type: type || 'warning',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+      }}
+    />
+  )}
 
   <BecomeTutorModal
     isOpen={isBecomeTutorModalOpen}
