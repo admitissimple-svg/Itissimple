@@ -4170,9 +4170,10 @@ app.post('/api/routines/current-routine', (req, res) => {
   const cleanUid = String(studentUid).toLowerCase().trim();
   const safeWeekId = weekId || 'week-1';
   const key = `${cleanUid}:${safeWeekId}`;
+  const weekDataKey = `${cleanUid}:weekData`;
 
   const existing = (db as any).studentCurrentRoutines[key] || {};
-  (db as any).studentCurrentRoutines[key] = {
+  const updatedDoc = {
     ...existing,
     studentUid: cleanUid,
     weekId: safeWeekId,
@@ -4183,8 +4184,14 @@ app.post('/api/routines/current-routine', (req, res) => {
     updatedAt: new Date().toISOString(),
   };
 
+  (db as any).studentCurrentRoutines[key] = updatedDoc;
+  (db as any).studentCurrentRoutines[weekDataKey] = {
+    ...((db as any).studentCurrentRoutines[weekDataKey] || {}),
+    ...updatedDoc,
+  };
+
   writeDb(db);
-  res.json({ success: true, routine: (db as any).studentCurrentRoutines[key] });
+  res.json({ success: true, routine: updatedDoc });
 });
 
 app.get('/api/routines/current-routine', (req, res) => {
@@ -4195,8 +4202,23 @@ app.get('/api/routines/current-routine', (req, res) => {
   }
 
   const db = readDb();
-  const key = `${studentUid}:${weekId}`;
-  const routine = (db as any).studentCurrentRoutines?.[key] || null;
+  const routinesMap = (db as any).studentCurrentRoutines || {};
+
+  // Check weekData first, then requested weekId
+  let routine = routinesMap[`${studentUid}:weekData`] || routinesMap[`${studentUid}:${weekId}`] || null;
+
+  // Fallback: if routine is missing or track is null, search all cycles for this student
+  if (!routine || !routine.currentSpotifyTrack) {
+    const studentKeys = Object.keys(routinesMap).filter((k) => k.startsWith(`${studentUid}:`));
+    const matching = studentKeys
+      .map((k) => routinesMap[k])
+      .filter((r) => r && r.currentSpotifyTrack)
+      .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+    if (matching.length > 0) {
+      routine = matching[0];
+    }
+  }
+
   res.json({ success: true, routine });
 });
 
@@ -4214,6 +4236,7 @@ app.post('/api/routines/current-routine/feedback', (req, res) => {
   const cleanUid = String(studentUid).toLowerCase().trim();
   const safeWeekId = weekId || 'week-1';
   const key = `${cleanUid}:${safeWeekId}`;
+  const weekDataKey = `${cleanUid}:weekData`;
 
   const existing = (db as any).studentCurrentRoutines[key] || {
     studentUid: cleanUid,
@@ -4225,6 +4248,16 @@ app.post('/api/routines/current-routine/feedback', (req, res) => {
   existing.updatedAt = new Date().toISOString();
 
   (db as any).studentCurrentRoutines[key] = existing;
+
+  const existingWeekData = (db as any).studentCurrentRoutines[weekDataKey] || {
+    studentUid: cleanUid,
+    weekId: safeWeekId,
+  };
+  if (!existingWeekData.teacherFeedback) existingWeekData.teacherFeedback = {};
+  existingWeekData.teacherFeedback[feedback.dayOfWeek] = feedback;
+  existingWeekData.updatedAt = new Date().toISOString();
+  (db as any).studentCurrentRoutines[weekDataKey] = existingWeekData;
+
   writeDb(db);
   res.json({ success: true, routine: existing });
 });

@@ -129,7 +129,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       map.set(email, { email, name });
     });
 
-    // Also include students with active scheduled lessons for this teacher
+    // Also include students with active scheduled lessons or trial lessons for this teacher
     (lessons || []).forEach((l) => {
       const email = (l.studentEmail || '').toLowerCase().trim();
       const name = l.studentName || email.split('@')[0];
@@ -143,7 +143,16 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
         if (!isMyLesson) return;
       }
 
-      if (email && !map.has(email) && l.status === 'scheduled') {
+      const isLessonScheduledOrTrial =
+        l.status === 'scheduled' ||
+        l.status === 'trial_lesson' ||
+        l.status === 'trial' ||
+        l.status === 'free_trial' ||
+        l.status === 'pending' ||
+        (l as any).isTrial ||
+        l.title?.toLowerCase().includes('trial');
+
+      if (email && !map.has(email) && isLessonScheduledOrTrial) {
         map.set(email, { email, name });
       }
     });
@@ -176,8 +185,28 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
         return false;
       }
     }
-    if (selectedStatusFilter !== 'all' && lesson.status !== selectedStatusFilter) {
-      return false;
+    if (selectedStatusFilter !== 'all') {
+      if (selectedStatusFilter === 'scheduled') {
+        const isScheduledOrTrial =
+          lesson.status === 'scheduled' ||
+          lesson.status === 'trial_lesson' ||
+          lesson.status === 'trial' ||
+          lesson.status === 'free_trial' ||
+          lesson.status === 'pending' ||
+          (lesson as any).isTrial ||
+          lesson.title?.toLowerCase().includes('trial');
+        if (!isScheduledOrTrial) return false;
+      } else if (selectedStatusFilter === 'trial_lesson') {
+        const isTrial =
+          lesson.status === 'trial_lesson' ||
+          lesson.status === 'trial' ||
+          lesson.status === 'free_trial' ||
+          (lesson as any).isTrial ||
+          lesson.title?.toLowerCase().includes('trial');
+        if (!isTrial) return false;
+      } else if (lesson.status !== selectedStatusFilter) {
+        return false;
+      }
     }
     return true;
   });
@@ -331,7 +360,8 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
             className="px-3 py-1.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
           >
             <option value="all">All Statuses</option>
-            <option value="scheduled">Scheduled / Active</option>
+            <option value="scheduled">Scheduled / Active / Trial</option>
+            <option value="trial_lesson">Trial Lessons (1st Session)</option>
             <option value="completed">Completed</option>
             <option value="not_completed">Not Completed</option>
             <option value="cancelled">Cancelled</option>
@@ -361,6 +391,12 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
               </tr>
             ) : (
               filteredLessons.map((lesson) => {
+                const isTrial =
+                  lesson.status === 'trial_lesson' ||
+                  lesson.status === 'trial' ||
+                  lesson.status === 'free_trial' ||
+                  (lesson as any).isTrial ||
+                  lesson.title?.toLowerCase().includes('trial');
                 const isScheduled = lesson.status === 'scheduled';
                 const isCompleted = lesson.status === 'completed';
                 const isNotCompleted = lesson.status === 'not_completed';
@@ -427,7 +463,13 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
 
                     {/* Status */}
                     <td className="p-3.5 whitespace-nowrap">
-                      {isScheduled && (
+                      {isTrial && !isCompleted && !isNotCompleted && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                          <Sparkles className="w-2.5 h-2.5 text-amber-600" />
+                          <span>Trial Lesson • Active</span>
+                        </span>
+                      )}
+                      {isScheduled && !isTrial && (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-[#9AB4FF]/25 text-[#062863] border border-[#9AB4FF]">
                           Scheduled
                         </span>

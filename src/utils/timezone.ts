@@ -1,3 +1,5 @@
+import { DayOfWeek } from '../types';
+
 export const DEFAULT_STUDENT_TIMEZONE = 'America/Sao_Paulo';
 export const DEFAULT_TEACHER_TIMEZONE = 'America/Toronto';
 
@@ -8,6 +10,42 @@ export function sanitizeTimeZone(tz?: string): string {
     return tz;
   } catch {
     return DEFAULT_STUDENT_TIMEZONE;
+  }
+}
+
+/**
+ * Accurately calculates the student's current day of the week based on their local timezone
+ * (defaults to America/Sao_Paulo) to prevent premature or incorrect Rest Day display.
+ */
+export function getStudentCurrentDayOfWeek(
+  timeZone: string = DEFAULT_STUDENT_TIMEZONE,
+  baseDate: Date = new Date()
+): DayOfWeek {
+  const tz = sanitizeTimeZone(timeZone);
+  try {
+    const dayStr = baseDate.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long' }).toLowerCase();
+    const map: Record<string, DayOfWeek> = {
+      monday: 'monday',
+      tuesday: 'tuesday',
+      wednesday: 'wednesday',
+      thursday: 'thursday',
+      friday: 'friday',
+      saturday: 'saturday',
+      sunday: 'sunday',
+    };
+    return map[dayStr] || 'monday';
+  } catch {
+    const dayNum = baseDate.getDay();
+    const mapNum: Record<number, DayOfWeek> = {
+      0: 'sunday',
+      1: 'monday',
+      2: 'tuesday',
+      3: 'wednesday',
+      4: 'thursday',
+      5: 'friday',
+      6: 'saturday',
+    };
+    return mapNum[dayNum] || 'monday';
   }
 }
 

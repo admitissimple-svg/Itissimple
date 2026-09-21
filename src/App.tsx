@@ -2917,12 +2917,15 @@ export default function App() {
                       students={studentsList}
                       selectedStudentEmail={selectedStudentFilter}
                       selectedStudentUid={
-                        studentsList.find(
-                          (s) =>
-                            s.email?.toLowerCase() === selectedStudentFilter.toLowerCase() ||
-                            s.uid === selectedStudentFilter ||
-                            s.id === selectedStudentFilter
-                        )?.uid
+                        (() => {
+                          const found = studentsList.find(
+                            (s) =>
+                              s.email?.toLowerCase() === selectedStudentFilter.toLowerCase() ||
+                              s.uid === selectedStudentFilter ||
+                              s.id === selectedStudentFilter
+                          );
+                          return found?.uid || found?.id || '';
+                        })()
                       }
                       currentAccount={currentAccount}
                       onTeacherSaveVideos={handleTeacherSaveVideos}

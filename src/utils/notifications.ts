@@ -1,4 +1,5 @@
 import { DayOfWeek, Language, RoutineItem } from '../types';
+import { getStudentCurrentDayOfWeek, DEFAULT_STUDENT_TIMEZONE } from './timezone';
 
 export const DAYS_OF_WEEK: DayOfWeek[] = [
   'monday',
@@ -20,23 +21,13 @@ export const WEEKDAY_DAYS: DayOfWeek[] = [
 
 export const WEEKEND_DAYS: DayOfWeek[] = ['saturday', 'sunday'];
 
-export function isWeekend(date: Date = new Date()): boolean {
-  const day = date.getDay();
-  return day === 0 || day === 6; // Sunday or Saturday
+export function isWeekend(date: Date = new Date(), timeZone: string = DEFAULT_STUDENT_TIMEZONE): boolean {
+  const day = getStudentCurrentDayOfWeek(timeZone, date);
+  return day === 'saturday' || day === 'sunday';
 }
 
-export function getTodayDayOfWeek(date: Date = new Date()): DayOfWeek {
-  const day = date.getDay();
-  const map: Record<number, DayOfWeek> = {
-    0: 'sunday',
-    1: 'monday',
-    2: 'tuesday',
-    3: 'wednesday',
-    4: 'thursday',
-    5: 'friday',
-    6: 'saturday',
-  };
-  return map[day] || 'monday';
+export function getTodayDayOfWeek(date: Date = new Date(), timeZone: string = DEFAULT_STUDENT_TIMEZONE): DayOfWeek {
+  return getStudentCurrentDayOfWeek(timeZone, date);
 }
 
 export function getDayLabel(day: DayOfWeek, lang: Language = 'pt'): string {

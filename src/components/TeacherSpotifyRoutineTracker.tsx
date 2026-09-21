@@ -16,11 +16,11 @@ import {
   Lightbulb,
 } from 'lucide-react';
 import { DayOfWeek } from '../types';
-import { useTeacherStudentRoutineSync } from '../hooks/useStudentSpotifySync';
+import { useNativeFriendStudentSync } from '../hooks/useNativeFriendStudentSync';
 import { getDayLabel } from '../utils/notifications';
 import { getSpotifyDirectUrl } from '../utils/spotify';
 
-interface TeacherSpotifyRoutineTrackerProps {
+export interface TeacherSpotifyRoutineTrackerProps {
   studentUid: string;
   studentEmail: string;
   studentName?: string;
@@ -28,7 +28,11 @@ interface TeacherSpotifyRoutineTrackerProps {
   teacherName?: string;
   teacherEmail?: string;
   weekId?: string;
+  weeklyCycle?: number;
+  studentTimezone?: string;
+  activeStudyDays?: DayOfWeek[];
   activeStudyDaysCount?: number;
+  studentLevel?: string;
 }
 
 export const TeacherSpotifyRoutineTracker: React.FC<TeacherSpotifyRoutineTrackerProps> = ({
@@ -38,33 +42,43 @@ export const TeacherSpotifyRoutineTracker: React.FC<TeacherSpotifyRoutineTracker
   teacherUid,
   teacherName,
   teacherEmail,
-  weekId = 'week-1',
+  weekId = 'week-5',
+  weeklyCycle = 5,
+  studentTimezone = 'America/Sao_Paulo',
+  activeStudyDays,
   activeStudyDaysCount,
+  studentLevel = 'intermediate',
 }) => {
   const {
     routineDoc,
     currentSpotifyTrack,
     teacherFeedback,
+    todayInStudentTz,
+    isRestDay,
     isLoading,
     isSavingFeedback,
     feedbackSuccess,
     sendFeedback,
-  } = useTeacherStudentRoutineSync({
+  } = useNativeFriendStudentSync({
     studentUid,
     studentEmail,
+    studentName,
     teacherUid,
     teacherName,
     teacherEmail,
     weekId,
+    weeklyCycle,
+    studentTimezone,
+    activeStudyDays,
+    activeStudyDaysCount,
+    studentLevel,
   });
 
   const [commentText, setCommentText] = useState<string>('');
   const [recommendationText, setRecommendationText] = useState<string>('');
 
-  const currentDay = currentSpotifyTrack?.dayOfWeek || 'monday';
-  const existingFeedback = currentSpotifyTrack
-    ? teacherFeedback?.[currentDay]
-    : null;
+  const currentDay = currentSpotifyTrack?.dayOfWeek || todayInStudentTz || 'monday';
+  const existingFeedback = teacherFeedback;
 
   // Pre-fill text inputs if feedback already exists for this track/day
   useEffect(() => {
@@ -82,12 +96,7 @@ export const TeacherSpotifyRoutineTracker: React.FC<TeacherSpotifyRoutineTracker
     if (!commentText.trim() && !recommendationText.trim()) return;
     if (!currentSpotifyTrack) return;
 
-    await sendFeedback({
-      dayOfWeek: currentSpotifyTrack.dayOfWeek,
-      trackId: currentSpotifyTrack.id,
-      comment: commentText.trim(),
-      recommendation: recommendationText.trim(),
-    });
+    await sendFeedback(commentText.trim(), recommendationText.trim());
   };
 
   const directUrl = currentSpotifyTrack?.url || (currentSpotifyTrack?.id ? `https://open.spotify.com/track/${currentSpotifyTrack.id}` : 'https://open.spotify.com');

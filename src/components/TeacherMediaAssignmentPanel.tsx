@@ -1423,7 +1423,18 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
           teacherUid={currentAccount?.uid || currentAccount?.id || currentAccount?.email}
           teacherName={currentAccount?.name || 'Native Friend'}
           teacherEmail={currentAccount?.email}
+          weekId={
+            studentProfile?.weeklyCycle
+              ? `week-${studentProfile.weeklyCycle}`
+              : selectedStudent?.weeklyCycle
+              ? `week-${selectedStudent.weeklyCycle}`
+              : 'week-5'
+          }
+          weeklyCycle={studentProfile?.weeklyCycle || selectedStudent?.weeklyCycle || 5}
+          studentTimezone={studentProfile?.timezone || selectedStudent?.timezone || 'America/Sao_Paulo'}
+          activeStudyDays={activeStudyDays}
           activeStudyDaysCount={activeWeekDays.length}
+          studentLevel={currentNormalizedLevel}
         />
       )}
 
