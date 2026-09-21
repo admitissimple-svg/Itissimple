@@ -7,7 +7,8 @@ interface StartLivingEmailModalProps {
   onClose: () => void;
   currentLanguage: Language;
   onEmailAlreadyExists: (email: string) => void;
-  onEmailProceed: (email: string) => void;
+  onEmailProceed?: (email: string) => void;
+  onEmailVerified?: (email: string) => void;
   onSwitchToLogin: (prefilledEmail?: string) => void;
 }
 
@@ -17,6 +18,7 @@ export const StartLivingEmailModal: React.FC<StartLivingEmailModalProps> = ({
   currentLanguage,
   onEmailAlreadyExists,
   onEmailProceed,
+  onEmailVerified,
   onSwitchToLogin,
 }) => {
   const [email, setEmail] = useState('');
@@ -26,6 +28,20 @@ export const StartLivingEmailModal: React.FC<StartLivingEmailModalProps> = ({
   if (!isOpen) return null;
 
   const isEn = currentLanguage === 'en';
+
+  const handleProceed = (cleanEmail: string) => {
+    setIsChecking(false);
+    try {
+      if (typeof onEmailProceed === 'function') {
+        onEmailProceed(cleanEmail);
+      }
+      if (typeof onEmailVerified === 'function') {
+        onEmailVerified(cleanEmail);
+      }
+    } catch (callbackErr) {
+      console.warn('Error during onEmailProceed callback:', callbackErr);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,24 +60,36 @@ export const StartLivingEmailModal: React.FC<StartLivingEmailModalProps> = ({
 
     setIsChecking(true);
     try {
-      const res = await fetch(`/api/auth/check-user?email=${encodeURIComponent(cleanEmail)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.emailExists) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const res = await fetch(`/api/auth/check-user?email=${encodeURIComponent(cleanEmail)}`, {
+        signal: controller.signal,
+      }).catch((fetchErr) => {
+        console.warn('Check user network notice:', fetchErr);
+        return null;
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res && res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.emailExists) {
           // Email already exists: trigger subtle toast and redirect to login
           setIsChecking(false);
-          onEmailAlreadyExists(cleanEmail);
+          if (typeof onEmailAlreadyExists === 'function') {
+            onEmailAlreadyExists(cleanEmail);
+          }
           return;
         }
       }
-      // Email is unique: proceed to onboarding wizard
-      setIsChecking(false);
-      onEmailProceed(cleanEmail);
+
+      // Email is unique or verification reached fallback: proceed to onboarding wizard
+      handleProceed(cleanEmail);
     } catch (err) {
-      console.warn('Error checking email existence:', err);
-      // In case of transient network issue, proceed to onboarding wizard where server will guard on submit
-      setIsChecking(false);
-      onEmailProceed(cleanEmail);
+      console.warn('Notice checking email existence:', err);
+      // Proceed to onboarding wizard where server will guard on submit
+      handleProceed(cleanEmail);
     }
   };
 

@@ -3278,6 +3278,11 @@ export default function App() {
         isOpen={isStartLivingModalOpen}
         onClose={() => setIsStartLivingModalOpen(false)}
         currentLanguage={currentLanguage}
+        onEmailProceed={(cleanEmail) => {
+          setIsStartLivingModalOpen(false);
+          setOnboardingInitialEmail(cleanEmail);
+          setIsOnboardingModalOpen(true);
+        }}
         onEmailVerified={(cleanEmail) => {
           setIsStartLivingModalOpen(false);
           setOnboardingInitialEmail(cleanEmail);
