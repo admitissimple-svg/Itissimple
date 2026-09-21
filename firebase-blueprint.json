@@ -11,9 +11,27 @@
         "role": { "type": "string", "enum": ["student", "teacher", "admin"], "description": "User role" },
         "level": { "type": "string", "description": "English level" },
         "picture": { "type": "string", "description": "Avatar photo URL" },
+        "watchedVideosHistory": { "type": "array", "description": "Global history of unique watched YouTube video IDs" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
       },
       "required": ["uid", "email", "role"]
+    },
+    "StudentDailyRoutine": {
+      "title": "StudentDailyRoutine",
+      "description": "Student daily routine video and topic selection",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string", "description": "YouTube video ID" },
+        "videoTitle": { "type": "string", "description": "Video title" },
+        "title": { "type": "string", "description": "Video title" },
+        "url": { "type": "string", "description": "YouTube video URL" },
+        "playlistId": { "type": "string", "description": "Selected playlist ID" },
+        "playlistTitle": { "type": "string", "description": "Selected playlist title" },
+        "dayOfWeek": { "type": "string", "description": "Day of week" },
+        "activityId": { "type": "string", "description": "Activity identifier" },
+        "isRepeatVideo": { "type": "boolean", "description": "Whether this video is repeating previous day" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
     },
     "Tutor": {
       "title": "Tutor",
@@ -168,6 +186,10 @@
     "/users/{userId}/currentRoutine/{weekId}": {
       "schema": "StudentCurrentRoutine",
       "description": "Weekly routine tracking with real-time Spotify track and teacher recommendations"
+    },
+    "/users/{userId}/routines/{dayOfWeek}": {
+      "schema": "StudentDailyRoutine",
+      "description": "Student daily routine video and topic selection persisted by day of week"
     },
     "/tutors/{tutorId}": {
       "schema": "Tutor",

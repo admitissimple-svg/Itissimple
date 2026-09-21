@@ -56,6 +56,7 @@ import {
   SpotifyDailyTrack,
 } from '../utils/spotify';
 import { useStudentSpotifySync } from '../hooks/useStudentSpotifySync';
+import { useRoutine } from '../hooks/useRoutine';
 import { CurrentSpotifyTrack } from '../utils/routineSync';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
@@ -263,6 +264,35 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   // Strictly neutral initial state: topics start as "" until user voluntarily selects
   const [selectedTopicByDay, setSelectedTopicByDay] = useState<Partial<Record<DayOfWeek, string>>>({});
 
+  const effectiveStudentUid = userProfile?.id || (userProfile as any)?.uid || userProfile?.email || '';
+  const {
+    routinesByDay: persistedRoutinesByDay,
+    watchedHistory,
+    saveVideoForDay,
+    markVideoAsWatched,
+    resetRepeatFlags,
+    selectNextUnwatchedVideo: pickNextUnwatched,
+  } = useRoutine(effectiveStudentUid, selectedDay);
+
+  // Sync saved topic and video from Firestore so refreshing the page preserves the selection
+  useEffect(() => {
+    if (persistedRoutinesByDay) {
+      setSelectedTopicByDay((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        Object.keys(persistedRoutinesByDay).forEach((dayKey) => {
+          const d = dayKey as DayOfWeek;
+          const persisted = persistedRoutinesByDay[d];
+          if (persisted && (persisted.videoId || persisted.playlistId) && !next[d]) {
+            next[d] = persisted.playlistId || (persisted.isRepeatVideo ? 'repeat_previous_video' : '');
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }
+  }, [persistedRoutinesByDay]);
+
   // Reset selected topics when starting a new week or weekly cycle updates
   useEffect(() => {
     setSelectedTopicByDay({});
@@ -466,24 +496,58 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
 
-  // Active YouTube video extraction: only considered assigned if user voluntarily picked a topic or repeat video for this day
-  const rawAssignedVideo: TeacherAssignedVideo | null =
-    (activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0
-      ? activeActivity.teacherVideos[0]
-      : null) ||
-    currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0)?.teacherVideos?.[0] ||
-    null;
+  const persistedVideo = persistedRoutinesByDay[selectedDay];
 
-  const userChosenTopicForDay = selectedTopicByDay[selectedDay] || '';
+  // Active YouTube video extraction: priority given to Firestore persisted video, then activeActivity, then day activities
+  const rawAssignedVideo: TeacherAssignedVideo | null =
+    (persistedVideo && (persistedVideo.videoId || persistedVideo.url))
+      ? ({
+          id: persistedVideo.activityId || `vid-${persistedVideo.videoId}`,
+          videoId: persistedVideo.videoId,
+          url: persistedVideo.url || `https://www.youtube.com/watch?v=${persistedVideo.videoId}`,
+          title: persistedVideo.videoTitle || persistedVideo.title || 'Daily Video Practice',
+          duration: persistedVideo.duration || '5-10 min',
+          instructions: persistedVideo.instructions || '',
+          addedAt: persistedVideo.updatedAt || new Date().toISOString(),
+          playlistId: persistedVideo.playlistId,
+          playlistTitle: persistedVideo.playlistTitle,
+          isRepeatVideo: persistedVideo.isRepeatVideo,
+        } as any)
+      : ((activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0
+          ? activeActivity.teacherVideos[0]
+          : null) ||
+        currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0)?.teacherVideos?.[0] ||
+        null);
+
+  const userChosenTopicForDay =
+    selectedTopicByDay[selectedDay] ||
+    persistedVideo?.playlistId ||
+    (persistedVideo?.isRepeatVideo ? 'repeat_previous_video' : '') ||
+    '';
+
   const isRepeatVideoToday =
+    persistedVideo?.isRepeatVideo === true ||
     (rawAssignedVideo as any)?.playlistId === 'repeat_previous_video' ||
     (rawAssignedVideo as any)?.playlistTitle === 'Repeat Previous Video' ||
     (rawAssignedVideo as any)?.playlistTitle === 'Repetir Vídeo Anterior' ||
+    (rawAssignedVideo as any)?.isRepeatVideo === true ||
     activeActivity?.activityName === 'Repeat Previous Video' ||
     activeActivity?.activityName === 'Repetir Vídeo Anterior' ||
+    (activeActivity as any)?.isRepeatVideo === true ||
     userChosenTopicForDay === 'repeat_previous_video';
 
-  const isTopicVoluntarilyChosen = Boolean(userChosenTopicForDay) || isRepeatVideoToday;
+  const hasPersistedOrAssignedVideo = Boolean(
+    (persistedVideo?.videoId && persistedVideo.videoId !== '') ||
+    (rawAssignedVideo?.videoId && rawAssignedVideo.videoId !== '') ||
+    (rawAssignedVideo?.url && rawAssignedVideo.url !== '') ||
+    (rawAssignedVideo as any)?.playlistId
+  );
+
+  const isTopicVoluntarilyChosen =
+    Boolean(userChosenTopicForDay) ||
+    isRepeatVideoToday ||
+    hasPersistedOrAssignedVideo;
+
   const assignedVideo: TeacherAssignedVideo | null = isTopicVoluntarilyChosen ? rawAssignedVideo : null;
 
   const isActiveActivityCustomSuggestion =
@@ -786,6 +850,21 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           onAssignVideoToActivity(activityId, repeatedWithMeta, selectedDay);
         }
 
+        if (effectiveStudentUid && repeatedWithMeta) {
+          saveVideoForDay(selectedDay, {
+            videoId: repeatedWithMeta.videoId,
+            videoTitle: repeatedWithMeta.title,
+            title: repeatedWithMeta.title,
+            url: repeatedWithMeta.url,
+            playlistId: 'repeat_previous_video',
+            playlistTitle: repeatedWithMeta.playlistTitle || (isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior'),
+            activityId,
+            isRepeatVideo: true,
+            instructions: repeatedWithMeta.instructions,
+            duration: repeatedWithMeta.duration,
+          }).catch((e) => console.warn('Firestore routine repeat save notice:', e));
+        }
+
         setPlaylistFeedback({
           activityId,
           type: 'success',
@@ -804,6 +883,22 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             playlistTitle: isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior',
           } as any;
           onAssignVideoToActivity(activityId, repeatedWithMeta, selectedDay);
+
+          if (effectiveStudentUid) {
+            saveVideoForDay(selectedDay, {
+              videoId: repeatedWithMeta.videoId,
+              videoTitle: repeatedWithMeta.title,
+              title: repeatedWithMeta.title,
+              url: repeatedWithMeta.url,
+              playlistId: 'repeat_previous_video',
+              playlistTitle: repeatedWithMeta.playlistTitle || (isEn ? 'Repeat Previous Video' : 'Repetir Vídeo Anterior'),
+              activityId,
+              isRepeatVideo: true,
+              instructions: repeatedWithMeta.instructions,
+              duration: repeatedWithMeta.duration,
+            }).catch((e) => console.warn('Firestore routine repeat save notice:', e));
+          }
+
           setPlaylistFeedback({
             activityId,
             type: 'success',
@@ -857,6 +952,27 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         if (onAssignVideoToActivity) {
           onAssignVideoToActivity(activityId, data.video, selectedDay);
         }
+
+        // Immediately save to Firestore users/{studentUID}/routines/{dayOfWeek}
+        if (effectiveStudentUid) {
+          saveVideoForDay(selectedDay, {
+            videoId: data.video.videoId,
+            videoTitle: data.video.title,
+            title: data.video.title,
+            url: data.video.url,
+            playlistId,
+            playlistTitle: data.playlistTitle || data.video.playlistTitle,
+            activityId,
+            isRepeatVideo: false,
+            instructions: data.video.instructions,
+            duration: data.video.duration,
+          }).catch((e) => console.warn('Firestore routine save notice:', e));
+
+          if (data.video.videoId) {
+            markVideoAsWatched(data.video.videoId).catch(() => {});
+          }
+        }
+
         onSelectActivity(activityId);
       } else {
         setPlaylistFeedback({
@@ -918,6 +1034,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
     if (onAssignVideoToActivity) {
       onAssignVideoToActivity(activityId, resetVideo, selectedDay);
+    }
+
+    if (effectiveStudentUid) {
+      saveVideoForDay(selectedDay, {
+        videoId: resetVideo.videoId,
+        videoTitle: resetVideo.title,
+        title: resetVideo.title,
+        url: resetVideo.url,
+        playlistId: '',
+        playlistTitle: resetVideo.playlistTitle,
+        activityId,
+        isRepeatVideo: false,
+      }).catch(() => {});
     }
 
     setCustomSuggestionActivities((prev) => ({ ...prev, [activityId]: false }));
@@ -1001,6 +1130,25 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     try {
       if (onAssignVideoToActivity) {
         onAssignVideoToActivity(activityId, customVideo, selectedDay);
+      }
+
+      if (effectiveStudentUid && customVideo) {
+        saveVideoForDay(selectedDay, {
+          videoId: customVideo.videoId,
+          videoTitle: customVideo.title,
+          title: customVideo.title,
+          url: customVideo.url,
+          playlistId: 'custom_suggestion',
+          playlistTitle: customVideo.playlistTitle,
+          activityId,
+          isRepeatVideo: false,
+          instructions: customVideo.instructions,
+          duration: customVideo.duration,
+        }).catch((e) => console.warn('Firestore custom suggestion save notice:', e));
+
+        if (customVideo.videoId) {
+          markVideoAsWatched(customVideo.videoId).catch(() => {});
+        }
       }
 
       setSuggestingUrlActivityId(null);
@@ -1375,14 +1523,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   act.activityName === 'Repetir Vídeo Anterior';
 
                 const dayTopicSelection = selectedTopicByDay[selectedDay] || '';
+                const persistedDay = persistedRoutinesByDay[selectedDay];
                 let currentPlaylistId = '';
 
-                if (isRepeatVideo) {
+                if (isRepeatVideo || persistedDay?.isRepeatVideo) {
                   currentPlaylistId = 'repeat_previous_video';
-                } else if (dayTopicSelection === 'custom_suggestion' || isCustomSuggestion) {
+                } else if (dayTopicSelection === 'custom_suggestion' || isCustomSuggestion || persistedDay?.playlistId === 'custom_suggestion') {
                   currentPlaylistId = 'custom_suggestion';
                 } else if (dayTopicSelection) {
                   currentPlaylistId = dayTopicSelection;
+                } else if (persistedDay?.playlistId) {
+                  currentPlaylistId = persistedDay.playlistId;
+                } else if ((assignedVid as any)?.playlistId) {
+                  currentPlaylistId = (assignedVid as any).playlistId;
                 } else {
                   // Strictly neutral initial "Choose Topic..." state ("" or null)
                   // The user must voluntarily pick a topic; never auto-match or inherit from previous day
@@ -2366,6 +2519,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             setSelectedTopicByDay({});
             setCustomSuggestionActivities({});
             setSuggestingUrlValues({});
+            setSavedTopicsBeforeRepeat({});
+            await resetRepeatFlags();
             await onStartNewWeek(studyDaysTarget, selectedDays);
           } finally {
             setIsStartingNewWeek(false);

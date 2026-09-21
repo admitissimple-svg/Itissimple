@@ -241,3 +241,77 @@ export async function fetchTeacherAvailabilityFromFirestore(uidOrEmail: string):
   }
 }
 
+/**
+ * Persists daily routine video selection to users/{uid}/routines/{dayOfWeek}
+ */
+export async function saveRoutineVideoSubcollection(
+  uid: string,
+  dayOfWeek: string,
+  data: any
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !uid || !dayOfWeek) return false;
+  try {
+    const sanitized = JSON.parse(JSON.stringify({
+      ...data,
+      dayOfWeek,
+      updatedAt: data.updatedAt || new Date().toISOString(),
+    }));
+    const savePromise = setDoc(doc(db, 'users', uid, 'routines', dayOfWeek), sanitized, { merge: true }).then(() => true);
+    const result = await withTimeout(savePromise, 2000);
+    return !!result;
+  } catch (err) {
+    console.warn('Firestore saveRoutineVideoSubcollection error:', err);
+    return false;
+  }
+}
+
+/**
+ * Resets isRepeatVideo: false for all days in users/{uid}/routines/{dayOfWeek}
+ */
+export async function resetRepeatFlagsSubcollection(
+  uid: string,
+  days: string[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !uid) return false;
+  try {
+    await Promise.all(
+      days.map((day) =>
+        setDoc(
+          doc(db, 'users', uid, 'routines', day),
+          { isRepeatVideo: false, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
+      )
+    );
+    return true;
+  } catch (err) {
+    console.warn('Firestore resetRepeatFlagsSubcollection error:', err);
+    return false;
+  }
+}
+
+/**
+ * Appends videoId to users/{uid} watchedVideosHistory array
+ */
+export async function addWatchedVideoToUserDoc(uid: string, videoId: string): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !uid || !videoId) return false;
+  try {
+    const userRef = doc(db, 'users', uid);
+    const snap = await getDoc(userRef);
+    const existing = snap.exists() ? (snap.data().watchedVideosHistory || snap.data().watchedVideos || []) : [];
+    const list = Array.isArray(existing) ? existing : [];
+    if (!list.includes(videoId)) {
+      list.push(videoId);
+      await setDoc(userRef, { watchedVideosHistory: list, updatedAt: new Date().toISOString() }, { merge: true });
+    }
+    return true;
+  } catch (err) {
+    console.warn('Firestore addWatchedVideoToUserDoc error:', err);
+    return false;
+  }
+}
+
+

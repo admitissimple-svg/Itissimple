@@ -16,6 +16,9 @@ import {
   fetchStudentAssignmentsByUid,
   saveTeacherAvailabilityToFirestore,
   fetchTeacherAvailabilityFromFirestore,
+  saveRoutineVideoSubcollection,
+  resetRepeatFlagsSubcollection,
+  addWatchedVideoToUserDoc,
 } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay } from './src/data/defaultRoutines';
@@ -4041,6 +4044,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
           dayActs.forEach((act: any) => {
             act.completed = false;
             act.completedToday = false;
+            act.isRepeatVideo = false;
+            act.repeatVideo = false;
             // Clear any attached video for the video activity so the day starts fresh
             const isVideoAct =
               act.id?.endsWith('1') ||
@@ -4052,6 +4057,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
               act.teacherVideos = [];
               act.activityName = 'Daily Video Practice';
               act.teacherNotes = '';
+              act.isRepeatVideo = false;
+              act.repeatVideo = false;
             }
           });
         }
@@ -4067,6 +4074,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
         dayActs.forEach((act: any) => {
           act.completed = false;
           act.completedToday = false;
+          act.isRepeatVideo = false;
+          act.repeatVideo = false;
           const isVideoAct =
             act.id?.endsWith('1') ||
             act.activityName?.toLowerCase().includes('vídeo') ||
@@ -4076,6 +4085,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
             act.teacherVideos = [];
             act.activityName = 'Daily Video Practice';
             act.teacherNotes = '';
+            act.isRepeatVideo = false;
+            act.repeatVideo = false;
           }
         });
       }
@@ -4102,11 +4113,19 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
       ...act,
       completed: false,
       completedToday: false,
+      isRepeatVideo: false,
+      repeatVideo: false,
     }));
   });
 
   // 5. Cloud Firestore synchronization linked to UID
   if (resolved.uid) {
+    resetRepeatFlagsSubcollection(resolved.uid).catch(() => {});
+    const watched = db.studentWatchedVideos[resolved.uid] || [];
+    watched.forEach((vidId: string) => {
+      addWatchedVideoToUserDoc(resolved.uid, vidId).catch(() => {});
+    });
+
     saveStudentAssignmentsByUid(resolved.uid, {
       uid: resolved.uid,
       email: resolved.email,
@@ -6069,6 +6088,25 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
   writeDb(db);
 
   if (uid) {
+    saveRoutineVideoSubcollection(uid, targetDay, {
+      videoId: validVidId,
+      videoTitle: assignedVideoObj.title,
+      title: assignedVideoObj.title,
+      url: cleanVideoUrl,
+      playlistId: assignedVideoObj.playlistId,
+      playlistTitle: assignedVideoObj.playlistTitle,
+      dayOfWeek: targetDay,
+      activityId: activityId || 'act-1',
+      isRepeatVideo: playlistId === 'repeat_previous_video',
+      instructions: assignedVideoObj.instructions || '',
+      duration: assignedVideoObj.duration || '5-10 min',
+      updatedAt: new Date().toISOString(),
+    }).catch((e) => console.warn('Firestore routine subcollection notice:', e));
+
+    if (validVidId && playlistId !== 'repeat_previous_video') {
+      addWatchedVideoToUserDoc(uid, validVidId).catch(() => {});
+    }
+
     saveStudentAssignmentsByUid(uid, {
       uid,
       email: cleanEmail,
@@ -6153,6 +6191,10 @@ app.post('/api/student-video-assignments/watch', (req, res) => {
   writeDb(db);
 
   const watchedList = (cleanEmail && db.studentWatchedVideos[cleanEmail]) || (uid && db.studentWatchedVideos[uid]) || [];
+  if (uid && cleanVidId) {
+    addWatchedVideoToUserDoc(uid, cleanVidId).catch(() => {});
+  }
+
   res.json({
     success: true,
     watchedCount: watchedList.length,
@@ -6160,6 +6202,33 @@ app.post('/api/student-video-assignments/watch', (req, res) => {
     studentEmail: cleanEmail,
     studentUid: uid,
   });
+});
+
+app.post('/api/routines/daily-video', (req, res) => {
+  const { studentUid, day, dayOfWeek, videoId, title, videoTitle, url, playlistId, playlistTitle, isRepeatVideo } = req.body;
+  const targetDay = dayOfWeek || day;
+  if (!studentUid || !targetDay) {
+    return res.status(400).json({ error: 'studentUid and day are required' });
+  }
+
+  const cleanVidId = extractServerYouTubeId(videoId || url);
+  saveRoutineVideoSubcollection(studentUid, targetDay, {
+    videoId: cleanVidId || videoId,
+    title: title || videoTitle || 'Daily Video Practice',
+    videoTitle: videoTitle || title || 'Daily Video Practice',
+    url: url || (cleanVidId ? `https://www.youtube.com/watch?v=${cleanVidId}` : ''),
+    playlistId: playlistId || '',
+    playlistTitle: playlistTitle || '',
+    dayOfWeek: targetDay,
+    isRepeatVideo: Boolean(isRepeatVideo),
+    updatedAt: new Date().toISOString(),
+  }).catch(() => {});
+
+  if (cleanVidId && !isRepeatVideo) {
+    addWatchedVideoToUserDoc(studentUid, cleanVidId).catch(() => {});
+  }
+
+  res.json({ success: true });
 });
 
 app.post('/api/routines/update-time', (req, res) => {

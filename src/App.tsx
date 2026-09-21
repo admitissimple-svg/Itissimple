@@ -32,6 +32,7 @@ import {
 import { getTodayDayOfWeek } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
 import { normalizeStudentLevel, fetchTracksForStudentLevel } from './utils/spotify';
+import { executeStartNewWeek } from './utils/StartNewWeekHandler';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -1135,28 +1136,25 @@ export default function App() {
     const chosenDays = selectedDays || userProfile?.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
     try {
-      const res = await fetch('/api/student-routines/start-new-week', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentEmail,
-          uid,
-          weeklyStudyDaysTarget: targetDays,
-          weeklyStudyDays: chosenDays,
-        }),
+      const result = await executeStartNewWeek({
+        studentEmail,
+        studentUid: uid,
+        weeklyStudyDaysTarget: targetDays,
+        weeklyStudyDays: chosenDays,
+        currentCycle: userProfile?.weeklyCycle || 1,
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.routines) {
+
+      if (result && result.success) {
+        if (result.routines) {
           const vidTime = userProfile?.routineVideoTime;
           const audTime = userProfile?.routineAudioTime;
-          const finalRoutines = applyProfileTimesToRoutines(data.routines, vidTime, audTime);
+          const finalRoutines = applyProfileTimesToRoutines(result.routines, vidTime, audTime);
           setRoutinesByDay(finalRoutines);
         }
 
-        const effectiveCycle = data.weeklyCycle !== undefined ? data.weeklyCycle : (userProfile?.weeklyCycle || 1) + 1;
-        const effectiveStudyTarget = data.weeklyStudyDaysTarget || targetDays;
-        const effectiveStudyDays = data.weeklyStudyDays || chosenDays;
+        const effectiveCycle = result.weeklyCycle;
+        const effectiveStudyTarget = result.weeklyStudyDaysTarget;
+        const effectiveStudyDays = result.weeklyStudyDays;
 
         setUserProfile((prev) => ({
           ...prev,
@@ -1182,8 +1180,8 @@ export default function App() {
         const today = getTodayDayOfWeek();
         const effectiveDay = chosenDays.includes(today) ? today : (chosenDays[0] || 'monday');
         setSelectedDay(effectiveDay);
-        if (data.routines && data.routines[effectiveDay] && data.routines[effectiveDay].length > 0) {
-          setSelectedActivityId(data.routines[effectiveDay][0].id);
+        if (result.routines && result.routines[effectiveDay] && result.routines[effectiveDay].length > 0) {
+          setSelectedActivityId(result.routines[effectiveDay][0].id);
         }
 
         setNotifications((prev) => [

@@ -267,3 +267,16 @@ export async function saveNativeFriendTrackFeedback(
     return false;
   }
 }
+
+// Re-export YouTube routine video persistence & global watched history functions
+export {
+  saveRoutineVideoToFirestore,
+  fetchRoutineVideoFromFirestore,
+  fetchAllRoutineVideosFromFirestore,
+  fetchWatchedVideosHistoryFromFirestore,
+  addVideoToWatchedHistoryInFirestore,
+  resetRepeatFlagsInFirestore,
+  selectNextUnwatchedVideo,
+} from '../hooks/useRoutine';
+export type { SavedRoutineVideo } from '../hooks/useRoutine';
+
