@@ -47,6 +47,7 @@ import {
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { defaultRoutinesByDay } from '../data/defaultRoutines';
 import { NativeFriendSpotifyTable } from './NativeFriendSpotifyTable';
+import { fetchWatchedVideosHistoryFromFirestore } from '../hooks/useRoutine';
 
 interface TeacherMediaAssignmentPanelProps {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
@@ -93,12 +94,12 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   // Find current active student info
   const selectedStudent = (students || []).find(
     (s) =>
-      (selectedStudentEmail && (s.email?.toLowerCase() === selectedStudentEmail.toLowerCase() || s.uid === selectedStudentEmail || s.id === selectedStudentEmail)) ||
-      (selectedStudentUid && (s.uid === selectedStudentUid || s.id === selectedStudentUid))
+      (selectedStudentUid && (s.uid === selectedStudentUid || s.id === selectedStudentUid)) ||
+      (selectedStudentEmail && (s.email?.toLowerCase() === selectedStudentEmail.toLowerCase() || s.uid === selectedStudentEmail || s.id === selectedStudentEmail))
   );
 
-  const activeStudentEmail = selectedStudent?.email || (selectedStudentEmail && selectedStudentEmail !== 'all' ? selectedStudentEmail : '') || students[0]?.email || '';
-  const activeStudentUid = selectedStudent?.uid || selectedStudent?.id || selectedStudentUid || '';
+  const activeStudentEmail = selectedStudent?.email || (selectedStudentEmail && selectedStudentEmail !== 'all' && selectedStudentEmail.includes('@') ? selectedStudentEmail : '') || '';
+  const activeStudentUid = selectedStudent?.uid || selectedStudent?.id || (selectedStudentUid && selectedStudentUid !== 'all' ? selectedStudentUid : '');
   const activeStudentName = selectedStudent?.name || (activeStudentEmail ? activeStudentEmail.split('@')[0] : 'Student');
 
   // Local state for student-specific routines loaded from backend
@@ -126,6 +127,32 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     saturday: '',
     sunday: '',
   });
+
+  // Immediately clear state when active student changes to prevent any cross-contamination
+  React.useEffect(() => {
+    setStudentWatched([]);
+    setStudentAssignments([]);
+    setStudentRoutines(null);
+    setDayPlaylistIds({});
+    setYoutubeUrls({
+      monday: '',
+      tuesday: '',
+      wednesday: '',
+      thursday: '',
+      friday: '',
+      saturday: '',
+      sunday: '',
+    });
+    setSpotifyUrls({
+      monday: '',
+      tuesday: '',
+      wednesday: '',
+      thursday: '',
+      friday: '',
+      saturday: '',
+      sunday: '',
+    });
+  }, [activeStudentUid, activeStudentEmail]);
 
   const [spotifyTypes, setSpotifyTypes] = useState<Record<DayOfWeek, 'podcast' | 'music'>>({
     monday: 'podcast',
@@ -278,6 +305,17 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
             weeklyStudyDays: selectedStudent.weeklyStudyDays,
             weeklyStudyDaysTarget: selectedStudent.weeklyStudyDaysTarget || selectedStudent.weeklyStudyDays.length,
           };
+        }
+      }
+
+      if (activeStudentUid) {
+        try {
+          const firestoreWatched = await fetchWatchedVideosHistoryFromFirestore(activeStudentUid);
+          if (firestoreWatched && firestoreWatched.length > 0) {
+            watchedList = Array.from(new Set([...watchedList, ...firestoreWatched]));
+          }
+        } catch (e) {
+          console.warn('Notice loading Firestore watched videos for student:', e);
         }
       }
 

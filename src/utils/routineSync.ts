@@ -50,6 +50,24 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.warn('Firestore Operation Notice:', JSON.stringify(errInfo));
 }
 
+/**
+ * Executes a Promise with a strict timeout to prevent Firestore operations
+ * from hanging indefinitely in offline or slow-network environments.
+ */
+export async function withFirestoreTimeout<T>(
+  promise: Promise<T>,
+  ms = 3500,
+  fallback: T
+): Promise<T> {
+  let timer: any;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 export interface CurrentSpotifyTrack {
   id: string;
   title: string;

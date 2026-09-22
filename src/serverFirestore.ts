@@ -387,16 +387,36 @@ export async function resetRepeatFlagsSubcollection(
 /**
  * Appends videoId to users/{uid} watchedVideosHistory array
  */
-export async function addWatchedVideoToUserDoc(uid: string, videoId: string): Promise<boolean> {
+export async function addWatchedVideoToUserDoc(
+  uid: string,
+  videoId: string,
+  videoTitle?: string
+): Promise<boolean> {
   const db = getFirestoreDb();
   if (!db || !uid || !videoId) return false;
   try {
+    const cleanVid = (videoId || '').trim();
+    const cleanTitle = (videoTitle || 'Daily Video Practice').trim();
     const userRef = doc(db, 'users', uid);
     const snap = await getDoc(userRef);
     const existing = snap.exists() ? (snap.data().watchedVideosHistory || snap.data().watchedVideos || []) : [];
-    const list = Array.isArray(existing) ? existing : [];
-    if (!list.includes(videoId)) {
-      list.push(videoId);
+    const list = Array.isArray(existing) ? [...existing] : [];
+
+    const alreadyExists = list.some((item) => {
+      if (typeof item === 'string') return item.toLowerCase() === cleanVid.toLowerCase();
+      if (item && typeof item === 'object') {
+        const id = item.videoId || item.id || '';
+        return id.toLowerCase() === cleanVid.toLowerCase();
+      }
+      return false;
+    });
+
+    if (!alreadyExists) {
+      list.push({
+        videoId: cleanVid,
+        videoTitle: cleanTitle,
+        watchedAt: new Date().toISOString(),
+      });
       await setDoc(userRef, { watchedVideosHistory: list, updatedAt: new Date().toISOString() }, { merge: true });
     }
     return true;

@@ -19,6 +19,8 @@ import {
   Globe,
   Edit3,
   Trash2,
+  BookOpen,
+  Headphones,
 } from 'lucide-react';
 import { LiveLesson, GoogleAccount, TeacherMeetSettings, DayOfWeek, Language, NativeFriendTutor } from '../types';
 import { Translations } from '../utils/i18n';
@@ -41,6 +43,8 @@ interface TeacherScheduleControlTableProps {
   tutorProfile?: NativeFriendTutor;
   selectedStudentFilter?: string;
   onSelectStudentFilter?: (studentEmail: string) => void;
+  activeStudentActivity?: 'insights' | 'notes' | 'videos_songs' | null;
+  onSelectStudentActivity?: (activity: 'insights' | 'notes' | 'videos_songs') => void;
   onOpenScheduleModal?: () => void;
   onOpenTeacherMeetConfig: (teacherEmail: string) => void;
   onOpenEditProfile?: () => void;
@@ -68,6 +72,8 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
   tutorProfile,
   selectedStudentFilter: controlledStudentFilter,
   onSelectStudentFilter,
+  activeStudentActivity,
+  onSelectStudentActivity,
   onOpenScheduleModal,
   onOpenTeacherMeetConfig,
   onOpenEditProfile,
@@ -104,26 +110,48 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
     const map = new Map<string, { email: string; name: string }>();
     const teacherEmailClean = (currentAccount?.email || '').toLowerCase().trim();
     const currentTeacherUid = (currentAccount?.id || (currentAccount as any)?.uid || '').trim();
-    const isTeacher = currentAccount?.role === 'teacher';
+    const currentTeacherName = (currentAccount?.name || tutorProfile?.name || '').toLowerCase().trim();
+    const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
+
+    const adminEmails = [
+      'adm.itissimple@gmail.com',
+      'estilobeeforkids@gmail.com',
+      'adm.itssimple@gmail.com',
+      'estilobeeadm@gmail.com',
+    ];
+
+    const isMatchingTeacher = (sTeacherEmail?: string, sTeacherUid?: string, sTeacherName?: string) => {
+      const cleanSTeacher = (sTeacherEmail || '').toLowerCase().trim();
+      const cleanSTeacherUid = (sTeacherUid || '').trim();
+      const cleanSTeacherName = (sTeacherName || '').toLowerCase().trim();
+
+      if (currentTeacherUid && cleanSTeacherUid && currentTeacherUid === cleanSTeacherUid) return true;
+      if (teacherEmailClean && cleanSTeacher && teacherEmailClean === cleanSTeacher) return true;
+
+      // Check admin aliases
+      if (adminEmails.includes(teacherEmailClean) && adminEmails.includes(cleanSTeacher)) return true;
+      if (adminEmails.includes(teacherEmailClean) && cleanSTeacherName.includes('simple')) return true;
+      if (currentTeacherName.includes('simple') && (adminEmails.includes(cleanSTeacher) || cleanSTeacherName.includes('simple'))) return true;
+
+      return false;
+    };
 
     (students || []).forEach((st) => {
       const email = (st.email || (st as any).studentEmail || '').toLowerCase().trim();
       const name = st.name || (st as any).studentName || email.split('@')[0];
       const stTeacher = ((st as any).teacherEmail || '').toLowerCase().trim();
       const stTeacherUid = ((st as any).teacherUid || '').trim();
+      const stTeacherName = ((st as any).teacherName || '').toLowerCase().trim();
       const stStatus = (st as any).status || (st as any).enrollmentStatus;
 
       if (!email) return;
 
-      // Filter out cancelled or unenrolled students
+      // Strictly filter out cancelled or unenrolled students
       if (stStatus === 'cancelled' || stStatus === 'not_enrolled') return;
 
-      // If viewing as teacher, must match teacher's UID or email
+      // If viewing as teacher/admin, must match teacher
       if (isTeacher) {
-        const matchesTeacher =
-          (currentTeacherUid && stTeacherUid && currentTeacherUid === stTeacherUid) ||
-          (teacherEmailClean && stTeacher && teacherEmailClean === stTeacher);
-        if (!matchesTeacher) return;
+        if (!isMatchingTeacher(stTeacher, stTeacherUid, stTeacherName)) return;
       }
 
       map.set(email, { email, name });
@@ -135,12 +163,19 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       const name = l.studentName || email.split('@')[0];
       const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
       const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
+      const lTeacherName = (l.teacherName || '').toLowerCase().trim();
 
       if (isTeacher) {
-        const isMyLesson =
-          (currentTeacherUid && lTeacherUid && currentTeacherUid === lTeacherUid) ||
-          (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
-        if (!isMyLesson) return;
+        if (!isMatchingTeacher(lTeacherEmail, lTeacherUid, lTeacherName)) return;
+      }
+
+      // Check if this student is explicitly unenrolled or cancelled in students array
+      const knownStudent = (students || []).find(
+        (s) => (s.email || (s as any).studentEmail || '').toLowerCase().trim() === email
+      );
+      if (knownStudent) {
+        const kStatus = (knownStudent as any).status || (knownStudent as any).enrollmentStatus;
+        if (kStatus === 'cancelled' || kStatus === 'not_enrolled') return;
       }
 
       const isLessonScheduledOrTrial =
@@ -158,7 +193,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
     });
 
     return Array.from(map.values());
-  }, [students, lessons, currentAccount?.role, currentAccount?.email, currentAccount?.id, (currentAccount as any)?.uid]);
+  }, [students, lessons, currentAccount, tutorProfile]);
 
   const sortedLessons = [...lessons].sort((a, b) => {
     return new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime();
@@ -348,6 +383,64 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
               </option>
             ))}
           </select>
+
+          {selectedStudentFilter !== 'all' && (
+            <div className="flex items-center gap-1.5 ml-1 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectStudentActivity?.('insights');
+                  const el = document.getElementById('student-activity-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  activeStudentActivity === 'insights'
+                    ? 'bg-[#0A0F24] text-white shadow-xs ring-1 ring-[#0A0F24]'
+                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200'
+                }`}
+                title="View Lessons Insights and Icebreaker Topics"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <span>Insights & Icebreaks</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectStudentActivity?.('notes');
+                  const el = document.getElementById('student-activity-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  activeStudentActivity === 'notes'
+                    ? 'bg-[#0A0F24] text-white shadow-xs ring-1 ring-[#0A0F24]'
+                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200'
+                }`}
+                title="View Live Lesson Notes"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Live Lesson Notes</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectStudentActivity?.('videos_songs');
+                  const el = document.getElementById('student-activity-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  activeStudentActivity === 'videos_songs'
+                    ? 'bg-[#0A0F24] text-white shadow-xs ring-1 ring-[#0A0F24]'
+                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200'
+                }`}
+                title="View Videos and Spotify Songs"
+              >
+                <Video className="w-3.5 h-3.5" />
+                <span>Videos & Songs</span>
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">

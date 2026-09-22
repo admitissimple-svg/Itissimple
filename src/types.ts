@@ -261,13 +261,16 @@ export interface StudentProfile {
 
 export interface ConsumedVideoItem {
   id: string;
-  videoId?: string;
-  title: string;
+  videoId: string;
+  videoTitle: string;
+  title?: string;
   url?: string;
   watchedAt: string;
   dayOfWeek?: DayOfWeek;
   duration?: string;
   playlistTitle?: string;
+  playlistId?: string;
+  notes?: string;
 }
 
 export interface ConsumedTrackItem {

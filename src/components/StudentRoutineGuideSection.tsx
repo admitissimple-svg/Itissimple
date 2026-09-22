@@ -2556,17 +2556,29 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       {/* Start New Week Configuration Modal */}
       <StartNewWeekModal
         isOpen={isNewWeekModalOpen}
-        onClose={() => setIsNewWeekModalOpen(false)}
+        onClose={() => {
+          setIsStartingNewWeek(false);
+          setIsNewWeekModalOpen(false);
+        }}
         onConfirm={async (studyDaysTarget, selectedDays) => {
-          if (!onStartNewWeek) return;
+          if (!onStartNewWeek) {
+            setIsNewWeekModalOpen(false);
+            return;
+          }
           setIsStartingNewWeek(true);
           try {
             setSelectedTopicByDay({});
             setCustomSuggestionActivities({});
             setSuggestingUrlValues({});
             setSavedTopicsBeforeRepeat({});
-            await resetRepeatFlags();
+            try {
+              await resetRepeatFlags();
+            } catch (flagErr) {
+              console.warn('Notice resetting repeat flags:', flagErr);
+            }
             await onStartNewWeek(studyDaysTarget, selectedDays);
+          } catch (err) {
+            console.warn('Error starting new week in routine guide:', err);
           } finally {
             setIsStartingNewWeek(false);
           }

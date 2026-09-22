@@ -17,6 +17,11 @@ import {
   WeeklyVocabularyItem,
   DayOfWeek,
 } from '../types';
+import {
+  addVideoToWatchedHistoryInFirestore,
+  extractVideoIdFromHistoryItem,
+  extractVideoTitleFromHistoryItem,
+} from './useRoutine';
 
 export interface UseStudentHistoryParams {
   studentUid?: string;
@@ -227,12 +232,25 @@ export async function fetchAccumulatedConsumedIds(studentUid: string): Promise<{
   // Also inspect student's main user profile watchedVideosHistory for backwards compatibility
   try {
     const db = getDb();
-    const userSnap = await getDoc(doc(db, 'users', studentUid));
+    const cleanStudent = cleanDocId(studentUid);
+    const userSnap = await getDoc(doc(db, 'users', cleanStudent));
     if (userSnap.exists()) {
       const data = userSnap.data();
-      if (Array.isArray(data.watchedVideosHistory)) {
-        data.watchedVideosHistory.forEach((vid: string) => {
-          if (vid && typeof vid === 'string') videoIds.add(vid);
+      const history = data.watchedVideosHistory || data.watchedVideos || [];
+      if (Array.isArray(history)) {
+        history.forEach((item: any) => {
+          const vid = extractVideoIdFromHistoryItem(item);
+          if (vid) {
+            videoIds.add(vid);
+            const title = extractVideoTitleFromHistoryItem(item);
+            allVideos.push({
+              id: vid,
+              videoId: vid,
+              videoTitle: title,
+              title: title,
+              watchedAt: (item && typeof item === 'object' && item.watchedAt) || '',
+            });
+          }
         });
       }
     }
@@ -282,7 +300,19 @@ export async function recordConsumedVideo(
 ): Promise<boolean> {
   const cleanStudent = cleanDocId(studentUid);
   const cleanWeek = (weekId || 'week-1').trim();
-  if (!cleanStudent || !video || !video.id) return false;
+  const rawId = video?.videoId || video?.id || '';
+  const cleanVidId = extractVideoIdFromHistoryItem(rawId) || rawId.trim();
+  if (!cleanStudent || !cleanVidId) return false;
+  const cleanTitle = (video.videoTitle || video.title || 'Daily Video Practice').trim();
+
+  const formattedVideoItem: ConsumedVideoItem = {
+    ...video,
+    id: cleanVidId,
+    videoId: cleanVidId,
+    videoTitle: cleanTitle,
+    title: cleanTitle,
+    watchedAt: video.watchedAt || new Date().toISOString(),
+  };
 
   try {
     const existing = await fetchWeeklyHistory(cleanStudent, cleanWeek);
@@ -290,12 +320,12 @@ export async function recordConsumedVideo(
 
     // Avoid duplicate video record in the same week
     const existsIndex = currentVideos.findIndex(
-      (v) => (v.id || v.videoId) === (video.id || video.videoId)
+      (v) => (v.id || v.videoId || '').toLowerCase() === cleanVidId.toLowerCase()
     );
     if (existsIndex >= 0) {
-      currentVideos[existsIndex] = { ...currentVideos[existsIndex], ...video };
+      currentVideos[existsIndex] = { ...currentVideos[existsIndex], ...formattedVideoItem };
     } else {
-      currentVideos.push(video);
+      currentVideos.push(formattedVideoItem);
     }
 
     const payload: Partial<WeeklyHistoryDoc> = {
@@ -309,7 +339,14 @@ export async function recordConsumedVideo(
       payload.nativeFriendUID = nativeFriendUid;
     }
 
-    return await saveWeeklyHistory(cleanStudent, cleanWeek, payload);
+    const saved = await saveWeeklyHistory(cleanStudent, cleanWeek, payload);
+
+    // Also persist strictly to users/{cleanStudent}/watchedVideosHistory
+    addVideoToWatchedHistoryInFirestore(cleanStudent, cleanVidId, cleanTitle).catch((err) =>
+      console.warn('Notice saving to users watchedVideosHistory:', err)
+    );
+
+    return saved;
   } catch (err) {
     console.error('Failed to record consumed video:', err);
     return false;
@@ -425,7 +462,7 @@ export function useStudentHistory({
   const [allHistories, setAllHistories] = useState<WeeklyHistoryDoc[]>([]);
   const [accumulatedVideoIds, setAccumulatedVideoIds] = useState<Set<string>>(new Set());
   const [accumulatedTrackIds, setAccumulatedTrackIds] = useState<Set<string>>(new Set());
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(!cleanTeacherUid);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
@@ -479,6 +516,12 @@ export function useStudentHistory({
 
   // Real-time listener on weeklyHistory document if authorized
   useEffect(() => {
+    // Immediately clear state for new student so that old student data never lingers
+    setWeeklyHistory(null);
+    setAllHistories([]);
+    setAccumulatedVideoIds(new Set());
+    setAccumulatedTrackIds(new Set());
+
     if (!effectiveUid || !isAuthorized) {
       if (isMountedRef.current) {
         setIsLoading(false);

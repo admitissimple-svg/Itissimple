@@ -276,9 +276,29 @@ export default function App() {
   const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('itissimple.school@gmail.com');
   const [scheduleStudentInfo, setScheduleStudentInfo] = useState<{ email: string; name: string; uid?: string } | null>(null);
 
-  // Teacher Filter
+  // Teacher Filter & Minimalist Activity Toggle
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
-  const [selectedStudentSubTab, setSelectedStudentSubTab] = useState<'insights' | 'spotify' | 'notes' | 'media' | 'all'>('insights');
+  const [activeStudentActivity, setActiveStudentActivity] = useState<'insights' | 'notes' | 'videos_songs' | null>('insights');
+  const [videosAndSongsSubTab, setVideosAndSongsSubTab] = useState<'videos' | 'songs'>('videos');
+
+  const handleSelectStudentFilter = (studentEmail: string) => {
+    setSelectedStudentFilter(studentEmail);
+    if (studentEmail !== 'all') {
+      setActiveStudentActivity('insights');
+      setTimeout(() => {
+        const el = document.getElementById('filtered-student-workspace');
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  };
+
+  const handleToggleStudentActivity = (act: 'insights' | 'notes' | 'videos_songs') => {
+    setActiveStudentActivity((prev) => (prev === act ? null : act));
+    setTimeout(() => {
+      const el = document.getElementById('filtered-student-workspace');
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
 
   // 10. Fetch initial data from server on mount
   useEffect(() => {
@@ -1217,7 +1237,7 @@ export default function App() {
   // Handler: Start New Week (Rotates assignments, moves consumed to history, increments weeklyCycle, resets week checks)
   const handleStartNewWeek = useCallback(async (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => {
     const studentEmail = currentAccount?.email || userProfile?.email || '';
-    const uid = currentAccount?.uid || userProfile?.id || '';
+    const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
     const targetDays = studyDaysTarget || userProfile?.weeklyStudyDaysTarget || 7;
     const chosenDays = selectedDays || userProfile?.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
@@ -1257,6 +1277,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             studentEmail,
+            studentUid: uid,
             checks: {},
             weeklyNativeLessonsTarget: userProfile?.weeklyNativeLessonsTarget || 1,
             weeklyStudyDaysTarget: effectiveStudyTarget,
@@ -1293,7 +1314,7 @@ export default function App() {
       console.warn('Could not start new week:', err);
     }
     return false;
-  }, [currentAccount?.email, currentAccount?.uid, userProfile?.email, userProfile?.id, userProfile?.routineVideoTime, userProfile?.routineAudioTime, userProfile?.weeklyCycle, userProfile?.weeklyStudyDaysTarget, userProfile?.weeklyStudyDays, userProfile?.weeklyNativeLessonsTarget, currentLanguage]);
+  }, [currentAccount?.email, currentAccount?.uid, userProfile?.email, userProfile?.id, (userProfile as any)?.uid, userProfile?.routineVideoTime, userProfile?.routineAudioTime, userProfile?.weeklyCycle, userProfile?.weeklyStudyDaysTarget, userProfile?.weeklyStudyDays, userProfile?.weeklyNativeLessonsTarget, routinesByDay, currentLanguage]);
 
   // Handler: Teacher saves video & Spotify for activity
   const handleTeacherSaveVideos = async (
@@ -2596,43 +2617,67 @@ export default function App() {
   // Comprehensive Students list for teacher filtering, schedule modals, and student management
   const studentsList = useMemo(() => {
     const studentMap = new Map<string, GoogleAccount>();
-    const isTeacher = currentAccount?.role === 'teacher';
+    const isTeacher = currentAccount?.role === 'teacher' || currentAccount?.role === 'admin';
     const teacherEmailClean = (currentAccount?.email || '').toLowerCase().trim();
     const teacherUid = (currentAccount?.id || (currentAccount as any)?.uid || '').trim();
+    const teacherNameClean = (currentAccount?.name || currentTutorProfile?.name || '').toLowerCase().trim();
+
+    const adminEmails = [
+      'adm.itissimple@gmail.com',
+      'estilobeeforkids@gmail.com',
+      'adm.itssimple@gmail.com',
+      'estilobeeadm@gmail.com',
+    ];
+
+    const isMatchingTeacher = (sTeacherEmail?: string, sTeacherUid?: string, sTeacherName?: string) => {
+      const cleanSTeacher = (sTeacherEmail || '').toLowerCase().trim();
+      const cleanSTeacherUid = (sTeacherUid || '').trim();
+      const cleanSTeacherName = (sTeacherName || '').toLowerCase().trim();
+
+      if (teacherUid && cleanSTeacherUid && teacherUid === cleanSTeacherUid) return true;
+      if (teacherEmailClean && cleanSTeacher && teacherEmailClean === cleanSTeacher) return true;
+
+      // Check admin aliases
+      if (adminEmails.includes(teacherEmailClean) && adminEmails.includes(cleanSTeacher)) return true;
+      if (adminEmails.includes(teacherEmailClean) && cleanSTeacherName.includes('simple')) return true;
+      if (teacherNameClean.includes('simple') && (adminEmails.includes(cleanSTeacher) || cleanSTeacherName.includes('simple'))) return true;
+
+      return false;
+    };
 
     // 1. From backend students array
     (students || []).forEach((s) => {
       const email = (s.email || s.studentEmail || '').toLowerCase().trim();
       const sTeacher = (s.teacherEmail || '').toLowerCase().trim();
       const sTeacherUid = (s.teacherUid || (s as any).assignedTeacherId || '').trim();
+      const sTeacherName = (s.teacherName || '').toLowerCase().trim();
       const sStatus = s.status || (s as any).enrollmentStatus;
 
-      // If teacher is logged in, strictly enforce that student is assigned to this teacher and not cancelled
+      if (!email) return;
+
+      // Strictly filter out cancelled or unenrolled students
+      if (sStatus === 'cancelled' || sStatus === 'not_enrolled') return;
+
+      // If teacher is logged in, strictly enforce that student is assigned to this teacher
       if (isTeacher) {
-        const matchesTeacher =
-          (teacherUid && sTeacherUid && teacherUid === sTeacherUid) ||
-          (teacherEmailClean && sTeacher && teacherEmailClean === sTeacher);
-        if (!matchesTeacher) return;
-        if (sStatus === 'cancelled' || sStatus === 'not_enrolled') return;
+        if (!isMatchingTeacher(sTeacher, sTeacherUid, sTeacherName)) return;
       }
 
-      if (email) {
-        studentMap.set(email, {
-          ...s,
-          id: s.id || (s as any).uid || `st-${email}`,
-          name: s.name || s.studentName || email.split('@')[0],
-          studentName: s.name || s.studentName || email.split('@')[0],
-          email,
-          studentEmail: email,
-          role: 'student',
-          level: s.level || s.studentLevel || 'iniciante',
-          studentLevel: s.level || s.studentLevel || 'iniciante',
-          teacherEmail: s.teacherEmail || '',
-          teacherName: s.teacherName || '',
-          teacherUid: sTeacherUid || teacherUid,
-          status: sStatus || 'active',
-        } as any);
-      }
+      studentMap.set(email, {
+        ...s,
+        id: s.id || (s as any).uid || `st-${email}`,
+        name: s.name || s.studentName || email.split('@')[0],
+        studentName: s.name || s.studentName || email.split('@')[0],
+        email,
+        studentEmail: email,
+        role: 'student',
+        level: s.level || s.studentLevel || 'iniciante',
+        studentLevel: s.level || s.studentLevel || 'iniciante',
+        teacherEmail: s.teacherEmail || '',
+        teacherName: s.teacherName || '',
+        teacherUid: sTeacherUid || teacherUid,
+        status: sStatus || 'active',
+      } as any);
     });
 
     // 2. From availableAccounts (ONLY when NOT viewing as a teacher)
@@ -2661,31 +2706,39 @@ export default function App() {
 
     // 3. From current lessons (ONLY for this teacher if viewing as teacher)
     (lessons || []).forEach((l) => {
+      const email = (l.studentEmail || '').toLowerCase().trim();
+      if (!email) return;
+
       if (isTeacher) {
         if (l.status === 'cancelled') return;
         const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
         const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
-        const isMyLesson =
-          (teacherUid && lTeacherUid && teacherUid === lTeacherUid) ||
-          (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
-        if (!isMyLesson) return;
+        const lTeacherName = (l.teacherName || '').toLowerCase().trim();
+        if (!isMatchingTeacher(lTeacherEmail, lTeacherUid, lTeacherName)) return;
       }
-      const email = (l.studentEmail || '').toLowerCase().trim();
-      if (email) {
-        const existing = studentMap.get(email) || ({} as GoogleAccount);
-        studentMap.set(email, {
-          ...existing,
-          id: existing.id || l.studentUid || `st-${email}`,
-          name: existing.name || l.studentName || email.split('@')[0],
-          studentName: (existing as any).studentName || l.studentName || email.split('@')[0],
-          email,
-          studentEmail: email,
-          role: 'student',
-          teacherEmail: (existing as any).teacherEmail || l.teacherEmail || '',
-          teacherName: (existing as any).teacherName || l.teacherName || '',
-          teacherUid: (existing as any).teacherUid || l.teacherUid || '',
-        } as any);
+
+      // Check if student is explicitly unenrolled or cancelled
+      const knownStudent = (students || []).find(
+        (s) => (s.email || s.studentEmail || '').toLowerCase().trim() === email
+      );
+      if (knownStudent) {
+        const kStatus = knownStudent.status || (knownStudent as any).enrollmentStatus;
+        if (kStatus === 'cancelled' || kStatus === 'not_enrolled') return;
       }
+
+      const existing = studentMap.get(email) || ({} as GoogleAccount);
+      studentMap.set(email, {
+        ...existing,
+        id: existing.id || l.studentUid || `st-${email}`,
+        name: existing.name || l.studentName || email.split('@')[0],
+        studentName: (existing as any).studentName || l.studentName || email.split('@')[0],
+        email,
+        studentEmail: email,
+        role: 'student',
+        teacherEmail: (existing as any).teacherEmail || l.teacherEmail || '',
+        teacherName: (existing as any).teacherName || l.teacherName || '',
+        teacherUid: (existing as any).teacherUid || l.teacherUid || '',
+      } as any);
     });
 
     // 4. Current user if student
@@ -2709,7 +2762,7 @@ export default function App() {
     }
 
     return Array.from(studentMap.values());
-  }, [students, availableAccounts, lessons, currentAccount, userProfile]);
+  }, [students, availableAccounts, lessons, currentAccount, userProfile, currentTutorProfile]);
 
   return (
     <div className="min-h-screen bg-[#FAFCFF] text-[#000035] flex flex-col font-sans selection:bg-[#9AB4FF]/40 selection:text-[#000035]">
@@ -2962,7 +3015,9 @@ export default function App() {
                   currentAccount={currentAccount}
                   tutorProfile={currentTutorProfile}
                   selectedStudentFilter={selectedStudentFilter}
-                  onSelectStudentFilter={setSelectedStudentFilter}
+                  onSelectStudentFilter={handleSelectStudentFilter}
+                  activeStudentActivity={activeStudentActivity}
+                  onSelectStudentActivity={(act) => handleToggleStudentActivity(act)}
                   onOpenScheduleModal={() => setIsScheduleModalOpen(true)}
                   onOpenTeacherMeetConfig={(email) => {
                     setTeacherEmailForConfig(email);
@@ -2986,7 +3041,7 @@ export default function App() {
                   timeZone={DEFAULT_TEACHER_TIMEZONE}
                 />
 
-                {/* Conditional Panels: Displayed ONLY when a specific student is selected in the master control filter */}
+                {/* Minimalist & Practical Student Workspace: Displayed when a specific student is filtered */}
                 {selectedStudentFilter !== 'all' ? (() => {
                   const found = studentsList.find(
                     (s) =>
@@ -3013,10 +3068,10 @@ export default function App() {
                   );
 
                   return (
-                    <div className="space-y-6 animate-in fade-in duration-200" id="filtered-student-workspace">
-                      {/* 1. Student Profile Overview Header & Navigation Sub-Tabs */}
-                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-                        {/* Header Banner */}
+                    <div className="space-y-5 animate-in fade-in duration-200" id="filtered-student-workspace">
+                      {/* 1. Student Profile Header Bar with Minimalist Activity Buttons */}
+                      <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-sm overflow-hidden" id="student-activity-section">
+                        {/* Header Info */}
                         <div className="p-4 sm:p-5 bg-gradient-to-r from-[#000035] via-[#062863] to-[#000035] text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
                           <div className="flex items-center gap-3.5">
                             {stAvatar ? (
@@ -3045,24 +3100,22 @@ export default function App() {
                             </div>
                           </div>
 
-                          {/* Quick Badges & Clear Filter Button */}
+                          {/* Student Badges & Clear Filter Button */}
                           <div className="flex items-center gap-2 flex-wrap">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10 capitalize">
-                                Level: {stLevel}
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10 capitalize">
+                              Level: {stLevel}
+                            </span>
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
+                              {stActiveDaysCount} study days/wk
+                            </span>
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
+                              Week {stWeeklyCycle}
+                            </span>
+                            {studentLessons.length > 0 && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                                {studentLessons.length} lesson{studentLessons.length > 1 ? 's' : ''} scheduled
                               </span>
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
-                                {stActiveDaysCount} study days/wk
-                              </span>
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
-                                Week {stWeeklyCycle}
-                              </span>
-                              {studentLessons.length > 0 && (
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                                  {studentLessons.length} lesson{studentLessons.length > 1 ? 's' : ''} scheduled
-                                </span>
-                              )}
-                            </div>
+                            )}
 
                             <button
                               type="button"
@@ -3076,82 +3129,76 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Sub-Tabs: Lessons Insights & Icebreak is #1 */}
-                        <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200/80 flex items-center gap-2 overflow-x-auto">
-                          <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 mr-1 shrink-0">
-                            Student View:
-                          </span>
+                        {/* Minimalist 3 Activity Buttons */}
+                        <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200/80">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-1 text-xs font-bold text-slate-500">
+                              <span>Student Activity:</span>
+                              <span className="text-[11px] font-normal text-slate-400">(Click to view or toggle)</span>
+                            </div>
 
-                          <button
-                            type="button"
-                            onClick={() => setSelectedStudentSubTab('insights')}
-                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
-                              selectedStudentSubTab === 'insights'
-                                ? 'bg-indigo-600 text-white shadow-xs'
-                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
-                          >
-                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                            <span>Lessons Insights & Icebreak</span>
-                          </button>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full sm:w-auto">
+                              {/* 1. Insights e Icebreaks Button */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStudentActivity('insights')}
+                                className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-xs ${
+                                  activeStudentActivity === 'insights'
+                                    ? 'bg-[#0A0F24] text-white shadow-slate-300 ring-2 ring-[#0A0F24]/50 ring-offset-1'
+                                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200/90 hover:border-slate-300'
+                                }`}
+                              >
+                                <Sparkles className={`w-4 h-4 ${activeStudentActivity === 'insights' ? 'text-amber-300' : 'text-[#0A0F24]'}`} />
+                                <span>Insights e Icebreaks</span>
+                                {activeStudentActivity === 'insights' && (
+                                  <span className="w-2 h-2 rounded-full bg-amber-300 animate-pulse" />
+                                )}
+                              </button>
 
-                          <button
-                            type="button"
-                            onClick={() => setSelectedStudentSubTab('notes')}
-                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
-                              selectedStudentSubTab === 'notes'
-                                ? 'bg-[#000035] text-white shadow-xs'
-                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
-                          >
-                            <BookOpen className="w-3.5 h-3.5" />
-                            <span>Live Notes & Real-Time Vocabulary</span>
-                          </button>
+                              {/* 2. Live Lesson Notes Button */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStudentActivity('notes')}
+                                className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-xs ${
+                                  activeStudentActivity === 'notes'
+                                    ? 'bg-[#0A0F24] text-white shadow-slate-300 ring-2 ring-[#0A0F24]/50 ring-offset-1'
+                                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200/90 hover:border-slate-300'
+                                }`}
+                              >
+                                <BookOpen className={`w-4 h-4 ${activeStudentActivity === 'notes' ? 'text-[#9AB4FF]' : 'text-[#0A0F24]'}`} />
+                                <span>Live Lesson Notes</span>
+                                {activeStudentActivity === 'notes' && (
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                )}
+                              </button>
 
-                          <button
-                            type="button"
-                            onClick={() => setSelectedStudentSubTab('media')}
-                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
-                              selectedStudentSubTab === 'media'
-                                ? 'bg-rose-600 text-white shadow-xs'
-                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
-                          >
-                            <Video className="w-3.5 h-3.5" />
-                            <span>Media Assignment</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setSelectedStudentSubTab('spotify')}
-                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
-                              selectedStudentSubTab === 'spotify'
-                                ? 'bg-[#1DB954] text-white shadow-xs'
-                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
-                          >
-                            <Headphones className="w-3.5 h-3.5" />
-                            <span>Song of the Day & Routine</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setSelectedStudentSubTab('all')}
-                            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ml-auto ${
-                              selectedStudentSubTab === 'all'
-                                ? 'bg-slate-800 text-white shadow-xs'
-                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
-                          >
-                            <Layers className="w-3.5 h-3.5" />
-                            <span>View All</span>
-                          </button>
+                              {/* 3. Videos and Songs Button */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStudentActivity('videos_songs')}
+                                className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-xs ${
+                                  activeStudentActivity === 'videos_songs'
+                                    ? 'bg-[#0A0F24] text-white shadow-slate-300 ring-2 ring-[#0A0F24]/50 ring-offset-1'
+                                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200/90 hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center gap-1">
+                                  <Video className={`w-4 h-4 ${activeStudentActivity === 'videos_songs' ? 'text-white' : 'text-[#0A0F24]'}`} />
+                                  <Headphones className={`w-3.5 h-3.5 ${activeStudentActivity === 'videos_songs' ? 'text-white' : 'text-[#1DB954]'}`} />
+                                </div>
+                                <span>Videos and Songs</span>
+                                {activeStudentActivity === 'videos_songs' && (
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
 
-                      {/* 2. Top Priority: Lessons Insights & Icebreak (Requirement) */}
-                      {(selectedStudentSubTab === 'insights' || selectedStudentSubTab === 'all') && (
-                        <div id="section-student-insights" className="scroll-mt-6">
+                      {/* Content Area: ONLY the selected activity expands below */}
+                      {activeStudentActivity === 'insights' && (
+                        <div id="section-student-insights" className="scroll-mt-6 animate-in fade-in duration-200">
                           <NativeFriendLessonInsights
                             studentUid={stUid}
                             studentEmail={stEmail}
@@ -3166,9 +3213,8 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* 3. Teacher Live Session Notes & Real-Time Vocabulary Panel */}
-                      {(selectedStudentSubTab === 'notes' || selectedStudentSubTab === 'all') && (
-                        <div id="section-student-notes" className="scroll-mt-6">
+                      {activeStudentActivity === 'notes' && (
+                        <div id="section-student-notes" className="scroll-mt-6 animate-in fade-in duration-200">
                           <TeacherLiveLessonNotesPanel
                             lessons={lessons}
                             students={students}
@@ -3183,39 +3229,79 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* 4. Teacher Media Assignment Panel (YouTube Videos & Spotify Audios) */}
-                      {(selectedStudentSubTab === 'media' || selectedStudentSubTab === 'all') && (
-                        <div id="section-student-media" className="scroll-mt-6">
-                          <TeacherMediaAssignmentPanel
-                            routinesByDay={routinesByDay}
-                            students={studentsList}
-                            selectedStudentEmail={selectedStudentFilter}
-                            selectedStudentUid={stUid}
-                            currentAccount={currentAccount}
-                            onTeacherSaveVideos={handleTeacherSaveVideos}
-                            currentLanguage="en"
-                            t={getTranslations('en')}
-                          />
+                      {activeStudentActivity === 'videos_songs' && (
+                        <div id="section-student-videos-songs" className="space-y-4 scroll-mt-6 animate-in fade-in duration-200">
+                          {/* Minimalist Sub-Toggle between Videos and Songs */}
+                          <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-700">Videos and Songs for {stName}:</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setVideosAndSongsSubTab('videos')}
+                                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                                  videosAndSongsSubTab === 'videos'
+                                    ? 'bg-rose-600 text-white shadow-xs'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                                }`}
+                              >
+                                <Video className="w-3.5 h-3.5" />
+                                <span>YouTube Videos</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setVideosAndSongsSubTab('songs')}
+                                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                                  videosAndSongsSubTab === 'songs'
+                                    ? 'bg-[#1DB954] text-white shadow-xs'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                                }`}
+                              >
+                                <Headphones className="w-3.5 h-3.5" />
+                                <span>Spotify Routine & Songs</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {videosAndSongsSubTab === 'videos' ? (
+                            <TeacherMediaAssignmentPanel
+                              routinesByDay={routinesByDay}
+                              students={studentsList}
+                              selectedStudentEmail={selectedStudentFilter}
+                              selectedStudentUid={stUid}
+                              currentAccount={currentAccount}
+                              onTeacherSaveVideos={handleTeacherSaveVideos}
+                              currentLanguage="en"
+                              t={getTranslations('en')}
+                            />
+                          ) : (
+                            <TeacherSpotifyRoutineTracker
+                              studentUid={stUid}
+                              studentEmail={stEmail}
+                              studentName={stName}
+                              studentLevel={stLevel}
+                              teacherUid={teacherUidVal}
+                              teacherName={teacherNameVal}
+                              teacherEmail={teacherEmailVal}
+                              weekId={`week-${stWeeklyCycle}`}
+                              weeklyCycle={stWeeklyCycle}
+                              studentTimezone={stTimezone}
+                              activeStudyDays={stActiveDays}
+                              activeStudyDaysCount={stActiveDaysCount}
+                            />
+                          )}
                         </div>
                       )}
 
-                      {/* 5. Song of the Day & Live Routine Tracking */}
-                      {(selectedStudentSubTab === 'spotify' || selectedStudentSubTab === 'all') && (
-                        <div id="section-student-spotify" className="scroll-mt-6">
-                          <TeacherSpotifyRoutineTracker
-                            studentUid={stUid}
-                            studentEmail={stEmail}
-                            studentName={stName}
-                            studentLevel={stLevel}
-                            teacherUid={teacherUidVal}
-                            teacherName={teacherNameVal}
-                            teacherEmail={teacherEmailVal}
-                            weekId={`week-${stWeeklyCycle}`}
-                            weeklyCycle={stWeeklyCycle}
-                            studentTimezone={stTimezone}
-                            activeStudyDays={stActiveDays}
-                            activeStudyDaysCount={stActiveDaysCount}
-                          />
+                      {activeStudentActivity === null && (
+                        <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500 shadow-2xs">
+                          <p className="text-sm font-semibold text-slate-700">
+                            Atividade minimizada para visualização limpa.
+                          </p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            Clique em um dos 3 botões acima (<strong>Insights e Icebreaks</strong>, <strong>Live Lesson Notes</strong> ou <strong>Videos and Songs</strong>) para abrir a atividade de {stName}.
+                          </p>
                         </div>
                       )}
                     </div>

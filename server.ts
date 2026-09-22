@@ -2739,28 +2739,54 @@ app.get('/api/students', (req, res) => {
   const role = req.query.role as string;
   const uid = (req.query.uid as string) || '';
 
-  if (role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') {
+  const adminEmails = [
+    'adm.itissimple@gmail.com',
+    'estilobeeforkids@gmail.com',
+    'adm.itssimple@gmail.com',
+    'estilobeeadm@gmail.com',
+  ];
+
+  const isTeacherAlias = (tEmail: string, searchEmail: string) => {
+    const t = (tEmail || '').toLowerCase().trim();
+    const s = (searchEmail || '').toLowerCase().trim();
+    if (!t || !s) return false;
+    if (t === s) return true;
+    if (adminEmails.includes(t) && adminEmails.includes(s)) return true;
+    return false;
+  };
+
+  // Only return raw all students if explicitly requested with all=true by admin
+  if ((role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') && req.query.all === 'true') {
     return res.json(db.students || []);
   }
 
-  if (role === 'teacher' || req.query.teacherEmail) {
+  if (role === 'teacher' || role === 'admin' || req.query.teacherEmail || requesterEmail) {
     const studentMap = new Map<string, any>();
 
     // 1. From db.students where teacherEmail matches and subscription is not cancelled
     (db.students || []).forEach((s: any) => {
       const sTeacher = (s.teacherEmail || '').toLowerCase().trim();
       const sTeacherUid = s.teacherUid || '';
-      if (sTeacher === requesterEmail || (uid && sTeacherUid === uid)) {
-        const sStatus = s.status || s.enrollmentStatus;
-        if (sStatus === 'cancelled' || sStatus === 'not_enrolled') {
-          return;
-        }
+      const sTeacherName = (s.teacherName || '').toLowerCase().trim();
+      const sStatus = s.status || s.enrollmentStatus;
+
+      // Filter out cancelled or not enrolled students
+      if (sStatus === 'cancelled' || sStatus === 'not_enrolled') {
+        return;
+      }
+
+      const matchesTeacher =
+        isTeacherAlias(sTeacher, requesterEmail) ||
+        (uid && sTeacherUid === uid) ||
+        (adminEmails.includes(requesterEmail) && sTeacherName.includes('simple'));
+
+      if (matchesTeacher) {
         const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
         // Check if student profile was transferred or cancelled
         const p = db.userProfiles?.[sEmail];
         if (p) {
           const pTeacher = (p.teacherEmail || '').toLowerCase().trim();
-          if (pTeacher && pTeacher !== requesterEmail) return;
+          if (pTeacher && !isTeacherAlias(pTeacher, requesterEmail)) return;
           if (p.enrollmentStatus === 'cancelled' || p.enrollmentStatus === 'not_enrolled') return;
         }
         if (sEmail) {
@@ -2780,7 +2806,12 @@ app.get('/api/students', (req, res) => {
     Object.entries(db.userProfiles || {}).forEach(([pEmail, profile]: [string, any]) => {
       const cleanPEmail = pEmail.toLowerCase().trim();
       const pTeacher = (profile.teacherEmail || '').toLowerCase().trim();
-      if (pTeacher === requesterEmail && profile.role !== 'teacher' && profile.role !== 'admin') {
+      const pTeacherName = (profile.teacherName || '').toLowerCase().trim();
+      const matchesTeacher =
+        isTeacherAlias(pTeacher, requesterEmail) ||
+        (adminEmails.includes(requesterEmail) && pTeacherName.includes('simple'));
+
+      if (matchesTeacher && profile.role !== 'teacher' && profile.role !== 'admin') {
         if (profile.enrollmentStatus === 'cancelled' || profile.enrollmentStatus === 'not_enrolled' || profile.status === 'cancelled') {
           return;
         }
@@ -2811,10 +2842,13 @@ app.get('/api/students', (req, res) => {
     // 3. From db.liveLessons where teacherEmail matches and lesson is scheduled/active
     (db.liveLessons || []).forEach((l: any) => {
       const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
-      if (lTeacher === requesterEmail && l.status === 'scheduled') {
+      if (isTeacherAlias(lTeacher, requesterEmail) && l.status === 'scheduled') {
         const sEmail = (l.studentEmail || '').toLowerCase().trim();
         const p = db.userProfiles?.[sEmail];
-        if (p?.enrollmentStatus === 'cancelled' || p?.enrollmentStatus === 'not_enrolled') return;
+        const st = (db.students || []).find((s: any) => (s.email || s.studentEmail || '').toLowerCase().trim() === sEmail);
+        // Exclude if student is known to be cancelled or not enrolled
+        if (p?.enrollmentStatus === 'cancelled' || p?.enrollmentStatus === 'not_enrolled' || p?.status === 'cancelled') return;
+        if (st?.status === 'cancelled' || st?.status === 'not_enrolled' || st?.enrollmentStatus === 'not_enrolled') return;
         if (sEmail && !studentMap.has(sEmail)) {
           studentMap.set(sEmail, {
             id: `st-${sEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
@@ -3393,6 +3427,14 @@ app.post('/api/students/cancel', (req, res) => {
 });
 
 // Helper to resolve student email and UID bi-directionally
+const GENERIC_PLACEHOLDER_EMAILS = new Set([
+  'aluno@itssimple.com',
+  'student@itssimple.com',
+  'user@example.com',
+  'test@example.com',
+  'student@example.com',
+]);
+
 function resolveStudentIdentifiers(
   db: AppDb,
   emailOrUid?: string | null,
@@ -3401,8 +3443,21 @@ function resolveStudentIdentifiers(
   let email = (emailOrUid && emailOrUid.includes('@') ? emailOrUid : '').toLowerCase().trim();
   let uid = (explicitUid || (!emailOrUid?.includes('@') ? (emailOrUid || '') : '')).trim();
 
+  // If explicit uid is known, verify and prioritize genuine email mapped to this UID
+  if (uid) {
+    const student = (db.students || []).find((s: any) => s.uid === uid || s.id === uid);
+    if (student?.email || student?.studentEmail) {
+      email = (student.email || student.studentEmail).toLowerCase().trim();
+    } else {
+      const authUser = Object.values(db.authUsers || {}).find((u: any) => u.uid === uid);
+      if (authUser?.email) {
+        email = authUser.email.toLowerCase().trim();
+      }
+    }
+  }
+
   // If email is known but uid is not, resolve uid from students, userProfiles, or authUsers
-  if (email && !uid) {
+  if (email && !uid && !GENERIC_PLACEHOLDER_EMAILS.has(email)) {
     const student = (db.students || []).find((s: any) =>
       ((s.email || s.studentEmail || '').toLowerCase().trim() === email)
     );
@@ -3417,17 +3472,9 @@ function resolveStudentIdentifiers(
     }
   }
 
-  // If uid is known but email is not, resolve email from students, userProfiles, or authUsers
-  if (uid && !email) {
-    const student = (db.students || []).find((s: any) => (s.uid === uid || s.id === uid));
-    if (student?.email || student?.studentEmail) {
-      email = (student.email || student.studentEmail).toLowerCase().trim();
-    }
-
-    if (!email) {
-      const authUser = Object.values(db.authUsers || {}).find((u: any) => u.uid === uid);
-      if (authUser?.email) email = authUser.email.toLowerCase().trim();
-    }
+  // If email is a generic placeholder, clear it so it never acts as a shared key across students
+  if (GENERIC_PLACEHOLDER_EMAILS.has(email)) {
+    email = '';
   }
 
   return { email, uid };
@@ -4140,7 +4187,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
         playlistId: v.playlistId,
         playlistTitle: v.playlistTitle,
         videoId: vidId,
-        videoTitle: v.title,
+        title: v.videoTitle || v.title || 'Daily Video Practice',
+        videoTitle: v.videoTitle || v.title || 'Daily Video Practice',
         videoUrl: v.url || `https://www.youtube.com/watch?v=${vidId}`,
         embedUrl: `https://www.youtube-nocookie.com/embed/${vidId}?rel=0&modestbranding=1&enablejsapi=1`,
         assignedAt: new Date().toISOString(),
@@ -4171,7 +4219,8 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
                   {
                     id: `vid-${d}-${v.videoId}`,
                     videoId: v.videoId,
-                    title: v.videoTitle,
+                    title: v.videoTitle || v.title || 'Daily Video Practice',
+                    videoTitle: v.videoTitle || v.title || 'Daily Video Practice',
                     url: v.videoUrl,
                     duration: v.duration || '6-10 min',
                     playlistId: v.playlistId,
@@ -6004,10 +6053,6 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
     const cid = extractServerYouTubeId(id);
     if (cid) {
       consumedVideoIds.add(cid);
-      targetKeys.forEach((k) => {
-        if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
-        if (!db.studentWatchedVideos[k].includes(cid)) db.studentWatchedVideos[k].push(cid);
-      });
     }
   });
 
@@ -6380,7 +6425,7 @@ app.post('/api/student-video-assignments/watch', (req, res) => {
 
   const watchedList = (cleanEmail && db.studentWatchedVideos[cleanEmail]) || (uid && db.studentWatchedVideos[uid]) || [];
   if (uid && cleanVidId) {
-    addWatchedVideoToUserDoc(uid, cleanVidId).catch(() => {});
+    addWatchedVideoToUserDoc(uid, cleanVidId, (req.body.videoTitle || req.body.title)).catch(() => {});
   }
 
   res.json({
@@ -7468,7 +7513,10 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
