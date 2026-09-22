@@ -3658,7 +3658,8 @@ function distributeWeeklyYouTubeForStudent(
   rawLevel?: string,
   teacherUid?: string,
   teacherEmail?: string,
-  activeDays?: string[]
+  activeDays?: string[],
+  extraWatchedIds?: string[]
 ): any[] {
   const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
   const levelPlaylist = YOUTUBE_LEVEL_PLAYLISTS[normLevel] || YOUTUBE_LEVEL_PLAYLISTS.beginner;
@@ -3711,6 +3712,13 @@ function distributeWeeklyYouTubeForStudent(
       if (vid) consumedVideoIds.add(vid);
     });
   });
+
+  if (Array.isArray(extraWatchedIds)) {
+    extraWatchedIds.forEach((id: string) => {
+      const vid = extractServerYouTubeId(id);
+      if (vid) consumedVideoIds.add(vid);
+    });
+  }
 
   const assignedRecords: any[] = [];
   const assignedInWeekVideoIds = new Set<string>();
@@ -3767,6 +3775,7 @@ function distributeWeeklyYouTubeForStudent(
 
     const cleanVidId = extractServerYouTubeId(chosenVideo.videoId || chosenVideo.url) || `vid-${dayKey}`;
     assignedInWeekVideoIds.add(cleanVidId);
+    consumedVideoIds.add(cleanVidId);
 
     const canonicalUrl = `https://www.youtube.com/watch?v=${cleanVidId}`;
     const embedUrl = chosenVideo.embedUrl || `https://www.youtube-nocookie.com/embed/${cleanVidId}?rel=0&modestbranding=1&enablejsapi=1`;
@@ -3993,14 +4002,27 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
     if (weeklyStudyDays) db.userProfiles[resolved.email].weeklyStudyDays = weeklyStudyDays;
   }
 
-  // 1. Move all currently assigned videos and tracks to consumed history
+  // 1. Move all currently assigned videos and tracks to consumed history, merging global watched history
   if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
   if (!db.studentListenedTracks) db.studentListenedTracks = {};
 
+  const clientWatchedHistory: string[] = Array.isArray(req.body.watchedVideosHistory)
+    ? req.body.watchedVideosHistory
+    : [];
+
   targetKeys.forEach((k) => {
+    if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
+
+    // Merge global watched history from client Firestore
+    clientWatchedHistory.forEach((id: string) => {
+      const vid = extractServerYouTubeId(id);
+      if (vid && !db.studentWatchedVideos[k].includes(vid)) {
+        db.studentWatchedVideos[k].push(vid);
+      }
+    });
+
     const existingVideos = db.studentVideoAssignments?.[k] || [];
     if (Array.isArray(existingVideos)) {
-      if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
       existingVideos.forEach((v: any) => {
         const vid = extractServerYouTubeId(v.videoId || v.videoUrl);
         if (vid && !db.studentWatchedVideos[k].includes(vid)) {
@@ -4020,7 +4042,7 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
       });
     }
 
-    // Clear current assignments so fresh generation is triggered
+    // Clear current assignments so fresh generation is applied
     if (db.studentVideoAssignments?.[k]) {
       db.studentVideoAssignments[k] = [];
     }
@@ -4053,14 +4075,14 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
     });
   }
 
-  // 3. Reset weekly activity checks, clear video attachments, and reset routine completion flags for the new week
+  // 3. Reset weekly activity checks and reset routine completion/repeat flags for the new week
   if (!db.studentWeeklyChecks) db.studentWeeklyChecks = {};
   if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
 
   targetKeys.forEach((k) => {
     db.studentWeeklyChecks[k] = {};
-    db.studentAwaitingTopicSelection[k] = true;
-    db.studentVideoAssignments[k] = []; // Clear video assignments for the new week
+    db.studentAwaitingTopicSelection[k] = false;
+    db.studentVideoAssignments[k] = [];
 
     if (db.studentRoutinesMap?.[k]) {
       Object.keys(db.studentRoutinesMap[k]).forEach((dayKey) => {
@@ -4071,27 +4093,13 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
             act.completedToday = false;
             act.isRepeatVideo = false;
             act.repeatVideo = false;
-            // Clear any attached video for the video activity so the day starts fresh
-            const isVideoAct =
-              act.id?.endsWith('1') ||
-              act.activityName?.toLowerCase().includes('vídeo') ||
-              act.activityName?.toLowerCase().includes('video') ||
-              (act.teacherVideos && act.teacherVideos.length > 0) ||
-              (db.youtubePlaylists || []).some((pl: any) => pl.title?.toLowerCase().trim() === act.activityName?.toLowerCase().trim());
-            if (isVideoAct) {
-              act.teacherVideos = [];
-              act.activityName = 'Daily Video Practice';
-              act.teacherNotes = '';
-              act.isRepeatVideo = false;
-              act.repeatVideo = false;
-            }
           });
         }
       });
     }
   });
 
-  // Reset global default routines completion flags
+  // Reset global default routines completion and repeat flags
   if (db.routinesByDay) {
     Object.keys(db.routinesByDay).forEach((dayKey) => {
       const dayActs = db.routinesByDay[dayKey];
@@ -4101,28 +4109,94 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
           act.completedToday = false;
           act.isRepeatVideo = false;
           act.repeatVideo = false;
-          const isVideoAct =
-            act.id?.endsWith('1') ||
-            act.activityName?.toLowerCase().includes('vídeo') ||
-            act.activityName?.toLowerCase().includes('video') ||
-            (act.teacherVideos && act.teacherVideos.length > 0);
-          if (isVideoAct) {
-            act.teacherVideos = [];
-            act.activityName = 'Daily Video Practice';
-            act.teacherNotes = '';
-            act.isRepeatVideo = false;
-            act.repeatVideo = false;
-          }
         });
       }
     });
   }
 
   // 4. Distribute new weekly Spotify tracks with guaranteed anti-repetition.
-  // Video assignments are reset to empty: student must select new topics for the cycle.
   const studentLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, resolved.email, resolved.uid)).key;
   const newTracks = distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel);
-  const newVideos: any[] = [];
+
+  // 5. Ingest new client-assigned videos or distribute fresh unseen videos sequentially
+  const clientAssignedVideos: any[] = Array.isArray(req.body.newAssignedVideos)
+    ? req.body.newAssignedVideos
+    : [];
+
+  let newVideos: any[] = [];
+  if (clientAssignedVideos.length > 0) {
+    newVideos = clientAssignedVideos.map((v: any, idx: number) => {
+      const vidId = extractServerYouTubeId(v.videoId || v.url) || v.videoId;
+      return {
+        id: `assign-${v.day}-${Date.now()}-${idx}`,
+        activityId: `act-${v.day}-1`,
+        studentEmail: resolved.email,
+        studentUid: resolved.uid,
+        day: v.day,
+        playlistId: v.playlistId,
+        playlistTitle: v.playlistTitle,
+        videoId: vidId,
+        videoTitle: v.title,
+        videoUrl: v.url || `https://www.youtube.com/watch?v=${vidId}`,
+        embedUrl: `https://www.youtube-nocookie.com/embed/${vidId}?rel=0&modestbranding=1&enablejsapi=1`,
+        assignedAt: new Date().toISOString(),
+        duration: v.duration || '6-10 min',
+        instructions: v.instructions || 'Daily Video Practice',
+      };
+    });
+
+    targetKeys.forEach((k) => {
+      db.studentVideoAssignments[k] = newVideos;
+      if (!db.studentRoutinesMap[k]) {
+        db.studentRoutinesMap[k] = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+      }
+      newVideos.forEach((v: any) => {
+        const d = v.day;
+        if (d && db.studentRoutinesMap[k][d]) {
+          db.studentRoutinesMap[k][d] = db.studentRoutinesMap[k][d].map((act: any) => {
+            const isVideoAct =
+              act.id?.endsWith('1') ||
+              act.activityName?.toLowerCase().includes('vídeo') ||
+              act.activityName?.toLowerCase().includes('video') ||
+              (act.teacherVideos && act.teacherVideos.length > 0);
+            if (isVideoAct) {
+              return {
+                ...act,
+                activityName: v.playlistTitle || act.activityName || 'Daily Video Practice',
+                teacherVideos: [
+                  {
+                    id: `vid-${d}-${v.videoId}`,
+                    videoId: v.videoId,
+                    title: v.videoTitle,
+                    url: v.videoUrl,
+                    duration: v.duration || '6-10 min',
+                    playlistId: v.playlistId,
+                    playlistTitle: v.playlistTitle,
+                  },
+                ],
+                isRepeatVideo: false,
+                repeatVideo: false,
+                completed: false,
+                completedToday: false,
+              };
+            }
+            return act;
+          });
+        }
+      });
+    });
+  } else {
+    newVideos = distributeWeeklyYouTubeForStudent(
+      db,
+      resolved.email,
+      resolved.uid,
+      studentLevel,
+      undefined,
+      undefined,
+      weeklyStudyDays,
+      clientWatchedHistory
+    );
+  }
 
   writeDb(db);
 
@@ -4868,13 +4942,48 @@ app.post('/api/routines/words', (req, res) => {
 
 app.post('/api/routines/toggle', (req, res) => {
   const db = readDb();
-  const { day, activityId } = req.body;
+  const { day, activityId, studentEmail, studentUid, videoId } = req.body;
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const targetKeys = Array.from(new Set([email, uid].filter(Boolean) as string[]));
+
+  let becameCompleted = false;
+
   if (db.routinesByDay && db.routinesByDay[day]) {
-    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) =>
-      item.id === activityId ? { ...item, completedToday: !item.completedToday } : item
-    );
-    writeDb(db);
+    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) => {
+      if (item.id === activityId) {
+        const nextState = !item.completedToday;
+        if (nextState) becameCompleted = true;
+        return { ...item, completedToday: nextState, completed: nextState };
+      }
+      return item;
+    });
   }
+
+  targetKeys.forEach((k) => {
+    if (db.studentRoutinesMap?.[k]?.[day]) {
+      db.studentRoutinesMap[k][day] = db.studentRoutinesMap[k][day].map((item: any) => {
+        if (item.id === activityId) {
+          const nextState = !item.completedToday;
+          if (nextState) becameCompleted = true;
+          return { ...item, completedToday: nextState, completed: nextState };
+        }
+        return item;
+      });
+    }
+
+    if (becameCompleted && videoId) {
+      const cleanVid = extractServerYouTubeId(videoId);
+      if (cleanVid) {
+        if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+        if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
+        if (!db.studentWatchedVideos[k].includes(cleanVid)) {
+          db.studentWatchedVideos[k].push(cleanVid);
+        }
+      }
+    }
+  });
+
+  writeDb(db);
   res.json({ success: true });
 });
 
@@ -5881,6 +5990,21 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
     const cid = extractServerYouTubeId(id);
     if (cid) consumedVideoIds.add(cid);
   });
+
+  const clientWatchedHistory: string[] = Array.isArray(req.body.watchedVideosHistory)
+    ? req.body.watchedVideosHistory
+    : [];
+  clientWatchedHistory.forEach((id: string) => {
+    const cid = extractServerYouTubeId(id);
+    if (cid) {
+      consumedVideoIds.add(cid);
+      targetKeys.forEach((k) => {
+        if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
+        if (!db.studentWatchedVideos[k].includes(cid)) db.studentWatchedVideos[k].push(cid);
+      });
+    }
+  });
+
   userAssignments.forEach((assign: any) => {
     if (assign.day !== targetDay) {
       const cid = extractServerYouTubeId(assign.videoId || assign.videoUrl);

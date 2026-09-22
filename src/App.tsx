@@ -33,6 +33,8 @@ import { getTodayDayOfWeek } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
 import { normalizeStudentLevel, fetchTracksForStudentLevel } from './utils/spotify';
 import { executeStartNewWeek } from './utils/StartNewWeekHandler';
+import { addVideoToWatchedHistoryInFirestore } from './hooks/useRoutine';
+import { extractYouTubeVideoId } from './utils/youtube';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -1165,22 +1167,44 @@ export default function App() {
   // Handler: Toggle activity completed status
   const handleToggleActivityComplete = async (activityId: string) => {
     let nowCompleted = false;
+    let videoIdToArchive: string | null = null;
+
     setRoutinesByDay((prev) => {
       const updatedDayList = (prev[selectedDay] || []).map((item) => {
         if (item.id === activityId) {
           nowCompleted = !item.completedToday;
-          return { ...item, completedToday: nowCompleted };
+          if (nowCompleted) {
+            const v = item.teacherVideos?.[0];
+            if (v && (v.videoId || v.url)) {
+              videoIdToArchive = extractYouTubeVideoId(v.videoId || v.url || '') || v.videoId || null;
+            }
+          }
+          return { ...item, completedToday: nowCompleted, completed: nowCompleted };
         }
         return item;
       });
       return { ...prev, [selectedDay]: updatedDayList };
     });
 
+    const studentUid = currentAccount?.uid || userProfile?.id || '';
+    const studentEmail = currentAccount?.email || userProfile?.email || '';
+
+    // Requirement 2: Guarantee that upon completing a video activity, the video ID is persistently added to watchedVideosHistory
+    if (nowCompleted && videoIdToArchive && studentUid) {
+      addVideoToWatchedHistoryInFirestore(studentUid, videoIdToArchive).catch(() => {});
+    }
+
     try {
       await fetch('/api/routines/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ day: selectedDay, activityId }),
+        body: JSON.stringify({
+          day: selectedDay,
+          activityId,
+          studentEmail,
+          studentUid,
+          videoId: videoIdToArchive,
+        }),
       });
     } catch {
       // local fallback
@@ -1201,6 +1225,8 @@ export default function App() {
         weeklyStudyDaysTarget: targetDays,
         weeklyStudyDays: chosenDays,
         currentCycle: userProfile?.weeklyCycle || 1,
+        studentLevel: userProfile?.level || (userProfile as any)?.englishLevel || 'intermediate',
+        currentRoutines: routinesByDay,
       });
 
       if (result && result.success) {

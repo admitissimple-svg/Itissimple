@@ -944,9 +944,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           studentEmail,
+          studentUid: effectiveStudentUid,
+          uid: effectiveStudentUid,
           playlistId,
           activityId,
           day: selectedDay,
+          watchedVideosHistory: watchedHistory,
         }),
       });
 

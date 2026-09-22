@@ -229,6 +229,61 @@ export async function addVideoToWatchedHistoryInFirestore(
 }
 
 /**
+ * Appends multiple video IDs to the student's watchedVideosHistory array in Firestore.
+ * Path: users/{studentUID} -> field: watchedVideosHistory
+ */
+export async function addMultipleVideosToWatchedHistoryInFirestore(
+  studentUid: string,
+  videoIds: string[]
+): Promise<boolean> {
+  const cleanUid = normalizeStudentIdForPath(studentUid);
+  if (!cleanUid || !Array.isArray(videoIds) || videoIds.length === 0) return false;
+
+  const validIds = Array.from(
+    new Set(
+      videoIds
+        .map((id) => extractYouTubeVideoId(id) || id || '')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    )
+  );
+
+  if (validIds.length === 0) return true;
+
+  const path = `users/${cleanUid}`;
+  try {
+    const db = getDb();
+    const userRef = doc(db, 'users', cleanUid);
+
+    await setDoc(
+      userRef,
+      {
+        watchedVideosHistory: arrayUnion(...validIds),
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    // Also mirror to backend endpoint
+    validIds.forEach((vid) => {
+      fetch('/api/student-video-assignments/watch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentUid: cleanUid,
+          videoId: vid,
+        }),
+      }).catch(() => {});
+    });
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+    return false;
+  }
+}
+
+/**
  * Resets "Repeat Previous Video" (isRepeatVideo: false) for all days in Firestore:
  * Path: users/{studentUID}/routines/{dayOfWeek}
  */
