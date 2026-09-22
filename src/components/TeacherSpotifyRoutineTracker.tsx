@@ -125,7 +125,7 @@ export const TeacherSpotifyRoutineTracker: React.FC<TeacherSpotifyRoutineTracker
   return (
     <div className="bg-white rounded-2xl border border-emerald-200/80 shadow-xs overflow-hidden">
       {/* Header Banner */}
-      <div className="p-4 sm:p-5 bg-gradient-to-r from-emerald-900 via-[#000035] to-[#000035] text-white flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="p-4 sm:p-5 bg-gradient-to-r from-[#0A0F24] via-slate-900 to-indigo-950 text-white flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-indigo-950/40">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#1DB954]/20 border border-[#1DB954]/50 text-[#1DB954] flex items-center justify-center shrink-0">
               <Headphones className="w-5 h-5" />

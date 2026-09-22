@@ -102,6 +102,7 @@ interface StudentRoutineGuideSectionProps {
   onAssignVideoToActivity?: (activityId: string, video: TeacherAssignedVideo, day: DayOfWeek) => void;
   onStartNewWeek?: (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => Promise<boolean | void> | void;
   weeklyCycle?: number;
+  isStarting?: boolean;
 }
 
 export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProps> = ({
@@ -125,6 +126,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   onAssignVideoToActivity,
   onStartNewWeek,
   weeklyCycle = 1,
+  isStarting = false,
 }) => {
   const isEn = currentLanguage === 'en';
   const todayDay = getTodayDayOfWeek();
@@ -271,6 +273,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     saveVideoForDay,
     markVideoAsWatched,
     resetRepeatFlags,
+    resetRoutinesForNewWeek,
     selectNextUnwatchedVideo: pickNextUnwatched,
   } = useRoutine(effectiveStudentUid, selectedDay);
 
@@ -2556,12 +2559,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       {/* Start New Week Configuration Modal */}
       <StartNewWeekModal
         isOpen={isNewWeekModalOpen}
+        isStarting={isStarting || isStartingNewWeek}
         onClose={() => {
           setIsStartingNewWeek(false);
           setIsNewWeekModalOpen(false);
         }}
         onConfirm={async (studyDaysTarget, selectedDays) => {
           if (!onStartNewWeek) {
+            setIsStartingNewWeek(false);
             setIsNewWeekModalOpen(false);
             return;
           }
@@ -2572,6 +2577,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             setSuggestingUrlValues({});
             setSavedTopicsBeforeRepeat({});
             try {
+              if (resetRoutinesForNewWeek) {
+                await resetRoutinesForNewWeek(selectedDays);
+              }
+            } catch (routineErr) {
+              console.warn('Notice resetting routines for new week:', routineErr);
+            }
+            try {
               await resetRepeatFlags();
             } catch (flagErr) {
               console.warn('Notice resetting repeat flags:', flagErr);
@@ -2580,7 +2592,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           } catch (err) {
             console.warn('Error starting new week in routine guide:', err);
           } finally {
+            setSelectedTopicByDay({});
+            setCustomSuggestionActivities({});
+            setSuggestingUrlValues({});
+            setSavedTopicsBeforeRepeat({});
             setIsStartingNewWeek(false);
+            setIsNewWeekModalOpen(false);
           }
         }}
         currentCycle={weeklyCycle || userProfile?.weeklyCycle || 1}

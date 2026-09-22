@@ -21,6 +21,7 @@ interface StartNewWeekModalProps {
   initialStudyDaysTarget?: number;
   initialSelectedDays?: DayOfWeek[];
   weeklyNativeLessonsTarget?: number;
+  isStarting?: boolean;
 }
 
 const ALL_DAYS: { key: DayOfWeek; labelEn: string; labelPt: string; shortEn: string; shortPt: string }[] = [
@@ -78,6 +79,7 @@ export const StartNewWeekModal: React.FC<StartNewWeekModalProps> = ({
   initialStudyDaysTarget = 7,
   initialSelectedDays,
   weeklyNativeLessonsTarget = 1,
+  isStarting = false,
 }) => {
   const isEn = currentLanguage === 'en';
 
@@ -137,8 +139,10 @@ export const StartNewWeekModal: React.FC<StartNewWeekModalProps> = ({
     });
   };
 
+  const isLoadingAction = isSubmitting || isStarting;
+
   const handleConfirmSubmit = async () => {
-    if (isSubmitting) return;
+    if (isLoadingAction) return;
     setIsSubmitting(true);
     let timeoutTimer: any = null;
     try {
@@ -147,15 +151,19 @@ export const StartNewWeekModal: React.FC<StartNewWeekModalProps> = ({
         timeoutTimer = setTimeout(() => {
           console.warn('Start new week confirmation reached timeout, completing modal action');
           resolve(true);
-        }, 10000);
+        }, 5000);
       });
       await Promise.race([confirmPromise, timeoutPromise]);
-      onClose();
     } catch (err) {
       console.warn('Error confirming start new week:', err);
     } finally {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       setIsSubmitting(false);
+      try {
+        onClose();
+      } catch (closeErr) {
+        console.warn('Modal close notice:', closeErr);
+      }
     }
   };
 
@@ -334,19 +342,22 @@ export const StartNewWeekModal: React.FC<StartNewWeekModalProps> = ({
         <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
           <button
             type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+            onClick={() => {
+              setIsSubmitting(false);
+              onClose();
+            }}
+            disabled={isLoadingAction}
+            className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer disabled:opacity-50"
           >
             {isEn ? 'Cancel' : 'Cancelar'}
           </button>
           <button
             type="button"
             onClick={handleConfirmSubmit}
-            disabled={isSubmitting}
+            disabled={isLoadingAction}
             className="px-5 py-2 text-xs font-black bg-[#000035] hover:bg-[#062863] text-white rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer border border-[#1C4C96] disabled:opacity-50"
           >
-            {isSubmitting ? (
+            {isLoadingAction ? (
               <>
                 <RefreshCw className="w-4 h-4 animate-spin text-[#F4CA54]" />
                 <span>{isEn ? 'Starting...' : 'Iniciando...'}</span>

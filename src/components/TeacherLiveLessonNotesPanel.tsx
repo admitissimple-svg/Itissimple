@@ -374,6 +374,7 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           studentEmail: cleanStudentEmail,
+          studentUid: (activeStudent as any)?.uid || (activeStudent as any)?.id || '',
           teacherEmail: currentAccount?.email,
           teacherName: currentAccount?.name,
           entries: dictEntries,

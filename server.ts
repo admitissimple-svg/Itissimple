@@ -4132,7 +4132,7 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
 
   targetKeys.forEach((k) => {
     db.studentWeeklyChecks[k] = {};
-    db.studentAwaitingTopicSelection[k] = false;
+    db.studentAwaitingTopicSelection[k] = true;
     db.studentVideoAssignments[k] = [];
 
     if (db.studentRoutinesMap?.[k]) {
@@ -4144,6 +4144,16 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
             act.completedToday = false;
             act.isRepeatVideo = false;
             act.repeatVideo = false;
+            const isVideoAct =
+              act.id?.endsWith('1') ||
+              act.activityName?.toLowerCase().includes('vídeo') ||
+              act.activityName?.toLowerCase().includes('video');
+            if (isVideoAct) {
+              act.activityName = 'Video of the Day';
+              act.playlistId = '';
+              act.playlistTitle = '';
+              act.teacherVideos = [];
+            }
           });
         }
       });
@@ -4165,9 +4175,36 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
     });
   }
 
-  // 4. Distribute new weekly Spotify tracks with guaranteed anti-repetition.
+  // 4. Ingest past listened tracks history from client to guarantee anti-repetition exclusivity
+  const clientListenedHistory: string[] = Array.isArray(req.body.listenedTracksHistory)
+    ? req.body.listenedTracksHistory
+    : [];
+
+  targetKeys.forEach((k) => {
+    if (!db.studentListenedTracks) db.studentListenedTracks = {};
+    if (!db.studentListenedTracks[k]) db.studentListenedTracks[k] = [];
+    clientListenedHistory.forEach((id: string) => {
+      const tid = extractSpotifyTrackId(id);
+      if (tid && !db.studentListenedTracks[k].includes(tid)) {
+        db.studentListenedTracks[k].push(tid);
+      }
+    });
+  });
+
+  // Distribute new weekly Spotify tracks with guaranteed anti-repetition.
   const studentLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, resolved.email, resolved.uid)).key;
-  const newTracks = distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel);
+  const weeklyStudyDaysList: DayOfWeek[] | undefined = Array.isArray(req.body.weeklyStudyDays)
+    ? req.body.weeklyStudyDays
+    : undefined;
+  const newTracks = distributeWeeklySpotifyForStudent(
+    db,
+    resolved.email,
+    resolved.uid,
+    studentLevel,
+    undefined,
+    undefined,
+    weeklyStudyDaysList
+  );
 
   // 5. Ingest new client-assigned videos or distribute fresh unseen videos sequentially
   const clientAssignedVideos: any[] = Array.isArray(req.body.newAssignedVideos)
@@ -4238,7 +4275,7 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
         }
       });
     });
-  } else {
+  } else if (!req.body.resetTopicsToChooseTopic && req.body.autoAssignVideos) {
     newVideos = distributeWeeklyYouTubeForStudent(
       db,
       resolved.email,
@@ -4249,6 +4286,9 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
       weeklyStudyDays,
       clientWatchedHistory
     );
+  } else {
+    // Default for starting a new week: all days start clean with "Choose a Topic"
+    newVideos = [];
   }
 
   writeDb(db);
@@ -4261,13 +4301,27 @@ app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], as
 
   const routines: any = {};
   Object.keys(rawRoutines).forEach((d) => {
-    routines[d] = (rawRoutines[d] || []).map((act: any) => ({
-      ...act,
-      completed: false,
-      completedToday: false,
-      isRepeatVideo: false,
-      repeatVideo: false,
-    }));
+    routines[d] = (rawRoutines[d] || []).map((act: any) => {
+      const isVideoAct =
+        act.id?.endsWith('1') ||
+        act.activityName?.toLowerCase().includes('vídeo') ||
+        act.activityName?.toLowerCase().includes('video') ||
+        (act.teacherVideos && act.teacherVideos.length > 0);
+      const shouldResetVideo = isVideoAct && (!req.body.autoAssignVideos || req.body.resetTopicsToChooseTopic);
+      return {
+        ...act,
+        completed: false,
+        completedToday: false,
+        isRepeatVideo: false,
+        repeatVideo: false,
+        ...(shouldResetVideo ? {
+          activityName: 'Video of the Day',
+          playlistId: '',
+          playlistTitle: '',
+          teacherVideos: [],
+        } : {}),
+      };
+    });
   });
 
   // 5. Cloud Firestore synchronization linked to UID
@@ -4916,6 +4970,72 @@ app.post('/api/student-dictionary', async (req, res) => {
 
   await writeDbSync(db);
   res.json({ success: true, dictionary: updated });
+});
+
+// Endpoint: Strict UID correlation verification between Student and Native Friend
+app.get('/api/students/verify-link', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentUid = ((req.query.studentUid as string) || '').trim();
+  const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
+  const teacherUid = ((req.query.teacherUid as string) || '').trim();
+  const teacherEmail = ((req.query.teacherEmail as string) || '').toLowerCase().trim();
+
+  const adminEmails = [
+    'adm.itissimple@gmail.com',
+    'estilobeeforkids@gmail.com',
+    'adm.itssimple@gmail.com',
+    'estilobeeadm@gmail.com',
+  ];
+
+  if (
+    teacherUid === 'admin' ||
+    adminEmails.includes(teacherEmail) ||
+    teacherEmail.includes('admin')
+  ) {
+    return res.json({ isLinked: true, reason: 'admin' });
+  }
+
+  if (!teacherUid && !teacherEmail) {
+    return res.json({ isLinked: true, reason: 'self' });
+  }
+
+  // Find student in db.students
+  const student = (db.students || []).find((s: any) => {
+    const sUid = (s.uid || s.id || '').trim();
+    const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
+    return (studentUid && sUid === studentUid) || (studentEmail && sEmail === studentEmail);
+  });
+
+  if (student) {
+    const sTeacherUid = (student.teacherUid || (student as any).assignedTeacherId || '').trim();
+    const sTeacherEmail = (student.teacherEmail || '').toLowerCase().trim();
+    if (
+      (teacherUid && sTeacherUid && teacherUid === sTeacherUid) ||
+      (teacherEmail && sTeacherEmail && teacherEmail === sTeacherEmail) ||
+      (teacherUid && sTeacherEmail && teacherUid.toLowerCase().includes(sTeacherEmail))
+    ) {
+      return res.json({ isLinked: true, reason: 'assigned_student' });
+    }
+  }
+
+  // Check scheduled lessons
+  const hasLesson = (db.liveLessons || []).some((l: any) => {
+    const lStudentEmail = (l.studentEmail || '').toLowerCase().trim();
+    const lStudentUid = (l.studentUid || '').trim();
+    const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
+    const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
+
+    const studentMatches = (studentEmail && lStudentEmail === studentEmail) || (studentUid && lStudentUid === studentUid);
+    const teacherMatches = (teacherEmail && lTeacherEmail === teacherEmail) || (teacherUid && lTeacherUid === teacherUid);
+    return studentMatches && teacherMatches && l.status !== 'cancelled';
+  });
+
+  if (hasLesson) {
+    return res.json({ isLinked: true, reason: 'active_lesson' });
+  }
+
+  return res.json({ isLinked: false, reason: 'unauthorized_uid_pair' });
 });
 
 app.delete(['/api/lessons/:id', '/api/live-lessons/:id'], (req, res) => {

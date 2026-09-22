@@ -67,15 +67,25 @@ export async function verifyStudentNativeFriendLink(
 
   // 1. Admin bypass - Admins oversee all students and tutors
   const currentEmail = (auth.currentUser?.email || '').toLowerCase().trim();
+  const adminEmails = [
+    'adm.itissimple@gmail.com',
+    'estilobeeforkids@gmail.com',
+    'adm.itssimple@gmail.com',
+    'estilobeeadm@gmail.com',
+  ];
   if (
     cleanTeacher === 'admin' ||
-    currentEmail === 'estilobeeforkids@gmail.com' ||
+    adminEmails.includes(currentEmail) ||
     currentEmail.includes('admin')
   ) {
     return true;
   }
 
-  if (!cleanTeacher) return true;
+  // 2. Student accessing their own history
+  if (!cleanTeacher || cleanStudent === cleanTeacher) return true;
+  if (auth.currentUser && (auth.currentUser.uid === cleanStudent || auth.currentUser.email?.toLowerCase().trim() === cleanStudent)) {
+    return true;
+  }
 
   try {
     const db = getDb();
@@ -97,13 +107,26 @@ export async function verifyStudentNativeFriendLink(
     if (snap.exists()) {
       const data = snap.data();
       const assignedUid = (data.assignedNativeFriendUID || data.nativeFriendUID || '').trim();
+      const sTeacherEmail = (data.teacherEmail || data.assignedTeacherEmail || '').toLowerCase().trim();
+      const sTeacherUid = (data.teacherUid || '').trim();
+
+      // If directly assigned to this teacher UID
       if (assignedUid && assignedUid === cleanTeacher) {
         return true;
       }
 
-      // Auto-persist assignedNativeFriendUID if missing or matching teacherEmail
-      const sTeacherEmail = (data.teacherEmail || data.assignedTeacherEmail || '').toLowerCase().trim();
-      const teacherMatches = !assignedUid || (sTeacherEmail && cleanTeacher.toLowerCase().includes(sTeacherEmail));
+      // If assigned to a DIFFERENT teacher UID, reject to prevent cross-profile leakage
+      if (assignedUid && assignedUid !== cleanTeacher) {
+        if (sTeacherEmail && (cleanTeacher.toLowerCase().includes(sTeacherEmail) || currentEmail === sTeacherEmail)) {
+          return true;
+        }
+        return false;
+      }
+
+      // If no assignedUid yet, check if student matches by teacherUid or teacherEmail
+      const teacherMatches =
+        (sTeacherUid && sTeacherUid === cleanTeacher) ||
+        (sTeacherEmail && (cleanTeacher.toLowerCase().includes(sTeacherEmail) || currentEmail === sTeacherEmail));
 
       if (teacherMatches) {
         await setDoc(
@@ -134,12 +157,24 @@ export async function verifyStudentNativeFriendLink(
 
     if (matched) return true;
 
-    // Default to true for authenticated teachers selecting their students
-    return true;
+    // Direct backend verification fallback
+    try {
+      const resp = await fetch(
+        `/api/students/verify-link?studentUid=${encodeURIComponent(cleanStudent)}&studentEmail=${encodeURIComponent(emailToSearch)}&teacherUid=${encodeURIComponent(cleanTeacher)}&teacherEmail=${encodeURIComponent(currentEmail)}`
+      );
+      if (resp.ok) {
+        const json = await resp.json();
+        if (typeof json.isLinked === 'boolean') {
+          return json.isLinked;
+        }
+      }
+    } catch {}
+
+    // Strict default: If not explicitly linked or authorized, return false to prevent cross-profile leakage
+    return false;
   } catch (err) {
     console.warn('Notice verifying student-nativeFriend UID link:', err);
-    // Allow fallback so user is never blocked by network latency
-    return true;
+    return false;
   }
 }
 

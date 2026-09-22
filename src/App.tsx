@@ -271,6 +271,7 @@ export default function App() {
   const [isStartLivingModalOpen, setIsStartLivingModalOpen] = useState<boolean>(false);
   const [onboardingInitialEmail, setOnboardingInitialEmail] = useState<string>('');
   const [authInitialEmail, setAuthInitialEmail] = useState<string>('');
+  const [isStartingNewWeek, setIsStartingNewWeek] = useState<boolean>(false);
 
   const [activeLessonForAction, setActiveLessonForAction] = useState<LiveLesson | null>(null);
   const [teacherEmailForConfig, setTeacherEmailForConfig] = useState<string>('itissimple.school@gmail.com');
@@ -1236,6 +1237,7 @@ export default function App() {
 
   // Handler: Start New Week (Rotates assignments, moves consumed to history, increments weeklyCycle, resets week checks)
   const handleStartNewWeek = useCallback(async (studyDaysTarget?: number, selectedDays?: DayOfWeek[]) => {
+    setIsStartingNewWeek(true);
     const studentEmail = currentAccount?.email || userProfile?.email || '';
     const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
     const targetDays = studyDaysTarget || userProfile?.weeklyStudyDaysTarget || 7;
@@ -1312,6 +1314,8 @@ export default function App() {
       }
     } catch (err) {
       console.warn('Could not start new week:', err);
+    } finally {
+      setIsStartingNewWeek(false);
     }
     return false;
   }, [currentAccount?.email, currentAccount?.uid, userProfile?.email, userProfile?.id, (userProfile as any)?.uid, userProfile?.routineVideoTime, userProfile?.routineAudioTime, userProfile?.weeklyCycle, userProfile?.weeklyStudyDaysTarget, userProfile?.weeklyStudyDays, userProfile?.weeklyNativeLessonsTarget, routinesByDay, currentLanguage]);
@@ -1962,21 +1966,29 @@ export default function App() {
   const handleAddWordsToDictionary = async (entries: StudentDictionaryEntry[], studentEmail?: string) => {
     if (!entries || entries.length === 0) return;
     const targetEmail = (studentEmail || (selectedStudentFilter !== 'all' ? selectedStudentFilter : currentAccount?.email) || '').toLowerCase().trim();
+    const targetStudent = (studentsList || []).find(
+      (s) => (s.email || '').toLowerCase().trim() === targetEmail || (s as any).uid === targetEmail || s.id === targetEmail
+    );
+    const targetUid = (targetStudent as any)?.uid || targetStudent?.id || '';
 
-    setStudentDictionaryEntries((prev) => {
-      const map = new Map<string, StudentDictionaryEntry>();
-      prev.forEach((e) => map.set(e.word.toLowerCase(), e));
-      entries.forEach((e) => map.set(e.word.toLowerCase(), e));
-      return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
-    });
+    // Only update local studentDictionaryEntries if the current logged-in user is this student
+    if (!currentAccount || (currentAccount.email || '').toLowerCase().trim() === targetEmail) {
+      setStudentDictionaryEntries((prev) => {
+        const map = new Map<string, StudentDictionaryEntry>();
+        prev.forEach((e) => map.set(e.word.toLowerCase(), e));
+        entries.forEach((e) => map.set(e.word.toLowerCase(), e));
+        return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+      });
+    }
 
-    if (targetEmail) {
+    if (targetEmail || targetUid) {
       try {
         await fetch('/api/student-dictionary', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             studentEmail: targetEmail,
+            studentUid: targetUid,
             teacherEmail: currentAccount?.email,
             teacherName: currentAccount?.name,
             entries,
@@ -3397,6 +3409,7 @@ export default function App() {
                   onAssignVideoToActivity={handleAssignVideoToActivity}
                   weeklyCycle={userProfile?.weeklyCycle || 1}
                   onStartNewWeek={handleStartNewWeek}
+                  isStarting={isStartingNewWeek}
                 />
 
                 {/* Section 3: Weekly Activity (Image 3) */}

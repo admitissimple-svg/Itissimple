@@ -1396,7 +1396,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
     <div className="space-y-6">
       {/* Student context banner if selected */}
       {(selectedStudent || activeStudentEmail) && (
-        <div className="bg-[#000035] text-white p-4 rounded-2xl border border-[#1C4C96] flex items-center justify-between flex-wrap gap-3 shadow-sm">
+        <div className="bg-gradient-to-r from-[#0A0F24] via-slate-900 to-indigo-950 text-white p-4 rounded-2xl border border-indigo-950/60 flex items-center justify-between flex-wrap gap-3 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-[#1C4C96] flex items-center justify-center font-bold text-white border border-[#607EC9] shrink-0 overflow-hidden">
               {selectedStudent?.picture && selectedStudent.picture.trim() !== '' ? (

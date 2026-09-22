@@ -84,7 +84,13 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
     return 'weekData';
   }, [weekId, weeklyCycle]);
 
-  // 1. Strict UID Link Authorization Check
+  // 1. Immediate state reset on student change to eliminate cross-profile data leakage
+  useEffect(() => {
+    setRoutineDoc(null);
+    setIsAuthorized(false);
+  }, [effectiveUid]);
+
+  // 2. Strict UID Link Authorization Check
   // Ensures Native Friend can NEVER list, view, or listen to unauthorized student data
   useEffect(() => {
     let active = true;
@@ -122,9 +128,9 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
     return () => {
       active = false;
     };
-  }, [effectiveUid, cleanTeacherUid]);
+  }, [effectiveUid, cleanTeacherUid, studentEmail]);
 
-  // 2. Subscribe in real time to Firestore ONLY if authorized by UID
+  // 3. Subscribe in real time to Firestore ONLY if authorized by UID
   useEffect(() => {
     if (!effectiveUid || !isAuthorized) {
       setRoutineDoc(null);

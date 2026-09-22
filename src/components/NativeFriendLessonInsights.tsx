@@ -211,7 +211,7 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
   return (
     <div className="bg-white border border-slate-200/90 rounded-2xl shadow-sm overflow-hidden transition-all duration-200 hover:shadow-md">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-indigo-900 via-[#000035] to-slate-900 p-5 sm:p-6 text-white">
+      <div className="bg-gradient-to-r from-[#0A0F24] via-slate-900 to-indigo-950 p-5 sm:p-6 text-white border-b border-indigo-950/40">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">

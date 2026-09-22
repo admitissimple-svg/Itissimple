@@ -150,18 +150,25 @@ export async function fetchAllRoutineVideosFromFirestore(
   const result: Partial<Record<DayOfWeek, SavedRoutineVideo>> = {};
   const db = getDb();
 
-  await Promise.all(
-    ALL_DAYS_OF_WEEK.map(async (day) => {
+  try {
+    const promises = ALL_DAYS_OF_WEEK.map(async (day) => {
       try {
-        const snap = await getDoc(doc(db, 'users', cleanUid, 'routines', day));
-        if (snap.exists()) {
+        const snap = await withFirestoreTimeout(
+          getDoc(doc(db, 'users', cleanUid, 'routines', day)),
+          2000,
+          null as any
+        );
+        if (snap && snap.exists()) {
           result[day] = snap.data() as SavedRoutineVideo;
         }
-      } catch (err) {
+      } catch {
         // Individual day read failure handled gracefully
       }
-    })
-  );
+    });
+    await Promise.all(promises);
+  } catch (err) {
+    console.warn('Notice reading routines from Firestore:', err);
+  }
 
   return result;
 }
@@ -204,8 +211,12 @@ export async function fetchWatchedVideosHistoryFromFirestore(
   const path = `users/${cleanUid}`;
   try {
     const db = getDb();
-    const snap = await getDoc(doc(db, 'users', cleanUid));
-    if (snap.exists()) {
+    const snap = await withFirestoreTimeout(
+      getDoc(doc(db, 'users', cleanUid)),
+      2000,
+      null as any
+    );
+    if (snap && snap.exists()) {
       const data = snap.data();
       const history = data.watchedVideosHistory || data.watchedVideos || [];
       if (Array.isArray(history)) {
@@ -237,8 +248,12 @@ export async function fetchWatchedVideoObjectsFromFirestore(
 
   try {
     const db = getDb();
-    const snap = await getDoc(doc(db, 'users', cleanUid));
-    if (snap.exists()) {
+    const snap = await withFirestoreTimeout(
+      getDoc(doc(db, 'users', cleanUid)),
+      2000,
+      null as any
+    );
+    if (snap && snap.exists()) {
       const data = snap.data();
       const history = data.watchedVideosHistory || data.watchedVideos || [];
       if (Array.isArray(history)) {
@@ -430,6 +445,53 @@ export async function resetRepeatFlagsInFirestore(
       );
     });
     await withFirestoreTimeout(Promise.all(promises), 3500, []);
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/routines`);
+    return false;
+  }
+}
+
+/**
+ * Completely resets daily routines for a new weekly cycle:
+ * Clears topic/playlistId, videoId, and repeat flags so all days start cleanly on "Choose a Topic".
+ * Path: users/{studentUID}/routines/{dayOfWeek}
+ */
+export async function resetDailyRoutinesForNewWeekInFirestore(
+  studentUid: string,
+  targetDays: DayOfWeek[] = ALL_DAYS_OF_WEEK
+): Promise<boolean> {
+  const cleanUid = normalizeStudentIdForPath(studentUid);
+  if (!cleanUid) return false;
+
+  const db = getDb();
+  const daysToReset = targetDays.length > 0 ? targetDays : ALL_DAYS_OF_WEEK;
+
+  try {
+    const promises = daysToReset.map((day) => {
+      const ref = doc(db, 'users', cleanUid, 'routines', day);
+      return setDoc(
+        ref,
+        {
+          videoId: '',
+          title: '',
+          videoTitle: '',
+          url: '',
+          playlistId: '',
+          playlistTitle: '',
+          isRepeatVideo: false,
+          dayOfWeek: day,
+          activityId: 'act-1',
+          instructions: '',
+          duration: '',
+          completed: false,
+          completedToday: false,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    });
+    await withFirestoreTimeout(Promise.all(promises), 2500, []);
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/routines`);
@@ -644,6 +706,40 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
     [effectiveUid]
   );
 
+  // Reset all topics, videos, and repeat flags so all days start fresh with "Choose a Topic"
+  const resetRoutinesForNewWeek = useCallback(
+    async (studyDays?: DayOfWeek[]) => {
+      if (!effectiveUid) return false;
+
+      // Optimistic local state update to clean neutral state
+      setRoutinesByDay((prev) => {
+        const updated = { ...prev };
+        ALL_DAYS_OF_WEEK.forEach((d) => {
+          updated[d] = {
+            videoId: '',
+            title: '',
+            videoTitle: '',
+            url: '',
+            playlistId: '',
+            playlistTitle: '',
+            isRepeatVideo: false,
+            dayOfWeek: d,
+            activityId: 'act-1',
+            instructions: '',
+            duration: '',
+            completed: false,
+            completedToday: false,
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        return updated;
+      });
+
+      return await resetDailyRoutinesForNewWeekInFirestore(effectiveUid, studyDays);
+    },
+    [effectiveUid]
+  );
+
   const currentDayRoutine = selectedDay ? routinesByDay[selectedDay] || null : null;
 
   return {
@@ -655,6 +751,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
     saveVideoForDay,
     markVideoAsWatched,
     resetRepeatFlags,
+    resetRoutinesForNewWeek,
     selectNextUnwatchedVideo: <T extends { videoId?: string; id?: string; url?: string }>(candidates: T[]) =>
       selectNextUnwatchedVideo(candidates, watchedHistory),
   };
