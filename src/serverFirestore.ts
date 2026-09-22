@@ -47,13 +47,34 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
   const db = getFirestoreDb();
   if (!db) return null;
   try {
-    const fetchPromise = getDoc(doc(db, 'app_state', 'main_data')).then((snap) => {
-      if (snap.exists()) {
-        return snap.data();
+    const fetchDoc = async (docName: string) => {
+      try {
+        const snap = await getDoc(doc(db, 'app_state', docName));
+        return snap.exists() ? snap.data() : null;
+      } catch {
+        return null;
       }
-      return null;
+    };
+
+    const fetchAllPromise = Promise.all([
+      fetchDoc('main_data'),
+      fetchDoc('routines'),
+      fetchDoc('tutors'),
+      fetchDoc('assignments'),
+      fetchDoc('lessons'),
+    ]).then(([mainData, routines, tutors, assignments, lessons]) => {
+      if (!mainData && !routines && !tutors && !assignments && !lessons) {
+        return null;
+      }
+      return {
+        ...(mainData || {}),
+        ...(routines || {}),
+        ...(tutors || {}),
+        ...(assignments || {}),
+        ...(lessons || {}),
+      };
     });
-    return await withTimeout(fetchPromise, 2500);
+    return await withTimeout(fetchAllPromise, 3500);
   } catch (err) {
     console.warn('Firestore fetchAppState error:', err);
   }
@@ -62,12 +83,83 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
 
 export async function saveAppStateToFirestore(data: any): Promise<boolean> {
   const db = getFirestoreDb();
-  if (!db) return false;
+  if (!db || !data) return false;
   try {
     // Sanitize data: JSON roundtrip eliminates any undefined properties that cause Firestore setDoc to fail
     const sanitized = JSON.parse(JSON.stringify(data));
-    const savePromise = setDoc(doc(db, 'app_state', 'main_data'), sanitized).then(() => true);
-    const result = await withTimeout(savePromise, 2000);
+
+    // Strip out bulky external API caches that must not be stored in Firestore documents
+    delete sanitized.youtubePlaylists;
+
+    // Partition state into modular documents under /app_state/ so each document is well under 250 KB
+    // (Firestore has a strict maximum document limit of 1,048,576 bytes).
+    const routinesData = {
+      studentRoutinesMap: sanitized.studentRoutinesMap || {},
+      studentCurrentRoutines: sanitized.studentCurrentRoutines || {},
+      routinesByDay: sanitized.routinesByDay || {},
+      studentWeeklyChecks: sanitized.studentWeeklyChecks || {},
+      weeklyNativeTargets: sanitized.weeklyNativeTargets || {},
+      updatedAt: new Date().toISOString(),
+    };
+
+    const tutorsData = {
+      tutorsList: sanitized.tutorsList || [],
+      teachers: sanitized.teachers || [],
+      deletedTutorEmails: sanitized.deletedTutorEmails || [],
+      deletedTutorIds: sanitized.deletedTutorIds || [],
+      updatedAt: new Date().toISOString(),
+    };
+
+    const assignmentsData = {
+      studentVideoAssignments: sanitized.studentVideoAssignments || {},
+      studentSpotifyAssignments: sanitized.studentSpotifyAssignments || {},
+      studentWatchedVideos: sanitized.studentWatchedVideos || {},
+      studentListenedTracks: sanitized.studentListenedTracks || {},
+      studentAwaitingTopicSelection: sanitized.studentAwaitingTopicSelection || {},
+      weeklyStudyDays: sanitized.weeklyStudyDays || {},
+      weeklyStudyDaysTargets: sanitized.weeklyStudyDaysTargets || {},
+      updatedAt: new Date().toISOString(),
+    };
+
+    const lessonsData = {
+      liveLessons: sanitized.liveLessons || [],
+      contractedLessons: sanitized.contractedLessons || [],
+      weeklyHomework: sanitized.weeklyHomework || {},
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Keep core system & user settings in main_data, stripped of the partitioned collections
+    const mainData = { ...sanitized };
+    delete mainData.studentRoutinesMap;
+    delete mainData.studentCurrentRoutines;
+    delete mainData.routinesByDay;
+    delete mainData.studentWeeklyChecks;
+    delete mainData.weeklyNativeTargets;
+    delete mainData.tutorsList;
+    delete mainData.teachers;
+    delete mainData.deletedTutorEmails;
+    delete mainData.deletedTutorIds;
+    delete mainData.studentVideoAssignments;
+    delete mainData.studentSpotifyAssignments;
+    delete mainData.studentWatchedVideos;
+    delete mainData.studentListenedTracks;
+    delete mainData.studentAwaitingTopicSelection;
+    delete mainData.weeklyStudyDays;
+    delete mainData.weeklyStudyDaysTargets;
+    delete mainData.liveLessons;
+    delete mainData.contractedLessons;
+    delete mainData.weeklyHomework;
+    mainData.updatedAt = new Date().toISOString();
+
+    const savePromises = Promise.all([
+      setDoc(doc(db, 'app_state', 'main_data'), mainData),
+      setDoc(doc(db, 'app_state', 'routines'), routinesData),
+      setDoc(doc(db, 'app_state', 'tutors'), tutorsData),
+      setDoc(doc(db, 'app_state', 'assignments'), assignmentsData),
+      setDoc(doc(db, 'app_state', 'lessons'), lessonsData),
+    ]).then(() => true);
+
+    const result = await withTimeout(savePromises, 4000);
     return !!result;
   } catch (err) {
     console.warn('Firestore saveAppState error:', err);

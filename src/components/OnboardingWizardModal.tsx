@@ -555,6 +555,8 @@ export const OnboardingWizardModal: React.FC<OnboardingWizardModalProps> = ({
     onClose();
   };
 
+  if (!isOpen) return null;
+
   return (
     <div
       id="onboarding-wizard-modal"
