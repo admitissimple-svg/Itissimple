@@ -10,6 +10,7 @@ import {
 import { DayOfWeek } from '../types';
 import { getStudentCurrentDayOfWeek, sanitizeTimeZone, DEFAULT_STUDENT_TIMEZONE } from '../utils/timezone';
 import { selectCurrentDaySpotifyTrack, normalizeStudentLevel } from '../utils/spotify';
+import { verifyStudentNativeFriendLink } from './useStudentHistory';
 
 export interface UseNativeFriendStudentSyncParams {
   studentUid?: string;
@@ -43,10 +44,12 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
 
   const [routineDoc, setRoutineDoc] = useState<StudentCurrentRoutineDoc | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
   const [isSavingFeedback, setIsSavingFeedback] = useState<boolean>(false);
   const [feedbackSuccess, setFeedbackSuccess] = useState<boolean>(false);
 
   const effectiveUid = normalizeStudentIdForPath(studentUid || studentEmail || '');
+  const cleanTeacherUid = (teacherUid || '').trim();
   const effectiveTz = sanitizeTimeZone(studentTimezone || DEFAULT_STUDENT_TIMEZONE);
 
   // Accurately resolve student's current day in their local timezone
@@ -81,9 +84,49 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
     return 'weekData';
   }, [weekId, weeklyCycle]);
 
-  // 1. Subscribe in real time to Firestore
+  // 1. Strict UID Link Authorization Check
+  // Ensures Native Friend can NEVER list, view, or listen to unauthorized student data
   useEffect(() => {
-    if (!effectiveUid) {
+    let active = true;
+
+    async function checkLink() {
+      if (!effectiveUid) {
+        if (active) {
+          setIsAuthorized(false);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      // If no teacher UID provided, this is the student accessing their own view
+      if (!cleanTeacherUid) {
+        if (active) {
+          setIsAuthorized(true);
+        }
+        return;
+      }
+
+      setIsLoading(true);
+      const isLinked = await verifyStudentNativeFriendLink(effectiveUid, cleanTeacherUid, studentEmail);
+      if (active) {
+        setIsAuthorized(isLinked);
+        if (!isLinked) {
+          setRoutineDoc(null);
+          setIsLoading(false);
+        }
+      }
+    }
+
+    checkLink();
+
+    return () => {
+      active = false;
+    };
+  }, [effectiveUid, cleanTeacherUid]);
+
+  // 2. Subscribe in real time to Firestore ONLY if authorized by UID
+  useEffect(() => {
+    if (!effectiveUid || !isAuthorized) {
       setRoutineDoc(null);
       setIsLoading(false);
       return;
@@ -107,11 +150,11 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
     return () => {
       unsubscribe();
     };
-  }, [effectiveUid, effectiveWeekId, todayInStudentTz, effectiveTz]);
+  }, [effectiveUid, effectiveWeekId, todayInStudentTz, effectiveTz, isAuthorized]);
 
-  // 2. Resolve the active Spotify track for today
+  // 3. Resolve the active Spotify track for today
   const currentSpotifyTrack = useMemo<CurrentSpotifyTrack | null>(() => {
-    if (isRestDay) {
+    if (!isAuthorized || isRestDay) {
       return null;
     }
 
@@ -142,19 +185,29 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
     }
 
     return null;
-  }, [isRestDay, routineDoc?.currentSpotifyTrack, studentLevel, todayInStudentTz, effectiveStudyDays, weeklyCycle]);
+  }, [isAuthorized, isRestDay, routineDoc?.currentSpotifyTrack, studentLevel, todayInStudentTz, effectiveStudyDays, weeklyCycle]);
 
   // Teacher feedback for the active day
   const teacherFeedback: StudentTrackFeedback | null = useMemo(() => {
     if (!routineDoc?.teacherFeedback) return null;
     const dayKey = currentSpotifyTrack?.dayOfWeek || todayInStudentTz;
-    return routineDoc.teacherFeedback[dayKey] || null;
-  }, [routineDoc?.teacherFeedback, currentSpotifyTrack?.dayOfWeek, todayInStudentTz]);
+    const fb = routineDoc.teacherFeedback[dayKey] || null;
+    if (!fb) return null;
 
-  // 3. Send feedback/recommendations to student
+    // Strict UID verification: only return feedback from assigned Native Friend
+    if (cleanTeacherUid && fb.teacherUid && fb.teacherUid !== cleanTeacherUid) {
+      return null;
+    }
+    return fb;
+  }, [routineDoc?.teacherFeedback, currentSpotifyTrack?.dayOfWeek, todayInStudentTz, cleanTeacherUid]);
+
+  // 4. Send feedback/recommendations to student (strictly gated by UID authorization)
   const sendFeedback = useCallback(
     async (comment: string, recommendation?: string) => {
-      if (!effectiveUid || !teacherUid) return false;
+      if (!effectiveUid || !cleanTeacherUid || !isAuthorized) {
+        console.warn('Feedback blocked: UID pairing not authorized');
+        return false;
+      }
       const targetTrackId = currentSpotifyTrack?.id || 'daily-track';
       const targetDay = currentSpotifyTrack?.dayOfWeek || todayInStudentTz;
 
@@ -163,7 +216,7 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
 
       try {
         const success = await saveNativeFriendTrackFeedback(effectiveUid, effectiveWeekId, {
-          teacherUid,
+          teacherUid: cleanTeacherUid,
           teacherName,
           teacherEmail,
           dayOfWeek: targetDay,
@@ -186,7 +239,7 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
               teacherFeedback: {
                 ...(base.teacherFeedback || {}),
                 [targetDay]: {
-                  teacherUid,
+                  teacherUid: cleanTeacherUid,
                   teacherName,
                   teacherEmail,
                   dayOfWeek: targetDay,
@@ -208,7 +261,7 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
         setIsSavingFeedback(false);
       }
     },
-    [effectiveUid, teacherUid, teacherName, teacherEmail, currentSpotifyTrack, todayInStudentTz, effectiveWeekId]
+    [effectiveUid, cleanTeacherUid, isAuthorized, teacherName, teacherEmail, currentSpotifyTrack, todayInStudentTz, effectiveWeekId]
   );
 
   return {
@@ -218,6 +271,7 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
     todayInStudentTz,
     isRestDay,
     isLoading,
+    isAuthorized,
     isSavingFeedback,
     feedbackSuccess,
     sendFeedback,

@@ -116,6 +116,8 @@ export interface GoogleAccount {
   role: UserRole;
   picture?: string;
   avatar?: string;
+  assignedNativeFriendUID?: string;
+  nativeFriendUID?: string;
   teacherEmail?: string;
   teacherName?: string;
   level?: string;
@@ -200,6 +202,8 @@ export interface UserProfile {
   englishLevel?: EnglishLevel | string;
   teacherEmail?: string;
   teacherName?: string;
+  assignedNativeFriendUID?: string;
+  nativeFriendUID?: string;
   routineVideoTime?: string;
   routineAudioTime?: string;
   dailyPhraseTime?: string;
@@ -239,15 +243,66 @@ export interface StudentProfile {
   id: string;
   name: string;
   email: string;
+  studentEmail?: string;
   level: EnglishLevel;
   contractedLessons?: number;
   completedLessonsCount?: number;
   goal?: string;
+  assignedNativeFriendUID?: string;
+  nativeFriendUID?: string;
+  teacherEmail?: string;
+  teacherName?: string;
   weeklyCycle?: number;
   weeklyStudyDaysTarget?: number;
   weeklyStudyDays?: DayOfWeek[];
   activeSince?: string;
   createdAt?: string;
+}
+
+export interface ConsumedVideoItem {
+  id: string;
+  videoId?: string;
+  title: string;
+  url?: string;
+  watchedAt: string;
+  dayOfWeek?: DayOfWeek;
+  duration?: string;
+  playlistTitle?: string;
+}
+
+export interface ConsumedTrackItem {
+  id: string;
+  trackId?: string;
+  title: string;
+  artist?: string;
+  coverUrl?: string;
+  listenedAt: string;
+  dayOfWeek?: DayOfWeek;
+}
+
+export interface WeeklyVocabularyItem {
+  id?: string;
+  word: string;
+  translation?: string;
+  translationPt?: string;
+  definition?: string;
+  definitionEn?: string;
+  example?: string;
+  learnedAt: string;
+  sourceDay?: DayOfWeek;
+}
+
+export interface WeeklyHistoryDoc {
+  studentUid: string;
+  studentEmail?: string;
+  assignedNativeFriendUID?: string;
+  nativeFriendUID?: string;
+  weekId: string;
+  weeklyCycle?: number;
+  consumedVideoIds: ConsumedVideoItem[];
+  consumedTrackIds: ConsumedTrackItem[];
+  weeklyVocabulary: WeeklyVocabularyItem[];
+  updatedAt?: string;
 }
 
 export interface NotificationItem {

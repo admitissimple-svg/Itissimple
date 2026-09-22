@@ -11,6 +11,8 @@
         "role": { "type": "string", "enum": ["student", "teacher", "admin"], "description": "User role" },
         "level": { "type": "string", "description": "English level" },
         "picture": { "type": "string", "description": "Avatar photo URL" },
+        "assignedNativeFriendUID": { "type": "string", "description": "Strictly assigned Native Friend tutor UID" },
+        "nativeFriendUID": { "type": "string", "description": "Strictly assigned Native Friend tutor UID" },
         "watchedVideosHistory": { "type": "array", "description": "Global history of unique watched YouTube video IDs" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
       },
@@ -184,6 +186,33 @@
         "isNotice": { "type": "boolean", "description": "Whether message is an administrative notice" }
       },
       "required": ["studentUid", "nativeFriendUid", "senderUid", "text"]
+    },
+    "WeeklyHistory": {
+      "title": "WeeklyHistory",
+      "description": "Consolidated weekly history of consumed videos, Spotify tracks, and weekly vocabulary partitioned by student UID and weekId",
+      "type": "object",
+      "properties": {
+        "studentUid": { "type": "string", "description": "Student user auth UID" },
+        "studentEmail": { "type": "string", "format": "email", "description": "Student email" },
+        "assignedNativeFriendUID": { "type": "string", "description": "Assigned Native Friend tutor UID" },
+        "nativeFriendUID": { "type": "string", "description": "Assigned Native Friend tutor UID" },
+        "weekId": { "type": "string", "description": "Week identifier, e.g. week-1, week-5" },
+        "weeklyCycle": { "type": "number", "description": "Cycle number" },
+        "consumedVideoIds": {
+          "type": "array",
+          "description": "List of videos watched during this cycle with IDs and titles"
+        },
+        "consumedTrackIds": {
+          "type": "array",
+          "description": "List of Spotify tracks listened to during this cycle with IDs, titles, and artists"
+        },
+        "weeklyVocabulary": {
+          "type": "array",
+          "description": "List of vocabulary words saved or practiced during this week"
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentUid", "weekId"]
     }
   },
   "firestore": {
@@ -198,6 +227,10 @@
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profiles partitioned by user UID"
+    },
+    "/users/{userId}/weeklyHistory/{weekId}": {
+      "schema": "WeeklyHistory",
+      "description": "Consolidated weekly history of consumed videos, Spotify tracks, and weekly vocabulary"
     },
     "/users/{userId}/currentRoutine/{weekId}": {
       "schema": "StudentCurrentRoutine",

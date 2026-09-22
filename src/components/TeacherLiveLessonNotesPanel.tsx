@@ -67,9 +67,13 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
   // Filter scheduled or completed lessons for this teacher
   const teacherLessons = lessons.filter((l) => {
     if (!currentAccount?.email) return true;
+    const tEmail = (currentAccount.email || '').toLowerCase().trim();
+    const tUid = (currentAccount.id || (currentAccount as any).uid || '').trim();
+    const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
+    const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
     return (
-      (l.teacherEmail || '').toLowerCase() === currentAccount.email.toLowerCase() ||
-      !l.teacherEmail
+      (lTeacherEmail && lTeacherEmail === tEmail) ||
+      (lTeacherUid && tUid && lTeacherUid === tUid)
     );
   });
 

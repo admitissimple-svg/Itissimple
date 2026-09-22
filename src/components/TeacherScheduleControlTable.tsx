@@ -121,7 +121,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       // If viewing as teacher, must match teacher's UID or email
       if (isTeacher) {
         const matchesTeacher =
-          (currentTeacherUid && stTeacherUid && (currentTeacherUid === stTeacherUid || currentTeacherUid.includes(stTeacher) || stTeacherUid.includes(teacherEmailClean))) ||
+          (currentTeacherUid && stTeacherUid && currentTeacherUid === stTeacherUid) ||
           (teacherEmailClean && stTeacher && teacherEmailClean === stTeacher);
         if (!matchesTeacher) return;
       }
@@ -138,7 +138,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
 
       if (isTeacher) {
         const isMyLesson =
-          (currentTeacherUid && lTeacherUid && (currentTeacherUid === lTeacherUid || currentTeacherUid.includes(lTeacherEmail) || lTeacherUid.includes(teacherEmailClean))) ||
+          (currentTeacherUid && lTeacherUid && currentTeacherUid === lTeacherUid) ||
           (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
         if (!isMyLesson) return;
       }
@@ -173,7 +173,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       const lTeacherEmail = (lesson.teacherEmail || (lesson as any).tutorEmail || '').toLowerCase().trim();
       const lTeacherUid = (lesson.teacherUid || (lesson as any).tutorUid || '').trim();
       const isMyLesson =
-        (currentTeacherUid && lTeacherUid && (currentTeacherUid === lTeacherUid || currentTeacherUid.includes(lTeacherEmail) || lTeacherUid.includes(teacherEmailClean))) ||
+        (currentTeacherUid && lTeacherUid && currentTeacherUid === lTeacherUid) ||
         (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
       if (!isMyLesson) return false;
     }

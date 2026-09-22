@@ -30,6 +30,12 @@ service cloud.firestore {
         allow write: if isOwner(userId) || isAdmin() || request.auth == null || isAuthenticated();
       }
 
+      // Consolidated weekly history subcollection (consumedVideoIds, consumedTrackIds, weeklyVocabulary)
+      match /weeklyHistory/{weekId} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin() || request.auth == null || isAuthenticated();
+      }
+
       // Student daily routine subcollection for video, topic selection, and teacher Spotify override track (teacherOverrideTrack)
       match /routines/{dayOfWeek} {
         allow read: if true;

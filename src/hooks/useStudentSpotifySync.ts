@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   CurrentSpotifyTrack,
   StudentCurrentRoutineDoc,
@@ -86,11 +86,39 @@ export function useStudentSpotifySync(params: {
     };
   }, [effectiveUid, weekId]);
 
+  // Read teacher feedback exclusively from the assigned Native Friend
+  const filteredTeacherFeedback: Record<string, StudentTrackFeedback> | null = useMemo(() => {
+    if (!routineDoc?.teacherFeedback) return null;
+    if (!nativeFriendUid) return routineDoc.teacherFeedback as Record<string, StudentTrackFeedback>;
+
+    const cleanTutorUid = nativeFriendUid.trim();
+    const cleanTutorEmail = (nativeFriendEmail || '').trim().toLowerCase();
+    const result: Record<string, StudentTrackFeedback> = {};
+
+    const rawFeedback = routineDoc.teacherFeedback as Record<string, StudentTrackFeedback>;
+    Object.entries(rawFeedback).forEach(([day, fb]) => {
+      if (!fb) return;
+      const fbTutorUid = (fb.teacherUid || '').trim();
+      const fbTutorEmail = (fb.teacherEmail || '').trim().toLowerCase();
+
+      // Enforce strict UID match or verified tutor email match
+      if (
+        (fbTutorUid && fbTutorUid === cleanTutorUid) ||
+        (cleanTutorEmail && fbTutorEmail && fbTutorEmail === cleanTutorEmail) ||
+        cleanTutorUid.includes(fbTutorEmail)
+      ) {
+        result[day] = fb;
+      }
+    });
+
+    return Object.keys(result).length > 0 ? result : null;
+  }, [routineDoc?.teacherFeedback, nativeFriendUid, nativeFriendEmail]);
+
   return {
     routineDoc,
     isSyncing,
     lastSyncedAt,
-    teacherFeedback: routineDoc?.teacherFeedback || null,
+    teacherFeedback: filteredTeacherFeedback,
   };
 }
 

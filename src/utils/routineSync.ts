@@ -2,6 +2,7 @@ import { doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import { getDb, auth } from '../firebase';
 import { DayOfWeek, TeacherOverrideTrack } from '../types';
 import { getSpotifyEmbedUrl } from './spotify';
+import { recordConsumedTrack } from '../hooks/useStudentHistory';
 
 export enum OperationType {
   CREATE = 'create',
@@ -172,6 +173,24 @@ export async function syncStudentSpotifyTrackToFirestore(
     }
 
     lastSyncedSignatureMap.set(`${cleanStudentUid}:${safeWeekId}`, trackSignature);
+
+    // Record into weekly history subcollection: users/{studentUID}/weeklyHistory/{weekId}
+    if (track && track.id) {
+      recordConsumedTrack(
+        cleanStudentUid,
+        safeWeekId,
+        {
+          id: track.id,
+          trackId: track.id,
+          title: track.title,
+          artist: track.artist,
+          coverUrl: track.coverUrl,
+          dayOfWeek: targetDay,
+          listenedAt: new Date().toISOString(),
+        },
+        extra?.nativeFriendUid
+      ).catch(() => {});
+    }
 
     // Also notify server backend mirror for fallback/REST synchronization
     fetch('/api/routines/current-routine', {

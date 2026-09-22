@@ -49,6 +49,8 @@ import { WeeklyHomeworkSection } from './components/WeeklyHomeworkSection';
 import { TeacherScheduleControlTable } from './components/TeacherScheduleControlTable';
 import { LiveMeetLessonsPanel } from './components/LiveMeetLessonsPanel';
 import { TeacherLiveLessonNotesPanel } from './components/TeacherLiveLessonNotesPanel';
+import { NativeFriendLessonInsights } from './components/NativeFriendLessonInsights';
+import { TeacherSpotifyRoutineTracker } from './components/TeacherSpotifyRoutineTracker';
 import { TeacherMediaAssignmentPanel } from './components/TeacherMediaAssignmentPanel';
 import { SFluencyTracker } from './components/SFluencyTracker';
 import { NotificationBanner } from './components/NotificationBanner';
@@ -77,7 +79,7 @@ import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
 import { OnboardingWizardModal, OnboardingResultData } from './components/OnboardingWizardModal';
 import { StartLivingEmailModal } from './components/StartLivingEmailModal';
-import { ShieldCheck, Edit3 } from 'lucide-react';
+import { ShieldCheck, Edit3, Sparkles, Headphones, BookOpen, Video, X, User, CheckCircle2, ChevronRight, MessageSquareQuote, Layers } from 'lucide-react';
 
 const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfile => ({
   id: account?.id || (account?.email ? `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}` : 'user-default'),
@@ -276,6 +278,7 @@ export default function App() {
 
   // Teacher Filter
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
+  const [selectedStudentSubTab, setSelectedStudentSubTab] = useState<'insights' | 'spotify' | 'notes' | 'media' | 'all'>('insights');
 
   // 10. Fetch initial data from server on mount
   useEffect(() => {
@@ -2607,7 +2610,7 @@ export default function App() {
       // If teacher is logged in, strictly enforce that student is assigned to this teacher and not cancelled
       if (isTeacher) {
         const matchesTeacher =
-          (teacherUid && sTeacherUid && (teacherUid === sTeacherUid || teacherUid.includes(sTeacher) || sTeacherUid.includes(teacherEmailClean))) ||
+          (teacherUid && sTeacherUid && teacherUid === sTeacherUid) ||
           (teacherEmailClean && sTeacher && teacherEmailClean === sTeacher);
         if (!matchesTeacher) return;
         if (sStatus === 'cancelled' || sStatus === 'not_enrolled') return;
@@ -2663,7 +2666,7 @@ export default function App() {
         const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
         const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
         const isMyLesson =
-          (teacherUid && lTeacherUid && (teacherUid === lTeacherUid || teacherUid.includes(lTeacherEmail) || lTeacherUid.includes(teacherEmailClean))) ||
+          (teacherUid && lTeacherUid && teacherUid === lTeacherUid) ||
           (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
         if (!isMyLesson) return;
       }
@@ -2984,44 +2987,240 @@ export default function App() {
                 />
 
                 {/* Conditional Panels: Displayed ONLY when a specific student is selected in the master control filter */}
-                {selectedStudentFilter !== 'all' ? (
-                  <div className="space-y-6 animate-in fade-in duration-200">
-                    {/* 2. Teacher Live Session Notes & Recommendations Panel (Native Friend Panel) */}
-                    <TeacherLiveLessonNotesPanel
-                      lessons={lessons}
-                      students={students}
-                      currentAccount={currentAccount}
-                      selectedStudentFilter={selectedStudentFilter}
-                      onSaveLessonNotes={handleSaveLessonNotes}
-                      onAddWordsToDictionary={handleAddWordsToDictionary}
-                      onAddWordsToWeeklyActivity={handleAddWordsToWeeklyActivity}
-                      onSendStudentNotification={handleSendStudentNotification}
-                      timeZone={DEFAULT_TEACHER_TIMEZONE}
-                    />
+                {selectedStudentFilter !== 'all' ? (() => {
+                  const found = studentsList.find(
+                    (s) =>
+                      s.email?.toLowerCase() === selectedStudentFilter.toLowerCase() ||
+                      s.uid === selectedStudentFilter ||
+                      s.id === selectedStudentFilter
+                  );
+                  const stUid = found?.uid || found?.id || selectedStudentFilter;
+                  const stEmail = found?.email || selectedStudentFilter;
+                  const stName = found?.name || (found as any)?.studentName || (found as any)?.fullName || stEmail.split('@')[0];
+                  const stLevel = found?.level || (found as any)?.studentLevel || 'intermediate';
+                  const stAvatar = (found as any)?.avatarUrl || (found as any)?.photoUrl || (found as any)?.picture || '';
+                  const stWeeklyCycle = (found as any)?.weeklyCycle || userProfile?.weeklyCycle || 1;
+                  const stTimezone = (found as any)?.studentTimezone || (found as any)?.timezone || userProfile?.studentTimezone || 'America/Sao_Paulo';
+                  const stActiveDays = (found as any)?.weeklyStudyDays || userProfile?.weeklyStudyDays;
+                  const stActiveDaysCount = (found as any)?.weeklyStudyDaysTarget || userProfile?.weeklyStudyDaysTarget || 5;
+                  const teacherUidVal = currentAccount?.uid || (currentTutorProfile as any)?.uid || currentTutorProfile?.id || '';
+                  const teacherNameVal = currentAccount?.name || currentTutorProfile?.name;
+                  const teacherEmailVal = currentAccount?.email || currentTutorProfile?.email;
 
-                    {/* 3. Teacher Media Assignment Panel (YouTube Videos & Spotify Audios) */}
-                    <TeacherMediaAssignmentPanel
-                      routinesByDay={routinesByDay}
-                      students={studentsList}
-                      selectedStudentEmail={selectedStudentFilter}
-                      selectedStudentUid={
-                        (() => {
-                          const found = studentsList.find(
-                            (s) =>
-                              s.email?.toLowerCase() === selectedStudentFilter.toLowerCase() ||
-                              s.uid === selectedStudentFilter ||
-                              s.id === selectedStudentFilter
-                          );
-                          return found?.uid || found?.id || '';
-                        })()
-                      }
-                      currentAccount={currentAccount}
-                      onTeacherSaveVideos={handleTeacherSaveVideos}
-                      currentLanguage="en"
-                      t={getTranslations('en')}
-                    />
-                  </div>
-                ) : null}
+                  // Student's scheduled lessons
+                  const studentLessons = lessons.filter(
+                    (l) => l.studentEmail?.toLowerCase() === stEmail.toLowerCase() && l.status !== 'cancelled'
+                  );
+
+                  return (
+                    <div className="space-y-6 animate-in fade-in duration-200" id="filtered-student-workspace">
+                      {/* 1. Student Profile Overview Header & Navigation Sub-Tabs */}
+                      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+                        {/* Header Banner */}
+                        <div className="p-4 sm:p-5 bg-gradient-to-r from-[#000035] via-[#062863] to-[#000035] text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3.5">
+                            {stAvatar ? (
+                              <img
+                                src={stAvatar}
+                                alt={stName}
+                                className="w-12 h-12 rounded-2xl object-cover border-2 border-white/20 shadow-xs"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-white font-bold text-lg shadow-xs">
+                                {stName.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">
+                                  {stName}
+                                </h2>
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                  <ShieldCheck className="w-3 h-3" />
+                                  Active Student
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-300 mt-0.5">{stEmail}</p>
+                            </div>
+                          </div>
+
+                          {/* Quick Badges & Clear Filter Button */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10 capitalize">
+                                Level: {stLevel}
+                              </span>
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
+                                {stActiveDaysCount} study days/wk
+                              </span>
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
+                                Week {stWeeklyCycle}
+                              </span>
+                              {studentLessons.length > 0 && (
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                                  {studentLessons.length} lesson{studentLessons.length > 1 ? 's' : ''} scheduled
+                                </span>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setSelectedStudentFilter('all')}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold transition cursor-pointer shrink-0"
+                              title="Clear student filter and return to full schedule"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              <span>Show All Students</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Sub-Tabs: Lessons Insights & Icebreak is #1 */}
+                        <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200/80 flex items-center gap-2 overflow-x-auto">
+                          <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 mr-1 shrink-0">
+                            Student View:
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentSubTab('insights')}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
+                              selectedStudentSubTab === 'insights'
+                                ? 'bg-indigo-600 text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                            <span>Lessons Insights & Icebreak</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentSubTab('notes')}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
+                              selectedStudentSubTab === 'notes'
+                                ? 'bg-[#000035] text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <BookOpen className="w-3.5 h-3.5" />
+                            <span>Live Notes & Real-Time Vocabulary</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentSubTab('media')}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
+                              selectedStudentSubTab === 'media'
+                                ? 'bg-rose-600 text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <Video className="w-3.5 h-3.5" />
+                            <span>Media Assignment</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentSubTab('spotify')}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ${
+                              selectedStudentSubTab === 'spotify'
+                                ? 'bg-[#1DB954] text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <Headphones className="w-3.5 h-3.5" />
+                            <span>Song of the Day & Routine</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentSubTab('all')}
+                            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer shadow-2xs ml-auto ${
+                              selectedStudentSubTab === 'all'
+                                ? 'bg-slate-800 text-white shadow-xs'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            <Layers className="w-3.5 h-3.5" />
+                            <span>View All</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 2. Top Priority: Lessons Insights & Icebreak (Requirement) */}
+                      {(selectedStudentSubTab === 'insights' || selectedStudentSubTab === 'all') && (
+                        <div id="section-student-insights" className="scroll-mt-6">
+                          <NativeFriendLessonInsights
+                            studentUid={stUid}
+                            studentEmail={stEmail}
+                            studentName={stName}
+                            studentLevel={stLevel}
+                            teacherUid={teacherUidVal}
+                            teacherName={teacherNameVal}
+                            weekId={`week-${stWeeklyCycle}`}
+                            weeklyCycle={stWeeklyCycle}
+                            activeStudyDays={stActiveDays}
+                          />
+                        </div>
+                      )}
+
+                      {/* 3. Teacher Live Session Notes & Real-Time Vocabulary Panel */}
+                      {(selectedStudentSubTab === 'notes' || selectedStudentSubTab === 'all') && (
+                        <div id="section-student-notes" className="scroll-mt-6">
+                          <TeacherLiveLessonNotesPanel
+                            lessons={lessons}
+                            students={students}
+                            currentAccount={currentAccount}
+                            selectedStudentFilter={selectedStudentFilter}
+                            onSaveLessonNotes={handleSaveLessonNotes}
+                            onAddWordsToDictionary={handleAddWordsToDictionary}
+                            onAddWordsToWeeklyActivity={handleAddWordsToWeeklyActivity}
+                            onSendStudentNotification={handleSendStudentNotification}
+                            timeZone={DEFAULT_TEACHER_TIMEZONE}
+                          />
+                        </div>
+                      )}
+
+                      {/* 4. Teacher Media Assignment Panel (YouTube Videos & Spotify Audios) */}
+                      {(selectedStudentSubTab === 'media' || selectedStudentSubTab === 'all') && (
+                        <div id="section-student-media" className="scroll-mt-6">
+                          <TeacherMediaAssignmentPanel
+                            routinesByDay={routinesByDay}
+                            students={studentsList}
+                            selectedStudentEmail={selectedStudentFilter}
+                            selectedStudentUid={stUid}
+                            currentAccount={currentAccount}
+                            onTeacherSaveVideos={handleTeacherSaveVideos}
+                            currentLanguage="en"
+                            t={getTranslations('en')}
+                          />
+                        </div>
+                      )}
+
+                      {/* 5. Song of the Day & Live Routine Tracking */}
+                      {(selectedStudentSubTab === 'spotify' || selectedStudentSubTab === 'all') && (
+                        <div id="section-student-spotify" className="scroll-mt-6">
+                          <TeacherSpotifyRoutineTracker
+                            studentUid={stUid}
+                            studentEmail={stEmail}
+                            studentName={stName}
+                            studentLevel={stLevel}
+                            teacherUid={teacherUidVal}
+                            teacherName={teacherNameVal}
+                            teacherEmail={teacherEmailVal}
+                            weekId={`week-${stWeeklyCycle}`}
+                            weeklyCycle={stWeeklyCycle}
+                            studentTimezone={stTimezone}
+                            activeStudyDays={stActiveDays}
+                            activeStudyDaysCount={stActiveDaysCount}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })() : null}
               </div>
             ) : (
               /* STUDENT VIEW: Exactly Following the 3 User Model Sections */

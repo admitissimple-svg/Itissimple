@@ -4,6 +4,7 @@ import { getDb, auth } from '../firebase';
 import { DayOfWeek, TeacherOverrideTrack } from '../types';
 import { normalizeStudentIdForPath, handleFirestoreError, OperationType } from '../utils/routineSync';
 import { extractYouTubeVideoId, getYouTubeEmbedUrl } from '../utils/youtube';
+import { recordConsumedVideo } from './useStudentHistory';
 
 export interface SavedRoutineVideo {
   videoId: string;
@@ -83,6 +84,16 @@ export async function saveRoutineVideoToFirestore(
 
     // Also record video into watchedVideosHistory in Firestore (users/{studentUID})
     await addVideoToWatchedHistoryInFirestore(cleanUid, validVidId);
+
+    // Record into weekly history subcollection
+    recordConsumedVideo(cleanUid, 'weekData', {
+      id: validVidId,
+      videoId: validVidId,
+      title: videoData.title || videoData.videoTitle || 'Daily Video Practice',
+      url: videoData.url || `https://www.youtube.com/watch?v=${validVidId}`,
+      dayOfWeek,
+      watchedAt: new Date().toISOString(),
+    }).catch(() => {});
 
     // Mirror to server for backend persistence
     fetch('/api/routines/daily-video', {

@@ -709,7 +709,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const { teacherFeedback } = useStudentSpotifySync({
     studentUid: studentSyncUid,
     studentEmail: userProfile?.email,
-    nativeFriendUid: userProfile?.teacherEmail,
+    nativeFriendUid: userProfile?.assignedNativeFriendUID || userProfile?.nativeFriendUID || userProfile?.teacherEmail,
+    nativeFriendEmail: userProfile?.teacherEmail,
     weekId: effectiveWeekId,
     currentTrack: currentSpotifyTrackForSync,
   });

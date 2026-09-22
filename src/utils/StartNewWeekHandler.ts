@@ -14,6 +14,7 @@ import {
   YouTubeVideoItem,
 } from '../utils/youtube';
 import { DAYS_SEQUENCE, normalizeStudentLevel } from '../utils/spotify';
+import { fetchAllWeeklyHistories, saveWeeklyHistory } from '../hooks/useStudentHistory';
 
 export interface StartNewWeekParams {
   studentEmail: string;
@@ -123,6 +124,24 @@ export async function executeStartNewWeek(
     const clean = (extractYouTubeVideoId(id) || id || '').trim().toLowerCase();
     if (clean) accumulatedWatchedSet.add(clean);
   });
+
+  // Also query consolidated weeklyHistory subcollection to ensure cross-cycle exclusivity
+  if (cleanUid) {
+    try {
+      const pastHistories = await fetchAllWeeklyHistories(cleanUid);
+      pastHistories.forEach((hist) => {
+        if (Array.isArray(hist.consumedVideoIds)) {
+          hist.consumedVideoIds.forEach((v) => {
+            const vidId = extractYouTubeVideoId(v.id || v.videoId || '') || v.id || v.videoId || '';
+            const clean = vidId.trim().toLowerCase();
+            if (clean) accumulatedWatchedSet.add(clean);
+          });
+        }
+      });
+    } catch (err) {
+      console.warn('Notice reading past weeklyHistories for exclusivity check:', err);
+    }
+  }
 
   // Step 3: Select the NEXT unseen videos from the student level playlist
   const normLevel = normalizeStudentLevel(params.studentLevel || 'intermediate');
@@ -289,9 +308,27 @@ export async function executeStartNewWeek(
       });
     });
 
+    const finalCycle = data.weeklyCycle !== undefined ? data.weeklyCycle : (params.currentCycle || 1) + 1;
+
+    // Initialize new weeklyHistory document for the new cycle
+    if (cleanUid) {
+      saveWeeklyHistory(cleanUid, `week-${finalCycle}`, {
+        studentUid: cleanUid,
+        studentEmail: params.studentEmail,
+        weekId: `week-${finalCycle}`,
+        weeklyCycle: finalCycle,
+        consumedVideoIds: [],
+        consumedTrackIds: [],
+        weeklyVocabulary: [],
+        updatedAt: new Date().toISOString(),
+      }).catch((err) => {
+        console.warn('Notice initializing new weeklyHistory document:', err);
+      });
+    }
+
     return {
       success: true,
-      weeklyCycle: data.weeklyCycle !== undefined ? data.weeklyCycle : (params.currentCycle || 1) + 1,
+      weeklyCycle: finalCycle,
       weeklyStudyDaysTarget: data.weeklyStudyDaysTarget || targetDays,
       weeklyStudyDays: data.weeklyStudyDays || chosenDays,
       routines: sanitizedRoutines,

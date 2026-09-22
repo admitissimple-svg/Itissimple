@@ -276,13 +276,15 @@ function mergeDbWithDefaults(parsed: any): AppDb {
         l.status = 'cancelled';
       }
       if (!l.studentEmail || l.studentEmail.trim() === '') {
-        const sName = (l.studentName || '').toLowerCase().trim();
-        if (sName.includes('vinicius')) {
-          l.studentEmail = 'viniciusferrazcardoso@gmail.com';
-        } else if (sName.includes('regina')) {
-          l.studentEmail = 'reginahelena1980@gmail.com';
-        } else if (sName.includes('lavinia')) {
-          l.studentEmail = 'laviniatilapia@gmail.com';
+        if (l.studentUid) {
+          const allProfiles = Object.values(parsed?.userProfiles || {});
+          const foundProfile = (allProfiles as any[]).find((p: any) => p.id === l.studentUid || p.uid === l.studentUid);
+          const foundStudent = (Array.isArray(parsed?.students) ? parsed.students : []).find((s: any) => s.studentUid === l.studentUid || s.id === l.studentUid);
+          if (foundProfile?.email) {
+            l.studentEmail = foundProfile.email.toLowerCase().trim();
+          } else if (foundStudent?.email || foundStudent?.studentEmail) {
+            l.studentEmail = (foundStudent.email || foundStudent.studentEmail).toLowerCase().trim();
+          }
         }
       }
       return l;
@@ -478,13 +480,15 @@ async function initCloudPersistence() {
           l.status = 'cancelled';
         }
         if (!l.studentEmail || l.studentEmail.trim() === '') {
-          const sName = (l.studentName || '').toLowerCase().trim();
-          if (sName.includes('vinicius')) {
-            l.studentEmail = 'viniciusferrazcardoso@gmail.com';
-          } else if (sName.includes('regina')) {
-            l.studentEmail = 'reginahelena1980@gmail.com';
-          } else if (sName.includes('lavinia')) {
-            l.studentEmail = 'laviniatilapia@gmail.com';
+          if (l.studentUid) {
+            const allProfiles = Object.values(inMemoryDb?.userProfiles || cloudState?.userProfiles || {});
+            const foundProfile = (allProfiles as any[]).find((p: any) => p.id === l.studentUid || p.uid === l.studentUid);
+            const foundStudent = (Array.isArray(inMemoryDb?.students) ? inMemoryDb.students : []).find((s: any) => s.studentUid === l.studentUid || s.id === l.studentUid);
+            if (foundProfile?.email) {
+              l.studentEmail = foundProfile.email.toLowerCase().trim();
+            } else if (foundStudent?.email || foundStudent?.studentEmail) {
+              l.studentEmail = (foundStudent.email || foundStudent.studentEmail).toLowerCase().trim();
+            }
           }
         }
         return l;
@@ -2810,7 +2814,7 @@ app.get('/api/students', (req, res) => {
       if (lTeacher === requesterEmail && l.status === 'scheduled') {
         const sEmail = (l.studentEmail || '').toLowerCase().trim();
         const p = db.userProfiles?.[sEmail];
-        if (p?.enrollmentStatus === 'cancelled') return;
+        if (p?.enrollmentStatus === 'cancelled' || p?.enrollmentStatus === 'not_enrolled') return;
         if (sEmail && !studentMap.has(sEmail)) {
           studentMap.set(sEmail, {
             id: `st-${sEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
@@ -4436,15 +4440,17 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
   } else if (newLesson && newLesson.id) {
     // Auto-resolve studentEmail if blank
     if (!newLesson.studentEmail || newLesson.studentEmail.trim() === '') {
-      const sName = (newLesson.studentName || '').toLowerCase().trim();
-      if (sName.includes('vinicius')) {
-        newLesson.studentEmail = 'viniciusferrazcardoso@gmail.com';
-      } else if (sName.includes('regina')) {
-        newLesson.studentEmail = 'reginahelena1980@gmail.com';
-      } else if (sName.includes('lavinia')) {
-        newLesson.studentEmail = 'laviniatilapia@gmail.com';
-      } else if (req.query.email || req.query.studentEmail) {
+      if (req.query.email || req.query.studentEmail) {
         newLesson.studentEmail = ((req.query.email || req.query.studentEmail) as string).toLowerCase().trim();
+      } else if (newLesson.studentUid) {
+        const allUsers = Object.values(db.authUsers || {});
+        const allProfiles = Object.values(db.userProfiles || {});
+        const foundUser = (allUsers as any[]).find((u: any) => u.uid === newLesson.studentUid || u.id === newLesson.studentUid)
+          || (allProfiles as any[]).find((p: any) => p.uid === newLesson.studentUid || p.id === newLesson.studentUid)
+          || (db.students || []).find((s: any) => s.studentUid === newLesson.studentUid || s.id === newLesson.studentUid);
+        if (foundUser?.email) {
+          newLesson.studentEmail = foundUser.email.toLowerCase().trim();
+        }
       }
     }
 
