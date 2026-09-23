@@ -228,13 +228,18 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg sm:text-xl font-black tracking-tight">
-                {isEn ? 'My Dictionary' : 'Meu Dicionário'}
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg sm:text-xl font-black tracking-tight">
+                  {isEn ? 'My Dictionary' : 'Meu Dicionário'}
+                </h2>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#F4CA54] text-[#000035] shadow-xs">
+                  A-Z
+                </span>
+              </div>
               <p className="text-xs text-[#9AB4FF]">
                 {isEn
-                  ? 'Vocabulary learned in live sessions and daily routines'
-                  : 'Vocabulário aprendido nas aulas ao vivo e na sua rotina diária'}
+                  ? 'Complete journey vocabulary sorted alphabetically'
+                  : 'Todo o vocabulário da sua jornada ordenado alfabeticamente'}
               </p>
             </div>
           </div>

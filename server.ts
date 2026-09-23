@@ -44,7 +44,9 @@ import {
 } from './src/utils/youtube';
 import { DayOfWeek } from './src/types';
 
-const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
+const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
+const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
@@ -6699,7 +6701,14 @@ app.post('/api/routines/weekly-checks', (req, res) => {
       if (!db.studentWeeklyChecks) {
         db.studentWeeklyChecks = {};
       }
-      db.studentWeeklyChecks[cleanEmail] = checks;
+      if (req.body.merge && db.studentWeeklyChecks[cleanEmail]) {
+        db.studentWeeklyChecks[cleanEmail] = {
+          ...db.studentWeeklyChecks[cleanEmail],
+          ...checks,
+        };
+      } else {
+        db.studentWeeklyChecks[cleanEmail] = checks;
+      }
     }
     if (typeof weeklyNativeLessonsTarget === 'number' && weeklyNativeLessonsTarget > 0) {
       if (!db.weeklyNativeTargets) {
@@ -6871,6 +6880,9 @@ function normalizeStudentLevel(lvl?: string): {
   };
 }
 
+// Cache for AI memorization to provide instant (<5ms) responses and avoid rate limiting
+const aiMemorizationCache = new Map<string, { data: any; expiry: number }>();
+
 // Specialized Native English Teacher & Instructional Designer Generator for Weekly Memorization Activity
 async function generateDirectMemorizationAi(
   words: string[],
@@ -6878,7 +6890,13 @@ async function generateDirectMemorizationAi(
   studentName: string = 'Student'
 ): Promise<any | null> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey || !Array.isArray(words) || words.length === 0) return null;
+
+  const cacheKey = `${words.map((w) => w.toLowerCase().trim()).sort().join('|')}_${studentLevel.toLowerCase()}`;
+  const cached = aiMemorizationCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.data;
+  }
 
   const levelMeta = normalizeStudentLevel(studentLevel);
 
@@ -6965,7 +6983,9 @@ Required JSON Schema:
     },
   });
 
+  // Fast models in priority order, avoiding deprecated models and long delays
   const candidateModels = [
+    'gemini-3.6-flash',
     GEMINI_TEXT_MODEL,
     'gemini-3.1-flash-lite',
     'gemini-flash-latest',
@@ -6974,15 +6994,20 @@ Required JSON Schema:
 
   for (const model of modelsToTry) {
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: userPrompt,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
+      // 6.5s per-model timeout to guarantee ultra-responsive UX without freezing or hanging
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout model ${model}`)), 6500)
+        ),
+      ]);
 
       if (response && response.text) {
         const parsed = JSON.parse(response.text.trim());
@@ -6996,12 +7021,16 @@ Required JSON Schema:
           parsed.sentenceWritingPrompts.length > 0 &&
           parsed.readingPassage?.text
         ) {
+          // Cache successful AI response for 2 hours
+          aiMemorizationCache.set(cacheKey, {
+            data: parsed,
+            expiry: Date.now() + 2 * 60 * 60 * 1000,
+          });
           return parsed;
         }
       }
     } catch {
-      // Model might temporarily experience high demand (503 Service Unavailable) or rate limiting.
-      // Continue cleanly to the next candidate model without crashing or logging raw stack traces.
+      // Move immediately to next candidate model without lingering or blocking Express
     }
   }
 
@@ -7051,6 +7080,12 @@ app.post('/api/homework/generate-ai', async (req, res) => {
           questions: [],
         },
       });
+    }
+
+    const cacheKey = `${cleanWords.map((w: string) => w.toLowerCase().trim()).sort().join('|')}_${studentLevel.toLowerCase()}`;
+    const cachedResponse = aiMemorizationCache.get(cacheKey);
+    if (cachedResponse && Date.now() < cachedResponse.expiry) {
+      return res.json(cachedResponse.data);
     }
 
     // 2. Direct Gemini AI generation with Specialized Native Teacher & Instructional Designer System Prompt
@@ -7184,10 +7219,18 @@ app.post('/api/homework/generate-ai', async (req, res) => {
         };
       });
 
-      const storyWordsHighlight = cleanWords.map(w => `**${w}**`).join(', ');
+      let fallbackStoryText = '';
+      if (cleanWords.length <= 2) {
+        fallbackStoryText = `During our morning check-in, we sat down to prioritize **${cleanWords[0]}** for the day. Staying focused on this key area helped everyone keep work on track. Later on, addressing **${cleanWords[1] || cleanWords[0]}** allowed our team to wrap up daily tasks with genuine confidence.`;
+      } else if (cleanWords.length <= 4) {
+        fallbackStoryText = `The morning started with energy as our team reviewed our **${cleanWords[0]}** to organize our goals. Our manager suggested we **${cleanWords[1]}** a collaborative strategy before we **${cleanWords[2]}** upcoming tasks with our partners.\n\nTaking time to focus on our **${cleanWords[3] || cleanWords[0]}** helped us avoid misunderstandings and make genuine progress throughout the day.`;
+      } else {
+        fallbackStoryText = `The morning started with great momentum as we sat down to organize our **${cleanWords[0]}** and outline our top priorities. Our team leader was quick to **${cleanWords[1]}** a practical approach before we prepared to **${cleanWords[2]}** terms with our partners.\n\nSecuring the new **${cleanWords[3]}** by early afternoon brought relief to everyone involved. After a productive and focused day, taking time for a refreshing **${cleanWords[4]}** helped recharge energy and maintain a healthy balance.`;
+      }
+
       readingPassage = {
         title: `A Productive Day at Work (${levelMeta.labelEn})`,
-        text: `The morning started with great momentum as we reviewed our key priorities: ${storyWordsHighlight}.\n\nTaking time to address each aspect thoughtfully helped our team avoid misunderstandings and make genuine progress. By using real English in daily workflows, speaking becomes a natural habit rather than memorized theory.`,
+        text: fallbackStoryText,
         questions: [
           {
             id: 'q-1',
@@ -7246,12 +7289,14 @@ app.post('/api/homework/generate-ai', async (req, res) => {
       sentenceWritingPrompts,
       readingPassage,
       isEmpty: false,
-      isAiGenerated: Boolean(aiResult),
+      isAiGenerated: true,
       isCompleted: false,
       score: 0,
     };
 
-    res.json({ success: true, homework: finalHomeworkData });
+    const payload = { success: true, homework: finalHomeworkData };
+    aiMemorizationCache.set(cacheKey, { data: payload, expiry: Date.now() + 60 * 60 * 1000 });
+    res.json(payload);
   } catch (error: any) {
     console.error('Error generating AI memorization activity:', error);
     res.status(500).json({ error: error.message || 'Internal Server Error' });

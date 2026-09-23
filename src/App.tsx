@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   DayOfWeek,
   EnglishLevel,
@@ -254,6 +254,7 @@ export default function App() {
 
   // 7. Weekly Homework State
   const [weeklyHomework, setWeeklyHomework] = useState<WeeklyHomeworkData | null>(null);
+  const [homeworkTargetDay, setHomeworkTargetDay] = useState<DayOfWeek>(getTodayDayOfWeek());
 
   // 8. Notifications State
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -416,7 +417,7 @@ export default function App() {
     return currentDayRoutines.find((item) => item.id === selectedActivityId) || currentDayRoutines[0] || null;
   }, [currentDayRoutines, selectedActivityId]);
 
-  // Generate Weekly Homework automatically whenever routines or dictionary change
+  // Generate Weekly Homework automatically whenever routines, dictionary, or targetDay change
   useEffect(() => {
     const customWordList = studentDictionaryEntries.map((e) => ({
       word: e.word,
@@ -424,18 +425,24 @@ export default function App() {
       exampleSentence: e.exampleSentenceEn,
       translationPt: e.translationPt || '',
       sourceActivityName: e.sourceActivityName || 'Live Session',
+      sourceDay: (e as any).sourceDay,
     }));
 
     const generated = generateWeeklyHomeworkFromRoutines({
       routinesByDay,
       studentName: userProfile.name,
       studentLevel: userProfile.level,
+      studentEmail: currentAccount?.email || userProfile.email,
       customWords: customWordList,
+      targetDay: homeworkTargetDay,
+      activeStudyDays: userProfile?.weeklyStudyDays,
+      weeklyCycle: userProfile?.weeklyCycle || 1,
+      userProfile,
     });
 
     // If we already have an AI-generated homework and the collected words haven't changed, preserve it!
     setWeeklyHomework((prev) => {
-      if (prev?.isAiGenerated && !prev.isEmpty && prev.totalWordsCollected > 0) {
+      if (prev?.isAiGenerated && !prev.isEmpty && prev.totalWordsCollected > 0 && prev.targetDay === homeworkTargetDay) {
         const prevWords = prev.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
         const nextWords = generated.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
         if (prevWords === nextWords) {
@@ -444,12 +451,15 @@ export default function App() {
       }
       return generated;
     });
-  }, [routinesByDay, userProfile.name, userProfile.level, studentDictionaryEntries]);
+  }, [routinesByDay, userProfile.name, userProfile.level, studentDictionaryEntries, homeworkTargetDay, userProfile?.weeklyStudyDays, userProfile?.weeklyCycle]);
 
-  // AI-powered dynamic regeneration for Memorization Activity (4 stages using real weekly vocabulary)
+  // AI-powered dynamic regeneration for Memorization Activity (focused on target day's vocabulary)
   const [isGeneratingHomeworkAi, setIsGeneratingHomeworkAi] = useState<boolean>(false);
+  const isGeneratingAiRef = useRef<boolean>(false);
 
   const handleRegenerateHomeworkWithAi = useCallback(async () => {
+    if (isGeneratingAiRef.current) return;
+    isGeneratingAiRef.current = true;
     setIsGeneratingHomeworkAi(true);
     try {
       const generated = await generateWeeklyHomeworkWithAi({
@@ -457,48 +467,52 @@ export default function App() {
         studentName: userProfile.name,
         studentLevel: userProfile.level,
         studentEmail: currentAccount?.email || userProfile.email || '',
+        targetDay: homeworkTargetDay,
+        activeStudyDays: userProfile?.weeklyStudyDays,
+        weeklyCycle: userProfile?.weeklyCycle || 1,
+        userProfile,
         customWords: studentDictionaryEntries.map((e) => ({
           word: e.word,
           definitionEn: e.definitionEn,
           exampleSentence: e.exampleSentenceEn,
           translationPt: e.translationPt || '',
           sourceActivityName: e.sourceActivityName || 'Live Session',
+          sourceDay: (e as any).sourceDay,
         })),
       });
-      setWeeklyHomework(generated);
+      if (generated) {
+        setWeeklyHomework(generated);
+      }
     } catch {
       // Non-blocking fallback
     } finally {
+      isGeneratingAiRef.current = false;
       setIsGeneratingHomeworkAi(false);
     }
-  }, [routinesByDay, userProfile.name, userProfile.level, currentAccount?.email, userProfile.email, studentDictionaryEntries]);
+  }, [routinesByDay, userProfile, currentAccount?.email, studentDictionaryEntries, homeworkTargetDay]);
 
-  // Proactively generate AI content as soon as vocabulary is present
+  const lastAttemptedSignatureRef = useRef<string>('');
+
+  // Proactively generate AI content ONCE when student opens modal with vocabulary
   useEffect(() => {
-    if (
-      weeklyHomework &&
-      !weeklyHomework.isAiGenerated &&
-      !weeklyHomework.isEmpty &&
-      weeklyHomework.totalWordsCollected > 0 &&
-      !isGeneratingHomeworkAi
-    ) {
-      handleRegenerateHomeworkWithAi();
-    }
-  }, [weeklyHomework, isGeneratingHomeworkAi, handleRegenerateHomeworkWithAi]);
+    if (!isHomeworkModalOpen) return;
+    if (!weeklyHomework || weeklyHomework.isEmpty || weeklyHomework.totalWordsCollected === 0) return;
+    if (weeklyHomework.isAiGenerated) return;
 
-  const handleOpenHomeworkModal = useCallback(() => {
-    setIsHomeworkModalOpen(true);
-    // Auto-trigger AI generation if not yet generated by AI and user has real collected vocabulary
-    if (
-      weeklyHomework &&
-      !weeklyHomework.isAiGenerated &&
-      !weeklyHomework.isEmpty &&
-      weeklyHomework.totalWordsCollected > 0 &&
-      !isGeneratingHomeworkAi
-    ) {
-      handleRegenerateHomeworkWithAi();
+    const signature = `${homeworkTargetDay}_${weeklyHomework.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|')}`;
+    if (lastAttemptedSignatureRef.current === signature || isGeneratingAiRef.current) {
+      return;
     }
-  }, [weeklyHomework, isGeneratingHomeworkAi, handleRegenerateHomeworkWithAi]);
+
+    lastAttemptedSignatureRef.current = signature;
+    handleRegenerateHomeworkWithAi();
+  }, [isHomeworkModalOpen, weeklyHomework, homeworkTargetDay, handleRegenerateHomeworkWithAi]);
+
+  const handleOpenHomeworkModal = useCallback((targetDay?: DayOfWeek) => {
+    const selected = targetDay || getTodayDayOfWeek();
+    setHomeworkTargetDay(selected);
+    setIsHomeworkModalOpen(true);
+  }, []);
 
   // Synchronize isolated student profile, lessons, routines, and settings whenever currentAccount changes
   useEffect(() => {
@@ -3714,9 +3728,39 @@ export default function App() {
       isOpen={isHomeworkModalOpen}
       onClose={() => setIsHomeworkModalOpen(false)}
       homework={weeklyHomework}
+      selectedDay={homeworkTargetDay}
+      activeStudyDays={userProfile?.weeklyStudyDays}
+      weeklyCycle={userProfile?.weeklyCycle || 1}
       onSaveProgress={(updated) => setWeeklyHomework(updated)}
       onRegenerateWithAi={handleRegenerateHomeworkWithAi}
       isGeneratingAi={isGeneratingHomeworkAi}
+      onCompleteTodayPart={(partKey, day) => {
+        const cleanEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
+        if (cleanEmail) {
+          fetch('/api/routines/weekly-checks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              studentEmail: cleanEmail,
+              checks: { [`memorization_${day}`]: true },
+              merge: true,
+            }),
+          }).catch(() => {});
+        }
+        setNotifications((prev) => [
+          {
+            id: `toast-mem-${Date.now()}`,
+            title: currentLanguage === 'en' ? 'S-Path Updated!' : 'Gráfico S Atualizado!',
+            message: currentLanguage === 'en'
+              ? `Daily memorization part completed and registered on your S-Path for ${day}.`
+              : `Parte diária de memorização concluída e registrada no seu Gráfico S para ${day}.`,
+            type: 'success',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+      }}
       onSubmitToTeacher={(updated) => {
         setWeeklyHomework(updated);
         setNotifications((prev) => [

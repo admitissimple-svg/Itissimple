@@ -25,12 +25,13 @@ import {
 } from '../types';
 import { Translations, getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from '../utils/notifications';
+import { getDailyMemorizationSchedule } from '../utils/homeworkGenerator';
 
 interface StudentWeeklyActivitySectionProps {
   homework: WeeklyHomeworkData | null;
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
   userProfile?: UserProfile;
-  onOpenHomeworkModal: () => void;
+  onOpenHomeworkModal: (targetDay?: DayOfWeek) => void;
   onOpenDictionaryModal: () => void;
   onOpenJournalModal?: () => void;
   journalEntriesCount?: number;
@@ -114,6 +115,14 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     }
     return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   }, [userProfile?.weeklyStudyDays]);
+
+  const todayMemorizationSchedule = useMemo(() => {
+    return getDailyMemorizationSchedule(
+      todayDay,
+      activeStudyDays,
+      userProfile?.weeklyCycle || 1
+    );
+  }, [todayDay, activeStudyDays, userProfile?.weeklyCycle]);
 
   // Local state for dictionary entries loaded directly from server database
   const [loadedDictEntries, setLoadedDictEntries] = useState<StudentDictionaryEntry[]>([]);
@@ -379,11 +388,15 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
 
             <button
               type="button"
-              onClick={onOpenHomeworkModal}
+              onClick={() => onOpenHomeworkModal(todayDay)}
               className="px-4 py-2.5 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-2xl font-black text-xs transition flex items-center gap-2 cursor-pointer shadow-lg border border-[#9AB4FF]/60 active:scale-98"
             >
               <BookOpen className="w-4 h-4 text-white" />
-              <span>{isEn ? 'Open Memorization Activity →' : 'Abrir Atividade de Memorização →'}</span>
+              <span>
+                {isEn
+                  ? `Open Part ${todayMemorizationSchedule.partNumber}: ${todayMemorizationSchedule.partTitleEn.split(':')[1]?.trim() || todayMemorizationSchedule.partTitleEn} →`
+                  : `Abrir Parte ${todayMemorizationSchedule.partNumber}: ${todayMemorizationSchedule.partTitlePt.split(':')[1]?.trim() || todayMemorizationSchedule.partTitlePt} →`}
+              </span>
             </button>
           </div>
         </div>
@@ -747,6 +760,22 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                               </span>
                             )}
                           </div>
+                        ) : row.id === 'memorization' ? (
+                          <div className="inline-flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#F4CA54]/20 border border-[#F4CA54]/40 text-[#F4CA54] text-[9px] font-extrabold uppercase tracking-wide">
+                              ⭐ {isEn ? `Today: Part ${todayMemorizationSchedule.partNumber}` : `Hoje: Parte ${todayMemorizationSchedule.partNumber}`}
+                            </span>
+                            {(checkedCounts[row.id] || 0) >= weeklyStudyDaysTarget ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[9px] font-extrabold uppercase tracking-wide">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                                <span>{isEn ? 'Goal met' : 'Meta atingida'} ({(checkedCounts[row.id] || 0)}/{weeklyStudyDaysTarget})</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[#9AB4FF]/75 font-bold">
+                                ({(checkedCounts[row.id] || 0)}/{weeklyStudyDaysTarget} {isEn ? (weeklyStudyDaysTarget === 1 ? 'day' : 'days') : (weeklyStudyDaysTarget === 1 ? 'dia' : 'dias')})
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <div className="inline-flex items-center gap-1.5 flex-wrap">
                             {(checkedCounts[row.id] || 0) >= weeklyStudyDaysTarget ? (
@@ -770,6 +799,9 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                         const isDayInPlan = activeStudyDays.includes(d.key);
                         const isInteractive = row.id === 'tutor_live' || isDayInPlan;
                         const isChecked = Boolean(weeklyChecks[`${row.id}_${d.key}`]);
+                        const memPart = row.id === 'memorization'
+                          ? getDailyMemorizationSchedule(d.key, activeStudyDays, userProfile?.weeklyCycle || 1)
+                          : null;
 
                         if (!isInteractive) {
                           return (
@@ -791,13 +823,27 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                           <button
                             key={d.key}
                             type="button"
-                            onClick={() => toggleCheck(row.id, d.key)}
+                            onClick={() => {
+                              if (row.id === 'memorization') {
+                                onOpenHomeworkModal(d.key);
+                              } else {
+                                toggleCheck(row.id, d.key);
+                              }
+                            }}
                             className="w-6 h-6 rounded-full flex items-center justify-center cursor-pointer transition active:scale-95"
-                            title={`${isEn ? row.titleEn : row.titlePt} (${d.label})`}
+                            title={
+                              memPart
+                                ? `${d.label}: Parte ${memPart.partNumber} (${isEn ? memPart.partTitleEn.split(':')[1]?.trim() : memPart.partTitlePt.split(':')[1]?.trim()})`
+                                : `${isEn ? row.titleEn : row.titlePt} (${d.label})`
+                            }
                           >
                             {isChecked ? (
                               <div className="w-5 h-5 rounded-full bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center border border-[#9AB4FF] shadow-xs">
                                 <CheckCircle2 className="w-3.5 h-3.5 text-[#9AB4FF]" />
+                              </div>
+                            ) : memPart ? (
+                              <div className="w-5 h-5 rounded-full border-2 border-[#607EC9]/50 hover:border-[#9AB4FF] transition bg-[#000035]/40 flex items-center justify-center text-[8px] font-bold text-[#9AB4FF]/80">
+                                P{memPart.partNumber}
                               </div>
                             ) : (
                               <div className="w-5 h-5 rounded-full border-2 border-[#607EC9]/50 hover:border-[#9AB4FF] transition bg-[#000035]/40" />

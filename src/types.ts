@@ -578,6 +578,11 @@ export interface WeeklyHomeworkData {
   fillInBlanks: FillInBlankItem[];
   sentenceWritingPrompts: SentenceWritingPrompt[];
   readingPassage: ReadingPassage;
+  targetDay?: DayOfWeek;
+  assignedPart?: 1 | 2 | 3 | 4;
+  assignedPartKey?: 'matching' | 'fill' | 'writing' | 'reading';
+  isDayPartCompleted?: boolean;
+  completedPartsByDay?: Record<string, boolean>;
   isCompleted?: boolean;
   score?: number;
   submittedAt?: string;

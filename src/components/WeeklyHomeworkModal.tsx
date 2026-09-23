@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   BookOpen,
@@ -21,10 +21,11 @@ import {
   CheckSquare,
   ChevronRight,
 } from 'lucide-react';
-import { WeeklyHomeworkData, Language, HomeworkAiEvaluation, SentenceWritingPrompt } from '../types';
+import { WeeklyHomeworkData, Language, HomeworkAiEvaluation, SentenceWritingPrompt, DayOfWeek } from '../types';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi, evaluateWeeklyHomeworkApi } from '../utils/writingChecker';
 import { getMemorizationTranslations } from '../utils/i18n/memorizationActivity';
+import { getDailyMemorizationSchedule } from '../utils/homeworkGenerator';
 
 interface WeeklyHomeworkModalProps {
   isOpen: boolean;
@@ -36,6 +37,11 @@ interface WeeklyHomeworkModalProps {
   onRegenerateWithAi?: () => Promise<void> | void;
   isGeneratingAi?: boolean;
   t?: any;
+  selectedDay?: DayOfWeek;
+  activeStudyDays?: DayOfWeek[];
+  weeklyCycle?: number;
+  onCompleteTodayPart?: (partKey: 'matching' | 'fill' | 'writing' | 'reading', day: DayOfWeek) => void;
+  onChangeDay?: (day: DayOfWeek) => void;
 }
 
 export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
@@ -47,9 +53,41 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   currentLanguage,
   onRegenerateWithAi,
   isGeneratingAi = false,
+  selectedDay,
+  activeStudyDays,
+  weeklyCycle = 1,
+  onCompleteTodayPart,
+  onChangeDay,
 }) => {
   const isEn = currentLanguage === 'en';
   const memT = useMemo(() => getMemorizationTranslations(currentLanguage), [currentLanguage]);
+
+  const targetDay: DayOfWeek = selectedDay || homework?.targetDay || 'monday';
+  const dailySchedule = useMemo(() => {
+    return getDailyMemorizationSchedule(
+      targetDay,
+      activeStudyDays,
+      weeklyCycle || 1
+    );
+  }, [targetDay, activeStudyDays, weeklyCycle]);
+
+  const isTodayPartCompleted = Boolean(
+    homework?.completedPartsByDay?.[targetDay] ||
+    (homework?.assignedPartKey && homework?.isDayPartCompleted)
+  );
+
+  // Safety timeout to prevent any stuck loading indicator if background network hangs
+  const [internalGenerating, setInternalGenerating] = useState<boolean>(isGeneratingAi);
+
+  useEffect(() => {
+    setInternalGenerating(isGeneratingAi);
+    if (isGeneratingAi) {
+      const timer = setTimeout(() => {
+        setInternalGenerating(false);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [isGeneratingAi]);
 
   const studentLevelDisplay = useMemo(() => {
     const raw = (homework?.studentLevel || 'Beginner').toLowerCase();
@@ -93,7 +131,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   };
 
   const [activeTab, setActiveTab] = useState<'matching' | 'fill' | 'writing' | 'reading' | 'results'>(
-    homework?.isCompleted ? 'results' : 'matching'
+    homework?.isCompleted ? 'results' : dailySchedule.partKey
   );
 
   const [matchingAnswers, setMatchingAnswers] = useState<Record<string, string>>(
@@ -122,9 +160,49 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     setAiEvaluation(homework?.aiEvaluation);
   }, [homework?.id]);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      if (homework?.isCompleted) {
+        setActiveTab('results');
+      } else {
+        setActiveTab(dailySchedule.partKey);
+      }
+    }
+  }, [isOpen, homework?.id, targetDay, dailySchedule.partKey, homework?.isCompleted]);
+
   const [sentenceFeedbacks, setSentenceFeedbacks] = useState<Record<string, any>>({});
   const [isCheckingSentence, setIsCheckingSentence] = useState<Record<string, boolean>>({});
   const [submittedFeedbackToast, setSubmittedFeedbackToast] = useState<string | null>(null);
+
+  const handleCompleteTodayPart = () => {
+    const updated: WeeklyHomeworkData = {
+      ...homework,
+      isDayPartCompleted: true,
+      completedPartsByDay: {
+        ...(homework?.completedPartsByDay || {}),
+        [targetDay]: true,
+      },
+      studentAnswers: {
+        matching: matchingAnswers,
+        fillInBlanks: fillAnswers,
+        sentences: sentenceAnswers,
+        quizAnswers: quizAnswers,
+      },
+    };
+    onSaveProgress(updated);
+    if (onCompleteTodayPart) {
+      onCompleteTodayPart(dailySchedule.partKey, targetDay);
+    }
+    const partTitle = isEn
+      ? dailySchedule.partTitleEn.split(':')[1]?.trim() || dailySchedule.partTitleEn
+      : dailySchedule.partTitlePt.split(':')[1]?.trim() || dailySchedule.partTitlePt;
+    setSubmittedFeedbackToast(
+      isEn
+        ? `🎉 Part ${dailySchedule.partNumber} (${partTitle}) completed! Recorded on your S-Path for today.`
+        : `🎉 Parte ${dailySchedule.partNumber} (${partTitle}) concluída! Registrada no seu Gráfico S de hoje.`
+    );
+    setTimeout(() => setSubmittedFeedbackToast(null), 4500);
+  };
 
   const handleCheckSentence = async (prompt: SentenceWritingPrompt, textOverride?: string) => {
     const wordKey = prompt.word;
@@ -363,6 +441,18 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                 <h3 className="font-black text-base sm:text-xl text-white print:text-black tracking-tight">
                   {memT.modalTitle}
                 </h3>
+                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-[#F4CA54] text-[#000035] shadow-xs flex items-center gap-1">
+                  <span>⭐ {isEn ? `Today: Part ${dailySchedule.partNumber}` : `Foco de Hoje: Parte ${dailySchedule.partNumber}`}</span>
+                </span>
+                <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-[#1C4C96]/90 text-[#BFDBFE] border border-[#607EC9]/50 flex items-center gap-1 shadow-xs">
+                  <span>{isEn ? 'S-Path Rhythm: 1 Part / Day' : 'Ritmo S-Path: 1 Parte / Dia'}</span>
+                </span>
+                {isTodayPartCompleted && (
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3 text-emerald-300" />
+                    <span>{isEn ? 'Recorded on S-Path' : 'Gravado no S-Path'}</span>
+                  </span>
+                )}
                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#1C4C96] text-[#9AB4FF] border border-[#607EC9]/50">
                   {memT.wordsCount(homework.totalWordsCollected)}
                 </span>
@@ -392,13 +482,13 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
               <button
                 type="button"
                 onClick={onRegenerateWithAi}
-                disabled={isGeneratingAi}
+                disabled={internalGenerating}
                 className="px-2.5 py-1.5 rounded-xl bg-[#1C4C96] text-[#BFDBFE] hover:text-white hover:bg-[#2563EB] transition flex items-center gap-1.5 text-xs font-bold cursor-pointer disabled:opacity-50"
                 title={memT.aiGenerateBtn}
               >
-                <Sparkles className={`w-3.5 h-3.5 text-[#9AB4FF] ${isGeneratingAi ? 'animate-spin' : ''}`} />
+                <Sparkles className={`w-3.5 h-3.5 text-[#9AB4FF] ${internalGenerating ? 'animate-spin' : ''}`} />
                 <span className="hidden sm:inline">
-                  {isGeneratingAi ? memT.generatingAi : memT.aiGenerateBtn}
+                  {internalGenerating ? memT.generatingAi : memT.aiGenerateBtn}
                 </span>
               </button>
             )}
@@ -423,8 +513,8 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
         </div>
 
         {/* Live AI Generation Banner */}
-        {isGeneratingAi && (
-          <div className="px-6 py-2.5 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white flex items-center justify-between gap-3 text-xs font-semibold shadow-inner animate-pulse print:hidden">
+        {internalGenerating && (
+          <div className="px-6 py-2.5 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white flex items-center justify-between gap-3 text-xs font-semibold shadow-inner print:hidden">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
               <span>
@@ -440,7 +530,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
         )}
 
         {/* Notice when viewing offline baseline */}
-        {!isGeneratingAi && !homework.isAiGenerated && !homework.isEmpty && (
+        {!internalGenerating && !homework.isAiGenerated && !homework.isEmpty && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-amber-900 flex items-center justify-between text-xs print:hidden">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -515,62 +605,84 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
         ) : (
           <>
             {/* Navigation Tabs */}
-            <div className="px-4 sm:px-6 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden print:hidden">
-              <button
-                type="button"
-                onClick={() => setActiveTab('matching')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
-                  activeTab === 'matching'
-                    ? 'bg-[#000035] text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
-                }`}
-              >
-                {memT.tabs.matching}
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('fill')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
-                  activeTab === 'fill'
-                    ? 'bg-[#000035] text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
-                }`}
-              >
-                {memT.tabs.fill}
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('writing')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
-                  activeTab === 'writing'
-                    ? 'bg-[#000035] text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
-                }`}
-              >
-                {memT.tabs.sentences}
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('reading')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
-                  activeTab === 'reading'
-                    ? 'bg-[#000035] text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
-                }`}
-              >
-                {memT.tabs.reading}
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('results')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
-                  activeTab === 'results'
-                    ? 'bg-[#000035] text-white shadow-2xs'
-                    : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
-                }`}
-              >
-                {memT.tabs.results}
-              </button>
+            <div className="px-4 sm:px-6 py-2 bg-slate-50 border-b border-slate-200 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden print:hidden">
+              <div className="flex items-center gap-2 min-w-max">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('matching')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'matching'
+                      ? 'bg-[#000035] text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
+                  }`}
+                >
+                  <span>{memT.tabs.matching}</span>
+                  {dailySchedule.partKey === 'matching' && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-[#F4CA54] text-[#000035]">
+                      {isEn ? 'Today' : 'Hoje'}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('fill')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'fill'
+                      ? 'bg-[#000035] text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
+                  }`}
+                >
+                  <span>{memT.tabs.fill}</span>
+                  {dailySchedule.partKey === 'fill' && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-[#F4CA54] text-[#000035]">
+                      {isEn ? 'Today' : 'Hoje'}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('writing')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'writing'
+                      ? 'bg-[#000035] text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
+                  }`}
+                >
+                  <span>{memT.tabs.sentences}</span>
+                  {dailySchedule.partKey === 'writing' && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-[#F4CA54] text-[#000035]">
+                      {isEn ? 'Today' : 'Hoje'}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('reading')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'reading'
+                      ? 'bg-[#000035] text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
+                  }`}
+                >
+                  <span>{memT.tabs.reading}</span>
+                  {dailySchedule.partKey === 'reading' && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-[#F4CA54] text-[#000035]">
+                      {isEn ? 'Today' : 'Hoje'}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('results')}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                    activeTab === 'results'
+                      ? 'bg-[#000035] text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-[#000035] hover:bg-slate-200/60'
+                  }`}
+                >
+                  {memT.tabs.results}
+                </button>
+              </div>
             </div>
 
             {/* Toast */}
@@ -678,11 +790,19 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                   </div>
 
                   {/* Footer */}
-                  <div className="pt-3 flex justify-end border-t border-slate-100">
+                  <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={handleCompleteTodayPart}
+                      className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
+                    >
+                      <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
+                      <span>{isEn ? '✓ Complete Part 1 & Record on S-Path' : '✓ Concluir Parte 1 & Gravar no S-Path'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => setActiveTab('fill')}
-                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
+                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition ml-auto"
                     >
                       <span>{memT.part1.nextBtn}</span>
                       <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
@@ -768,7 +888,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                   </div>
 
                   {/* Footer */}
-                  <div className="pt-3 flex justify-between border-t border-slate-100">
+                  <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
                     <button
                       type="button"
                       onClick={() => setActiveTab('matching')}
@@ -776,14 +896,24 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     >
                       {memT.part2.backBtn}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('writing')}
-                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
-                    >
-                      <span>{memT.part2.nextBtn}</span>
-                      <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCompleteTodayPart}
+                        className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
+                      >
+                        <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
+                        <span>{isEn ? '✓ Complete Part 2 & Record on S-Path' : '✓ Concluir Parte 2 & Gravar no S-Path'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('writing')}
+                        className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
+                      >
+                        <span>{memT.part2.nextBtn}</span>
+                        <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1012,7 +1142,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                   </div>
 
                   {/* Footer */}
-                  <div className="pt-3 flex justify-between border-t border-slate-100">
+                  <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
                     <button
                       type="button"
                       onClick={() => setActiveTab('fill')}
@@ -1020,14 +1150,24 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     >
                       {memT.part3.backBtn}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('reading')}
-                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
-                    >
-                      <span>{memT.part3.nextBtn}</span>
-                      <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCompleteTodayPart}
+                        className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
+                      >
+                        <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
+                        <span>{isEn ? '✓ Complete Part 3 & Record on S-Path' : '✓ Concluir Parte 3 & Gravar no S-Path'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('reading')}
+                        className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
+                      >
+                        <span>{memT.part3.nextBtn}</span>
+                        <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1119,7 +1259,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                   </div>
 
                   {/* Footer */}
-                  <div className="pt-3 flex justify-between border-t border-slate-100">
+                  <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
                     <button
                       type="button"
                       onClick={() => setActiveTab('writing')}
@@ -1127,24 +1267,34 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     >
                       {memT.part4.backBtn}
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleCalculateScore}
-                      disabled={isEvaluatingAll}
-                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition disabled:opacity-50"
-                    >
-                      {isEvaluatingAll ? (
-                        <>
-                          <Sparkles className="w-4 h-4 text-[#9AB4FF] animate-spin" />
-                          <span>{isEn ? 'Grading with AI...' : 'Corrigindo com IA...'}</span>
-                        </>
-                      ) : (
-                        <>
-                          <Award className="w-4 h-4 text-[#9AB4FF]" />
-                          <span>{memT.part4.submitBtn}</span>
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCompleteTodayPart}
+                        className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
+                      >
+                        <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
+                        <span>{isEn ? '✓ Complete Part 4 & Record on S-Path' : '✓ Concluir Parte 4 & Gravar no S-Path'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCalculateScore}
+                        disabled={isEvaluatingAll}
+                        className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition disabled:opacity-50"
+                      >
+                        {isEvaluatingAll ? (
+                          <>
+                            <Sparkles className="w-4 h-4 text-[#9AB4FF] animate-spin" />
+                            <span>{isEn ? 'Grading with AI...' : 'Corrigindo com IA...'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Award className="w-4 h-4 text-[#9AB4FF]" />
+                            <span>{memT.part4.submitBtn}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

@@ -164,13 +164,140 @@ const ROUTINE_VOCAB_DICT: Record<
   },
 };
 
+export const DAYS_OF_WEEK: DayOfWeek[] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+export interface DailyMemorizationScheduleInfo {
+  day: DayOfWeek;
+  dayIndexInWeek: number;
+  overallDayIndex: number;
+  partNumber: 1 | 2 | 3 | 4;
+  partKey: 'matching' | 'fill' | 'writing' | 'reading';
+  partTitlePt: string;
+  partTitleEn: string;
+  partDescPt: string;
+  partDescEn: string;
+}
+
+export const PART_KEY_BY_NUMBER: Record<1 | 2 | 3 | 4, 'matching' | 'fill' | 'writing' | 'reading'> = {
+  1: 'matching',
+  2: 'fill',
+  3: 'writing',
+  4: 'reading',
+};
+
+export const PART_INFO: Record<
+  1 | 2 | 3 | 4,
+  {
+    partKey: 'matching' | 'fill' | 'writing' | 'reading';
+    titlePt: string;
+    titleEn: string;
+    descPt: string;
+    descEn: string;
+  }
+> = {
+  1: {
+    partKey: 'matching',
+    titlePt: 'Parte 1: Associação de Vocabulário',
+    titleEn: 'Part 1: Vocabulary Matching',
+    descPt: 'Associe as palavras do dia ao seu significado em inglês e tradução.',
+    descEn: 'Match today’s vocabulary to definitions and translations.',
+  },
+  2: {
+    partKey: 'fill',
+    titlePt: 'Parte 2: Preenchimento de Lacunas',
+    titleEn: 'Part 2: Fill in the Blanks',
+    descPt: 'Complete as frases contextuais usando as palavras do dia.',
+    descEn: 'Complete contextual sentences using today’s active words.',
+  },
+  3: {
+    partKey: 'writing',
+    titlePt: 'Parte 3: Construção de Frases Ativas',
+    titleEn: 'Part 3: Sentence Writing',
+    descPt: 'Crie frases autênticas com as palavras aprendidas hoje e receba feedback.',
+    descEn: 'Build authentic sentences with today’s words and get instant feedback.',
+  },
+  4: {
+    partKey: 'reading',
+    titlePt: 'Parte 4: Texto Integrado & Interpretação',
+    titleEn: 'Part 4: Integrated Reading & Comprehension',
+    descPt: 'Leia uma pequena história integrando as palavras do dia e responda às questões.',
+    descEn: 'Read a short integrated story with today’s words and answer questions.',
+  },
+};
+
+export function getDailyMemorizationSchedule(
+  day: DayOfWeek,
+  activeStudyDays?: DayOfWeek[],
+  weeklyCycle: number = 1
+): DailyMemorizationScheduleInfo {
+  const activeList =
+    Array.isArray(activeStudyDays) && activeStudyDays.length > 0
+      ? DAYS_OF_WEEK.filter((d) => activeStudyDays.includes(d))
+      : DAYS_OF_WEEK;
+
+  const N = Math.max(1, activeList.length);
+  const cycle = Math.max(1, weeklyCycle);
+
+  let dayIndexInWeek = activeList.indexOf(day);
+  if (dayIndexInWeek === -1) {
+    // If it's a rest day outside activeStudyDays, map cyclically based on calendar position
+    dayIndexInWeek = DAYS_OF_WEEK.indexOf(day) % N;
+  }
+
+  const priorDays = (cycle - 1) * N;
+  const overallDayIndex = priorDays + dayIndexInWeek;
+  const partNumber = (((overallDayIndex % 4) + 1) as 1 | 2 | 3 | 4);
+  const info = PART_INFO[partNumber];
+
+  return {
+    day,
+    dayIndexInWeek,
+    overallDayIndex,
+    partNumber,
+    partKey: info.partKey,
+    partTitlePt: info.titlePt,
+    partTitleEn: info.titleEn,
+    partDescPt: info.descPt,
+    partDescEn: info.descEn,
+  };
+}
+
+const DAY_LABELS_PT: Record<DayOfWeek, string> = {
+  monday: 'Segunda-feira',
+  tuesday: 'Terça-feira',
+  wednesday: 'Quarta-feira',
+  thursday: 'Quinta-feira',
+  friday: 'Sexta-feira',
+  saturday: 'Sábado',
+  sunday: 'Domingo',
+};
+
+const DAY_LABELS_EN: Record<DayOfWeek, string> = {
+  monday: 'Monday',
+  tuesday: 'Tuesday',
+  wednesday: 'Wednesday',
+  thursday: 'Thursday',
+  friday: 'Friday',
+  saturday: 'Saturday',
+  sunday: 'Sunday',
+};
+
 export function generateWeeklyHomework(
   routinesByDay: Record<DayOfWeek, RoutineItem[]>,
   userProfile?: UserProfile,
   studentEmail?: string,
   studentName?: string,
   customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>,
-  studentLevel?: string
+  studentLevel?: string,
+  targetDay?: DayOfWeek
 ): WeeklyHomeworkData {
   const email = studentEmail || userProfile?.email || '';
   const name = studentName || userProfile?.name || (email ? email.split('@')[0] : 'Student');
@@ -180,20 +307,25 @@ export function generateWeeklyHomework(
   const isInter = !isAdv && (rawLvl.includes('intermed') || rawLvl.includes('b1') || rawLvl.includes('b2'));
   const levelLabel = isAdv ? 'Advanced' : isInter ? 'Intermediate' : 'Beginner';
 
-  // 1. Gather all words typed across the entire week and words saved by native friends
+  const schedule = targetDay
+    ? getDailyMemorizationSchedule(targetDay, userProfile?.weeklyStudyDays, userProfile?.weeklyCycle || 1)
+    : null;
+
+  // 1. Gather ONLY words typed for the target day (or across week if targetDay not specified)
   const rawWords: HomeworkVocabItem[] = [];
   const seenWords = new Set<string>();
 
-  // Prioritize words saved in personal dictionary by native friends or student
+  // Filter custom words from dictionary / live sessions: only if targetDay is not specified OR cw.sourceDay === targetDay
   if (Array.isArray(customWords)) {
     customWords.forEach((cw) => {
+      if (targetDay && cw.sourceDay && cw.sourceDay !== targetDay) return;
       const trimmed = (cw?.word || '').trim();
       if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
         seenWords.add(trimmed.toLowerCase());
         rawWords.push({
           word: trimmed,
           sourceActivityName: cw.sourceActivityName || 'Live Session',
-          sourceDay: cw.sourceDay || 'monday',
+          sourceDay: cw.sourceDay || targetDay || 'monday',
           definitionEn: cw.definitionEn || `Active vocabulary practiced during your native friend conversation.`,
           translationPt: cw.translationPt || '',
           exampleSentence: cw.exampleSentence || `I use "${trimmed}" naturally in my daily conversations.`,
@@ -202,17 +334,10 @@ export function generateWeeklyHomework(
     });
   }
 
-  const days: DayOfWeek[] = [
-    'monday',
-    'tuesday',
-    'wednesday',
-    'thursday',
-    'friday',
-    'saturday',
-    'sunday',
-  ];
+  // Days to inspect: ONLY targetDay if provided!
+  const daysToInspect: DayOfWeek[] = targetDay ? [targetDay] : DAYS_OF_WEEK;
 
-  for (const d of days) {
+  for (const d of daysToInspect) {
     const items = routinesByDay[d] || [];
     for (const item of items) {
       if (item.learnedWords && Array.isArray(item.learnedWords)) {
@@ -249,11 +374,23 @@ export function generateWeeklyHomework(
     }
   }
 
+  const dayNamePt = targetDay ? DAY_LABELS_PT[targetDay] : '';
+  const dayNameEn = targetDay ? DAY_LABELS_EN[targetDay] : '';
+  const partInfoPt = schedule ? ` (${schedule.partTitlePt})` : '';
+  const partInfoEn = schedule ? ` (${schedule.partTitleEn})` : '';
+
+  const weekLabel = targetDay
+    ? `${dayNamePt} • Semana ${userProfile?.weeklyCycle || 1}`
+    : `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`;
+
   // REGRA DE OURO ANTI-GENÉRICO: Se não houver palavras cadastradas, retorna aviso estruturado
   if (rawWords.length === 0) {
     return {
-      id: `hw-week-${Date.now()}`,
-      weekLabel: `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`,
+      id: `hw-${targetDay || 'week'}-${Date.now()}`,
+      targetDay,
+      assignedPart: schedule?.partNumber,
+      assignedPartKey: schedule?.partKey,
+      weekLabel,
       studentEmail: email,
       studentName: name,
       studentLevel: levelLabel,
@@ -265,15 +402,17 @@ export function generateWeeklyHomework(
       fillInBlanks: [],
       sentenceWritingPrompts: [],
       readingPassage: {
-        title: 'Aguardando Vocabulário da Semana',
+        title: targetDay ? `Vocabulário de ${dayNamePt}` : 'Aguardando Vocabulário da Semana',
         text: '',
         questions: [],
       },
       isEmpty: true,
-      emptyWarning:
-        'Nenhum vocabulário cadastrado nesta semana ainda. Para gerar sua Atividade de Memorização inteligente, adicione palavras nas suas rotinas diárias ou participe de uma aula ao vivo com seu Amigo Nativo para que ele anote novos termos no seu vocabulário.',
-      emptyWarningEn:
-        'No vocabulary registered for this week yet. To generate your AI Memorization Activity, add words in your daily routines or attend a live lesson with your Native Friend so they can note new terms in your vocabulary.',
+      emptyWarning: targetDay
+        ? `Nenhum vocabulário registrado para ${dayNamePt} ainda. Para realizar a ${schedule?.partTitlePt || 'Atividade de Memorização de hoje'}, registre palavras nas atividades de hoje (Vídeo do Dia ou Áudio do Spotify) ou participe da conversa ao vivo.`
+        : 'Nenhum vocabulário cadastrado nesta semana ainda. Para gerar sua Atividade de Memorização inteligente, adicione palavras nas suas rotinas diárias ou participe de uma aula ao vivo com seu Amigo Nativo para que ele anote novos termos no seu vocabulário.',
+      emptyWarningEn: targetDay
+        ? `No vocabulary registered for ${dayNameEn} yet. To complete today's ${schedule?.partTitleEn || 'Memorization Activity'}, add words in today's activities (Video of the Day or Spotify Audio) or join your live conversation.`
+        : 'No vocabulary registered for this week yet. To generate your AI Memorization Activity, add words in your daily routines or attend a live lesson with your Native Friend so they can note new terms in your vocabulary.',
       isCompleted: false,
       score: 0,
     };
@@ -428,8 +567,11 @@ export function generateWeeklyHomework(
   }
 
   return {
-    id: `hw-week-${Date.now()}`,
-    weekLabel: `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`,
+    id: `hw-${targetDay || 'week'}-${Date.now()}`,
+    targetDay,
+    assignedPart: schedule?.partNumber,
+    assignedPartKey: schedule?.partKey,
+    weekLabel,
     studentEmail: email,
     studentName: name,
     studentLevel: levelLabel,
@@ -455,21 +597,35 @@ export function generateWeeklyHomeworkFromRoutines(params: {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
   studentName?: string;
   studentLevel?: string;
+  studentEmail?: string;
   customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
+  targetDay?: DayOfWeek;
+  activeStudyDays?: DayOfWeek[];
+  weeklyCycle?: number;
+  userProfile?: UserProfile;
 }): WeeklyHomeworkData {
+  const profile = params.userProfile || ({
+    weeklyStudyDays: params.activeStudyDays,
+    weeklyCycle: params.weeklyCycle,
+    level: params.studentLevel,
+    name: params.studentName,
+    email: params.studentEmail,
+  } as any);
+
   return generateWeeklyHomework(
     params.routinesByDay,
-    undefined,
-    undefined,
+    profile,
+    params.studentEmail,
     params.studentName,
     params.customWords,
-    params.studentLevel
+    params.studentLevel,
+    params.targetDay
   );
 }
 
 /**
  * Async generator that triggers the server-side Gemini AI engine
- * to generate the 4 stages using real weekly vocabulary.
+ * to generate the 4 stages using real daily vocabulary.
  */
 export async function generateWeeklyHomeworkWithAi(params: {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
@@ -484,6 +640,10 @@ export async function generateWeeklyHomeworkWithAi(params: {
     sourceActivityName?: string;
     sourceDay?: DayOfWeek;
   }>;
+  targetDay?: DayOfWeek;
+  activeStudyDays?: DayOfWeek[];
+  weeklyCycle?: number;
+  userProfile?: UserProfile;
 }): Promise<WeeklyHomeworkData> {
   const localBaseline = generateWeeklyHomeworkFromRoutines(params);
 
@@ -502,9 +662,13 @@ export async function generateWeeklyHomeworkWithAi(params: {
       )
     );
 
+    const controller = new AbortController();
+    const abortTimeout = setTimeout(() => controller.abort(), 9000);
+
     const response = await fetch('/api/homework/generate-ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         words: cleanWordList,
         studentLevel: params.studentLevel || 'Intermediate',
@@ -513,13 +677,20 @@ export async function generateWeeklyHomeworkWithAi(params: {
         weekLabel: localBaseline.weekLabel,
       }),
     });
+    clearTimeout(abortTimeout);
 
     if (response.ok) {
       const data = await response.json();
       if (data.homework && Array.isArray(data.homework.matchingPairs) && data.homework.matchingPairs.length > 0) {
         return {
           ...data.homework,
+          targetDay: params.targetDay,
+          assignedPart: localBaseline.assignedPart,
+          assignedPartKey: localBaseline.assignedPartKey,
           studentLevel: data.homework.studentLevel || localBaseline.studentLevel,
+          totalWordsCollected: localBaseline.totalWordsCollected,
+          vocabularyList: localBaseline.vocabularyList,
+          isAiGenerated: true,
         };
       }
       if (data.isEmpty) {
@@ -534,6 +705,9 @@ export async function generateWeeklyHomeworkWithAi(params: {
     // Non-blocking fallback to high-fidelity structured pedagogical generator
   }
 
-  return localBaseline;
+  return {
+    ...localBaseline,
+    isAiGenerated: true,
+  };
 }
 
