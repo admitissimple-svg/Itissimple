@@ -6,6 +6,8 @@ export interface MemorizationTranslations {
   scoreBadge: (score: number) => string;
   aiGenerateBtn: string;
   generatingAi: string;
+  generatingDailyActivity?: string;
+  generatingDailyActivitySubtitle?: string;
   printBtn: string;
   close: string;
   weekLabelPrefix: string;
@@ -80,6 +82,8 @@ export const MEMORIZATION_I18N: Record<Language, MemorizationTranslations> = {
     scoreBadge: (score) => `${score}% Score`,
     aiGenerateBtn: 'AI Generate',
     generatingAi: 'Generating...',
+    generatingDailyActivity: 'Generating your personalized activity of the day...',
+    generatingDailyActivitySubtitle: 'Connecting your daily vocabulary to Gemini AI to craft an authentic mini-story, smart blank challenges, and targeted comprehension questions...',
     printBtn: 'Print',
     close: 'Close',
     weekLabelPrefix: 'Week of',
@@ -156,6 +160,8 @@ export const MEMORIZATION_I18N: Record<Language, MemorizationTranslations> = {
     scoreBadge: (score) => `${score}% Pontuação`,
     aiGenerateBtn: 'Gerar com IA',
     generatingAi: 'Gerando com IA...',
+    generatingDailyActivity: 'Gerando sua atividade personalizada do dia...',
+    generatingDailyActivitySubtitle: 'Conectando seu vocabulário diário ao Gemini AI para criar uma mini-história autêntica, exercícios de lacunas inteligentes e perguntas de interpretação...',
     printBtn: 'Imprimir',
     close: 'Fechar',
     weekLabelPrefix: 'Semana de',
@@ -232,6 +238,8 @@ export const MEMORIZATION_I18N: Record<Language, MemorizationTranslations> = {
     scoreBadge: (score) => `${score}% Puntaje`,
     aiGenerateBtn: 'Generar con IA',
     generatingAi: 'Generando con IA...',
+    generatingDailyActivity: 'Generando tu actividad personalizada del día...',
+    generatingDailyActivitySubtitle: 'Conectando tu vocabulario diario con Gemini AI para crear una micro-historia auténtica, ejercicios con espacios inteligentes y preguntas contextuales...',
     printBtn: 'Imprimir',
     close: 'Cerrar',
     weekLabelPrefix: 'Semana del',

@@ -440,13 +440,23 @@ export default function App() {
       userProfile,
     });
 
-    // If we already have an AI-generated homework and the collected words haven't changed, preserve it!
+    // If we already have an AI-generated homework and the collected words haven't changed, preserve it (unless it was generated with old template)!
     setWeeklyHomework((prev) => {
       if (prev?.isAiGenerated && !prev.isEmpty && prev.totalWordsCollected > 0 && prev.targetDay === homeworkTargetDay) {
-        const prevWords = prev.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
-        const nextWords = generated.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
-        if (prevWords === nextWords) {
-          return prev;
+        const prevText = prev.readingPassage?.text || '';
+        const isBadOldStory =
+          prevText.includes('to make sure everything stayed aligned') ||
+          prevText.includes('quick to ') ||
+          prevText.includes('refreshing weather') ||
+          prevText.includes('storm terms') ||
+          prevText.length < 80;
+
+        if (!isBadOldStory) {
+          const prevWords = prev.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
+          const nextWords = generated.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
+          if (prevWords === nextWords) {
+            return prev;
+          }
         }
       }
       return generated;

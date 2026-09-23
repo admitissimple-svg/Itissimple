@@ -11,6 +11,11 @@ import {
   ReadingPassage,
 } from '../types';
 import { getActivityDisplayName } from './i18n';
+import {
+  synthesizeCohesiveStoryAndQuestions,
+  synthesizeFillInBlanks,
+  profileWord,
+} from './pedagogicalStorySynthesizer';
 
 // Rich dictionary knowledge base for routine words
 const ROUTINE_VOCAB_DICT: Record<
@@ -428,53 +433,11 @@ export function generateWeeklyHomework(
       translation: item.translationPt,
     }));
 
-  // 3. Build Fill-in-the-Blanks (Part 2 - Lacunas): Calibrado por nível
-  const fillInBlanks: FillInBlankItem[] = rawWords.slice(0, 6).map((item, idx) => {
-    const wordRegex = new RegExp(`\\b${item.word}\\b`, 'i');
-    let sentenceWithBlank = '';
-
-    const fallbackTemplates = [
-      `During our morning team check-in, we made sure to prioritize the ______ to keep work on track.`,
-      `I dedicated thirty minutes this morning to focus entirely on our new ______.`,
-      `Please send me a quick update regarding the ______ as soon as you have a moment.`,
-      `Having a clear perspective on each ______ makes daily communication much smoother.`,
-      `She shared helpful insights about the ______ during our afternoon discussion.`,
-      `We agreed to review the key details of the ______ before finalizing the decision.`,
-    ];
-
-    if (item.exampleSentence && wordRegex.test(item.exampleSentence)) {
-      sentenceWithBlank = item.exampleSentence.replace(wordRegex, '______');
-    } else {
-      sentenceWithBlank = fallbackTemplates[idx % fallbackTemplates.length];
-    }
-
-    const otherWords = rawWords
-      .filter((rw) => rw.word.toLowerCase() !== item.word.toLowerCase())
-      .map((rw) => rw.word);
-
-    const distractors = otherWords.slice(0, 3);
-    const backupTerms = ['schedule', 'routine', 'practice', 'session'];
-    let bIdx = 0;
-    while (distractors.length < 3) {
-      const candidate = backupTerms[bIdx++ % backupTerms.length];
-      if (!distractors.includes(candidate) && candidate !== item.word.toLowerCase()) {
-        distractors.push(candidate);
-      }
-    }
-
-    const options = [item.word, ...distractors].sort(() => 0.5 - Math.random());
-
-    return {
-      id: `fill-${idx}-${item.word}`,
-      sentenceWithBlank,
-      correctWord: item.word,
-      options,
-      hintPt: `Dica: Refere-se a "${item.translationPt}".`,
-      hintEn: `Hint: Focus on the sentence context to identify "${item.word}".`,
-      explanationPt: `A palavra "${item.word}" (${item.translationPt}) é a única que se encaixa gramatical e contextualmente nesta oração.`,
-      explanationEn: `"${item.word}" is the only option that accurately completes the meaning and grammar of this sentence.`,
-    };
-  });
+  // 3. Build Fill-in-the-Blanks (Part 2 - Lacunas): Sintetizado com precisão semântica e gramatical autêntica
+  const fillInBlanks: FillInBlankItem[] = synthesizeFillInBlanks(
+    rawWords.map((rw) => rw.word),
+    rawWords
+  );
 
   // 4. Build Sentence Writing Prompts (Part 3 - Construção de Frases Ativas): Calibrado por nível
   const sentenceWritingPrompts: SentenceWritingPrompt[] = rawWords.slice(0, 5).map((item) => {
@@ -505,66 +468,17 @@ export function generateWeeklyHomework(
     };
   });
 
-  // 5. Build Reading Passage & Comprehension (Part 4 - Texto Integrado): Calibrado por nível
-  const highlightedWordsStr = rawWords.slice(0, 5).map((w) => `**${w.word}**`).join(', ');
-  const passageTitle = `Living Your Routine in English (${levelLabel})`;
-  const passageText = isAdv
-    ? `Mastering English naturally requires intertwining communication directly with your daily responsibilities. This week, our practical linguistic targets included ${highlightedWordsStr}.\n\nBy consistently operationalizing terms such as ${rawWords
-        .slice(0, 3)
-        .map((w) => `**${w.word}**`)
-        .join(' and ')} across multifaceted situations, fluid speech transitions from a conscious exertion into an automatic reflex. Relentless everyday application transforms routine moments into sustainable communicative excellence.`
-    : isInter
-    ? `Building authentic English fluency happens when you connect language directly to your real life. This week, we focused on key concepts including ${highlightedWordsStr}.\n\nBy practicing terms like ${rawWords
-        .slice(0, 3)
-        .map((w) => `**${w.word}**`)
-        .join(' and ')} in everyday situations, speaking becomes a natural daily habit instead of memorizing abstract lists. Daily consistency and real-world application turn simple routine steps into permanent language progress.`
-    : `Learning English every day makes speaking natural and easy. This week, we focused on words like ${highlightedWordsStr}.\n\nWhen we use **${rawWords[0]?.word || 'practice'}** in our morning and daily routine, we remember it easily. Keep practicing a little bit every day to speak with confidence!`;
+  // 5. Build Reading Passage & Comprehension (Part 4 - Mini-Story Coesa e Gramaticalmente Fluida)
+  const synthesizedStory = synthesizeCohesiveStoryAndQuestions({
+    words: rawWords.map((rw) => rw.word),
+    studentLevel: levelLabel,
+    studentName: name,
+    wordDetails: rawWords,
+  });
 
-  const w0 = rawWords[0] || { word: 'practice', translationPt: 'prática', definitionEn: 'regular activity' };
-  const w1 = rawWords[1] || rawWords[0] || { word: 'routine', translationPt: 'rotina', definitionEn: 'daily schedule' };
-  const w2 = rawWords[2] || rawWords[0] || { word: 'confidence', translationPt: 'confiança', definitionEn: 'feeling of assurance' };
-
-  const readingQuestions: ReadingQuestion[] = [
-    {
-      id: 'q-1',
-      question: `In the passage, how is the vocabulary word "${w0.word}" (${w0.translationPt}) applied in the daily routine?`,
-      options: [
-        `It is integrated into daily actions to make English practice an authentic and consistent habit.`,
-        `It is strictly memorized in isolation without any connection to real life.`,
-        `It is completely avoided because it takes too much time in the morning.`,
-        `It replaces the need to practice speaking with native tutors.`,
-      ],
-      correctAnswer: 0,
-      explanation: `In the text, "${w0.word}" (${w0.translationPt}) is actively practiced within daily moments, turning language into an authentic habit.`,
-    },
-    {
-      id: 'q-2',
-      question: `According to the story, what does practicing "${w1.word}" (${w1.translationPt}) help the learner achieve?`,
-      options: [
-        `Sustainable progress and confidence through consistency with real-world vocabulary.`,
-        `Memorizing entire dictionary pages without understanding their meaning.`,
-        `Stopping all practice until weekend study marathons.`,
-        `Eliminating the need to listen to audio or converse in English.`,
-      ],
-      correctAnswer: 0,
-      explanation: `Using "${w1.word}" (${w1.translationPt}) in real scenarios turns routine actions into lasting English confidence and automatic fluency.`,
-    },
-  ];
-
-  if (rawWords.length >= 3) {
-    readingQuestions.push({
-      id: 'q-3',
-      question: `How does applying "${w2.word}" (${w2.translationPt}) alongside "${w0.word}" reinforce language retention in the text?`,
-      options: [
-        `It turns conscious vocabulary recall into an automatic communication reflex.`,
-        `It forces the student to study grammar books for five continuous hours.`,
-        `It shows that vocabulary should only be reviewed once every few months.`,
-        `It creates unnecessary stress in the student's daily schedule.`,
-      ],
-      correctAnswer: 0,
-      explanation: `Connecting target words like "${w2.word}" and "${w0.word}" directly in daily contexts solidifies long-term memorization and natural reflex.`,
-    });
-  }
+  const passageTitle = synthesizedStory.title;
+  const passageText = synthesizedStory.text;
+  const readingQuestions = synthesizedStory.questions;
 
   return {
     id: `hw-${targetDay || 'week'}-${Date.now()}`,
@@ -671,6 +585,7 @@ export async function generateWeeklyHomeworkWithAi(params: {
       signal: controller.signal,
       body: JSON.stringify({
         words: cleanWordList,
+        wordDetails: localBaseline.vocabularyList,
         studentLevel: params.studentLevel || 'Intermediate',
         studentName: params.studentName || 'Student',
         studentEmail: params.studentEmail || '',

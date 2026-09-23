@@ -44,6 +44,155 @@ interface WeeklyHomeworkModalProps {
   onChangeDay?: (day: DayOfWeek) => void;
 }
 
+interface MemorizationAiLoadingSkeletonProps {
+  isEn: boolean;
+  studentLevelDisplay: string;
+  activeTab: string;
+  targetDayName?: string;
+  wordsCount?: number;
+  titleText?: string;
+  subtitleText?: string;
+}
+
+const MemorizationAiLoadingSkeleton: React.FC<MemorizationAiLoadingSkeletonProps> = ({
+  isEn,
+  studentLevelDisplay,
+  activeTab,
+  targetDayName,
+  wordsCount = 5,
+  titleText,
+  subtitleText,
+}) => {
+  const displayTitle =
+    titleText ||
+    (isEn
+      ? 'Generating your personalized activity of the day...'
+      : 'Gerando sua atividade personalizada do dia...');
+
+  const displaySubtitle =
+    subtitleText ||
+    (isEn
+      ? 'Gemini AI is crafting an authentic mini-story, smart blank challenges, and targeted comprehension questions based on your daily vocabulary...'
+      : 'Conectando seu vocabulário diário ao Gemini AI para criar uma mini-história autêntica, exercícios de lacunas inteligentes e perguntas de interpretação...');
+
+  return (
+    <div className="space-y-5 animate-fadeIn py-1">
+      {/* Centered AI Generator Hero Card */}
+      <div className="bg-gradient-to-br from-[#000035] via-[#062863] to-[#1C4C96] rounded-2xl p-6 sm:p-7 text-white text-center shadow-lg border border-[#607EC9]/40 relative overflow-hidden">
+        {/* Soft atmospheric glowing orbs */}
+        <div className="absolute -top-10 -right-10 w-44 h-44 bg-[#9AB4FF]/20 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -bottom-10 -left-10 w-44 h-44 bg-[#F4CA54]/20 rounded-full blur-2xl pointer-events-none" />
+
+        <div className="relative z-10 flex flex-col items-center max-w-lg mx-auto space-y-3.5">
+          {/* Animated Spinner with Sparkles */}
+          <div className="relative flex items-center justify-center">
+            <div className="w-14 h-14 rounded-full border-4 border-[#9AB4FF]/30 border-t-[#F4CA54] animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Sparkles className="w-6 h-6 text-[#9AB4FF] animate-pulse" />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white/10 border border-white/20 text-[10px] font-extrabold text-[#F4CA54] uppercase tracking-wider">
+              <Sparkles className="w-3 h-3 animate-spin" />
+              <span>Gemini AI Instructional Designer</span>
+            </div>
+            <h3 className="text-base sm:text-lg font-black text-white">
+              {displayTitle}
+            </h3>
+            <p className="text-xs text-[#BFDBFE] leading-relaxed max-w-md mx-auto">
+              {displaySubtitle}
+            </p>
+          </div>
+
+          {/* Shimmering Progress Bar */}
+          <div className="w-full max-w-xs h-1.5 bg-white/15 rounded-full overflow-hidden p-0.5 border border-white/20">
+            <div className="h-full bg-gradient-to-r from-[#F4CA54] via-[#9AB4FF] to-white rounded-full animate-pulse w-3/4" />
+          </div>
+
+          {/* Active session metadata tags */}
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5 text-[10px] font-bold text-[#BFDBFE]">
+            <span className="px-2.5 py-0.5 rounded-md bg-white/10 border border-white/10">
+              {wordsCount} {isEn ? 'Daily Words' : 'Palavras do Dia'}
+            </span>
+            <span className="px-2.5 py-0.5 rounded-md bg-white/10 border border-white/10">
+              {studentLevelDisplay}
+            </span>
+            {targetDayName && (
+              <span className="px-2.5 py-0.5 rounded-md bg-white/10 border border-white/10 capitalize">
+                S-Path • {targetDayName}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Elegant Skeleton Preview Cards */}
+      <div className="space-y-3.5">
+        {/* Story Reading Passage Skeleton */}
+        <div className="p-4 sm:p-5 bg-slate-50/90 rounded-2xl border border-slate-200 space-y-3 shadow-2xs">
+          <div className="flex items-center justify-between pb-2.5 border-b border-slate-200">
+            <div className="space-y-1">
+              <div className="h-4 w-48 sm:w-64 bg-slate-300 rounded-md animate-pulse" />
+              <div className="h-3 w-32 bg-slate-200 rounded animate-pulse" />
+            </div>
+            <div className="h-7 w-20 bg-slate-200 rounded-lg animate-pulse" />
+          </div>
+
+          <div className="space-y-2 py-1">
+            <div className="flex items-center gap-2">
+              <div className="h-3.5 w-full bg-slate-200 rounded animate-pulse" />
+              <div className="h-4.5 w-20 bg-blue-100 rounded-md border border-blue-200 shrink-0 animate-pulse" />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-4.5 w-24 bg-blue-100 rounded-md border border-blue-200 shrink-0 animate-pulse" />
+              <div className="h-3.5 w-11/12 bg-slate-200 rounded animate-pulse" />
+            </div>
+            <div className="h-3.5 w-4/5 bg-slate-200 rounded animate-pulse" />
+            <div className="h-3.5 w-3/4 bg-slate-200 rounded animate-pulse" />
+          </div>
+        </div>
+
+        {/* Question 1 Skeleton */}
+        <div className="p-3.5 sm:p-4 bg-white rounded-xl border border-slate-200 space-y-2.5 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded-md bg-slate-300 animate-pulse" />
+            <div className="h-3.5 w-3/4 bg-slate-200 rounded animate-pulse" />
+          </div>
+          <div className="grid grid-cols-1 gap-1.5 pl-7">
+            <div className="h-8.5 rounded-lg bg-slate-100/80 border border-slate-200/60 animate-pulse flex items-center px-3 gap-2">
+              <div className="w-4 h-4 rounded-full bg-slate-200" />
+              <div className="h-3 w-1/2 bg-slate-200 rounded" />
+            </div>
+            <div className="h-8.5 rounded-lg bg-slate-100/80 border border-slate-200/60 animate-pulse flex items-center px-3 gap-2">
+              <div className="w-4 h-4 rounded-full bg-slate-200" />
+              <div className="h-3 w-2/3 bg-slate-200 rounded" />
+            </div>
+          </div>
+        </div>
+
+        {/* Question 2 Skeleton */}
+        <div className="p-3.5 sm:p-4 bg-white rounded-xl border border-slate-200 space-y-2.5 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 rounded-md bg-slate-300 animate-pulse" />
+            <div className="h-3.5 w-2/3 bg-slate-200 rounded animate-pulse" />
+          </div>
+          <div className="grid grid-cols-1 gap-1.5 pl-7">
+            <div className="h-8.5 rounded-lg bg-slate-100/80 border border-slate-200/60 animate-pulse flex items-center px-3 gap-2">
+              <div className="w-4 h-4 rounded-full bg-slate-200" />
+              <div className="h-3 w-3/5 bg-slate-200 rounded" />
+            </div>
+            <div className="h-8.5 rounded-lg bg-slate-100/80 border border-slate-200/60 animate-pulse flex items-center px-3 gap-2">
+              <div className="w-4 h-4 rounded-full bg-slate-200" />
+              <div className="h-3 w-1/3 bg-slate-200 rounded" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   isOpen,
   onClose,
@@ -88,6 +237,20 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
       return () => clearTimeout(timer);
     }
   }, [isGeneratingAi]);
+
+  const handleRegenerateClick = async () => {
+    if (internalGenerating) return;
+    setInternalGenerating(true);
+    if (onRegenerateWithAi) {
+      try {
+        await onRegenerateWithAi();
+      } catch (err) {
+        console.error('Error generating homework with AI:', err);
+      } finally {
+        setInternalGenerating(false);
+      }
+    }
+  };
 
   const studentLevelDisplay = useMemo(() => {
     const raw = (homework?.studentLevel || 'Beginner').toLowerCase();
@@ -481,7 +644,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
             {onRegenerateWithAi && (
               <button
                 type="button"
-                onClick={onRegenerateWithAi}
+                onClick={handleRegenerateClick}
                 disabled={internalGenerating}
                 className="px-2.5 py-1.5 rounded-xl bg-[#1C4C96] text-[#BFDBFE] hover:text-white hover:bg-[#2563EB] transition flex items-center gap-1.5 text-xs font-bold cursor-pointer disabled:opacity-50"
                 title={memT.aiGenerateBtn}
@@ -543,8 +706,9 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
             {onRegenerateWithAi && (
               <button
                 type="button"
-                onClick={onRegenerateWithAi}
-                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer transition shrink-0 ml-3"
+                onClick={handleRegenerateClick}
+                disabled={internalGenerating}
+                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer transition shrink-0 ml-3 disabled:opacity-50"
               >
                 <Sparkles className="w-3 h-3" />
                 {isEn ? 'Generate with AI' : 'Gerar com IA'}
@@ -695,8 +859,20 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
             {/* Tab Contents */}
             <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-5">
-              {/* TAB 1: MATCHING */}
-              {activeTab === 'matching' && (
+              {internalGenerating ? (
+                <MemorizationAiLoadingSkeleton
+                  isEn={isEn}
+                  studentLevelDisplay={studentLevelDisplay}
+                  activeTab={activeTab}
+                  targetDayName={targetDay}
+                  wordsCount={homework.totalWordsCollected || homework.vocabularyList?.length || 5}
+                  titleText={memT.generatingDailyActivity}
+                  subtitleText={memT.generatingDailyActivitySubtitle}
+                />
+              ) : (
+                <>
+                  {/* TAB 1: MATCHING */}
+                  {activeTab === 'matching' && (
                 <div className="space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
                     <div>
@@ -1630,7 +1806,9 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                   </div>
                 </div>
               )}
-            </div>
+            </>
+          )}
+        </div>
           </>
         )}
       </div>

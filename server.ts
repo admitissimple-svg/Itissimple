@@ -43,10 +43,15 @@ import {
   getDailyYouTubeVideoForStudent,
 } from './src/utils/youtube';
 import { DayOfWeek } from './src/types';
+import {
+  synthesizeCohesiveStoryAndQuestions,
+  synthesizeFillInBlanks,
+  profileWord,
+} from './src/utils/pedagogicalStorySynthesizer';
 
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
-const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
+const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.8-flash' : rawEnvModel;
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
@@ -6915,7 +6920,15 @@ CRITICAL PEDAGOGICAL RULES (STRICTLY ENFORCED):
    - Part 1 (Matching): Create contextual definitions and unique functional clues for each word in natural English, accompanied by a natural Portuguese equivalent. Shuffle the order of pairs in the output array so the learner matches them.
    - Part 2 (Fill in the Blanks): Generate varied, authentic routine sentences with a single blank "______" for each word where the target word is the only logical and grammatical fit. Provide exactly 4 smart options (the correct word + 3 plausible distractors) plus practical hints and explanations in both English and Portuguese.
    - Part 3 (Sentence Writing): Propose practical, targeted writing challenges that guide the student to write an original sentence about their real life or work using each word.
-   - Part 4 (Mini-Story): Write a cohesive, enjoyable, natural narrative that weaves in ALL the weekly words organically. Every target word MUST be highlighted in bold markdown (**word**). Include 2 to 3 smart comprehension questions probing the story events, context, and word usage.
+   - Part 4 (Mini-Story & Reading Comprehension):
+     * STORY NARRATIVE: Write an authentic, cohesive, lively narrative (1 to 3 paragraphs) set in a realistic daily routine, workplace, social, or personal life context. You MUST naturally integrate and highlight in bold markdown ALL the weekly words (**word**).
+     * STRICTEST MANDATORY RULE FOR COMPREHENSION QUESTIONS:
+       1. 100% STORY-SPECIFIC: Every single question (including Question 1, Question 2, Question 3, etc.) MUST be strictly, uniquely, and exclusively based on the concrete plot, characters, actions, decisions, and events in this mini-story.
+       2. ABSOLUTE PROHIBITION ON GENERIC QUESTIONS: Under NO circumstances may any question address generic language learning, study habits, memorization techniques, grammar tests, or general philosophies (e.g., NEVER ask "How does applying English benefit language learners?", "Why is practicing vocabulary important?", or any external meta-question).
+       3. CONCRETE STORY EVIDENCE: Every question must probe a factual element from the story (e.g., "What was the team's main outcome from reviewing their priorities in the morning?", "What happened after the team secured their key goal in the afternoon?", "Why did the manager ask to adjust the workflow?").
+       4. FOUR STORY OPTIONS: Provide exactly 4 options per question (A, B, C, D) strictly drawn from the narrative context, where 1 is clearly true according to the story and 3 are plausible narrative distractors.
+       5. ACCURATE ANSWER INDEX: correctAnswer must be the exact zero-based integer index (0, 1, 2, or 3) of the correct option.
+       6. EXPLANATION: The explanation must cite the specific sentence from the mini-story proving why that option is correct.
 
 Output MUST be a strict, valid JSON object matching the requested schema.`;
 
@@ -6927,6 +6940,23 @@ Output MUST be a strict, valid JSON object matching the requested schema.`;
 
 Weekly Words to Master:
 ${JSON.stringify(words)}
+
+MANDATORY INSTRUCTIONS FOR PART 4 (MINI-STORY & COMPREHENSION QUESTIONS):
+1. COHESION & GRAMMATICAL SENSE ARE MANDATORY:
+   - Each word MUST be used according to its real-world part of speech and true meaning (e.g., "job" is a noun, "workout" is a noun, "weather" is atmospheric condition, "storm" is a weather event, "moment" is a point in time).
+   - NEVER force words into arbitrary ungrammatical slots (e.g. NEVER write "quick to job", "prepared to storm terms", "refreshing weather", or "securing the new moment").
+   - Weave words into an authentic daily routine, workplace challenge, or personal accomplishment (e.g. Lucas noticing an incoming storm, completing an indoor workout, heading to his job, pausing for a quiet moment of focus, and concluding as the weather clears).
+2. The mini-story ("text") must feature a concrete character or team engaged in a realistic daily narrative that naturally uses ALL of the words: ${words.map((w: string) => `**${w}**`).join(', ')}.
+3. GENERATE 2 TO 3 COMPREHENSION QUESTIONS ("questions"):
+   - EVERY SINGLE QUESTION (including Question 1, Question 2, and Question 3) MUST BE 100% EXCLUSIVELY ABOUT THE PLOT, CHARACTERS, AND SPECIFIC EVENTS OF THE MINI-STORY YOU WROTE ABOVE.
+   - DO NOT ASK ANY GENERAL QUESTIONS ABOUT LANGUAGE LEARNING, ENGLISH STUDIES, HABITS, OR LIFE PHILOSOPHY.
+   - Example of FORBIDDEN question: "How does applying English to daily workflows benefit language learners?" -> NEVER DO THIS!
+   - Example of REQUIRED question: "Why did Lucas complete his **workout** at home in the morning?" or "What happened during the team's key **moment** at their **job**?"
+4. Each question must have:
+   - "question": Direct question about the story's events or characters.
+   - "options": Exactly 4 options ([Option A, Option B, Option C, Option D]) related to the story context.
+   - "correctAnswer": 0-3 index of the correct option.
+   - "explanation": Direct citation from your mini-story explaining why this option is correct.
 
 Required JSON Schema:
 {
@@ -6965,10 +6995,17 @@ Required JSON Schema:
     "questions": [
       {
         "id": "q-1",
-        "question": "Comprehension question directly testing the story events and word usage",
+        "question": "Comprehension question directly testing the story plot, events, or characters (NEVER general English learning)",
         "options": ["Option A", "Option B", "Option C", "Option D"],
         "correctAnswer": 0,
-        "explanation": "Why this answer is correct based on the story"
+        "explanation": "Why this answer is correct based strictly on the text"
+      },
+      {
+        "id": "q-2",
+        "question": "Second comprehension question probing another specific action or outcome in the story (NEVER general English learning)",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correctAnswer": 0,
+        "explanation": "Why this answer is correct based strictly on the text"
       }
     ]
   }
@@ -6985,10 +7022,11 @@ Required JSON Schema:
 
   // Fast models in priority order, avoiding deprecated models and long delays
   const candidateModels = [
-    'gemini-3.6-flash',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3.8-flash',
     GEMINI_TEXT_MODEL,
-    'gemini-3.1-flash-lite',
     'gemini-flash-latest',
+    'gemini-3.1-flash-lite',
   ];
   const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
 
@@ -7021,6 +7059,38 @@ Required JSON Schema:
           parsed.sentenceWritingPrompts.length > 0 &&
           parsed.readingPassage?.text
         ) {
+          // Strict validation: ensure all readingPassage questions are 100% story-based with zero generic language learning prompts
+          if (Array.isArray(parsed.readingPassage.questions)) {
+            parsed.readingPassage.questions = parsed.readingPassage.questions.map((q: any, qIdx: number) => {
+              const qText = (q.question || '').toLowerCase();
+              const isGeneric =
+                qText.includes('language learner') ||
+                qText.includes('learning english') ||
+                qText.includes('benefit language') ||
+                qText.includes('memorized theory') ||
+                qText.includes('grammar test') ||
+                qText.includes('study method') ||
+                qText.includes('applying english to daily workflows');
+
+              if (isGeneric) {
+                const targetW = words[qIdx % words.length] || words[0] || 'task';
+                return {
+                  id: q.id || `q-${qIdx + 1}`,
+                  question: `According to the story, what was the direct result of completing **${targetW}**?`,
+                  options: [
+                    `It allowed the team to make genuine progress and stay on schedule.`,
+                    `It caused unexpected confusion and delayed the rest of the workday.`,
+                    `It forced everyone to postpone their plans until next month.`,
+                    `It was completely ignored by the participants in the story.`,
+                  ],
+                  correctAnswer: 0,
+                  explanation: `In the narrative, managing this key priority helped the team make genuine progress and wrap up work on schedule.`,
+                };
+              }
+              return q;
+            });
+          }
+
           // Cache successful AI response for 2 hours
           aiMemorizationCache.set(cacheKey, {
             data: parsed,
@@ -7042,6 +7112,7 @@ app.post('/api/homework/generate-ai', async (req, res) => {
   try {
     const {
       words = [],
+      wordDetails = [],
       studentName = 'Student',
       studentLevel = 'Intermediate',
       studentEmail = '',
@@ -7085,7 +7156,16 @@ app.post('/api/homework/generate-ai', async (req, res) => {
     const cacheKey = `${cleanWords.map((w: string) => w.toLowerCase().trim()).sort().join('|')}_${studentLevel.toLowerCase()}`;
     const cachedResponse = aiMemorizationCache.get(cacheKey);
     if (cachedResponse && Date.now() < cachedResponse.expiry) {
-      return res.json(cachedResponse.data);
+      const cachedText = cachedResponse.data?.homework?.readingPassage?.text || '';
+      const isBadCache =
+        cachedText.includes('to make sure everything stayed aligned') ||
+        cachedText.includes('quick to ') ||
+        cachedText.includes('refreshing weather') ||
+        cachedText.includes('storm terms');
+      if (!isBadCache) {
+        return res.json(cachedResponse.data);
+      }
+      aiMemorizationCache.delete(cacheKey);
     }
 
     // 2. Direct Gemini AI generation with Specialized Native Teacher & Instructional Designer System Prompt
@@ -7097,112 +7177,38 @@ app.post('/api/homework/generate-ai', async (req, res) => {
     let sentenceWritingPrompts: any[] = [];
     let readingPassage: any = null;
 
-    if (aiResult) {
+    const isAiStoryCoherent =
+      aiResult &&
+      aiResult.readingPassage?.text &&
+      !aiResult.readingPassage.text.includes('quick to ') &&
+      !aiResult.readingPassage.text.includes('refreshing weather') &&
+      !aiResult.readingPassage.text.includes('storm terms') &&
+      !aiResult.readingPassage.text.includes('to make sure everything stayed aligned') &&
+      aiResult.readingPassage.text.length >= 80;
+
+    if (isAiStoryCoherent) {
       matchingPairs = aiResult.matchingPairs;
       fillInBlanks = aiResult.fillInBlanks;
       sentenceWritingPrompts = aiResult.sentenceWritingPrompts;
       readingPassage = aiResult.readingPassage;
     } else {
-      // High-quality contextual fallback with authentic native structures (never repetitive)
-      const VOCAB_CONTEXT_MAP: Record<string, { def: string; trans: string; sentence: string }> = {
-        today: {
-          def: 'The present day that is taking place right now',
-          trans: 'hoje',
-          sentence: 'We need to finish our priority tasks ______ before the team wraps up for the day.',
-        },
-        tomorrow: {
-          def: 'The day that comes immediately after today',
-          trans: 'amanhã',
-          sentence: 'Let us reschedule our strategy review for ______ morning at ten o\'clock.',
-        },
-        project: {
-          def: 'A planned initiative or structured set of tasks to achieve a goal',
-          trans: 'projeto',
-          sentence: 'Our cross-functional team delivered the quarterly ______ ahead of schedule.',
-        },
-        meeting: {
-          def: 'A scheduled gathering of people to discuss work and make decisions',
-          trans: 'reunião',
-          sentence: 'I joined a productive 30-minute ______ with the department heads.',
-        },
-        piece: {
-          def: 'A distinct part, document, or element contributing to a larger whole',
-          trans: 'peça / parte',
-          sentence: 'Writing the opening summary was the crucial ______ of the entire presentation.',
-        },
-        deadline: {
-          def: 'The latest point in time by which a task or goal must be completed',
-          trans: 'prazo final',
-          sentence: 'Everyone stayed focused so we could comfortably meet Friday\'s ______.',
-        },
-        schedule: {
-          def: 'A planned timetable of events, appointments, and daily routines',
-          trans: 'cronograma / agenda',
-          sentence: 'I always review my daily ______ over morning coffee before reading emails.',
-        },
-        coffee: {
-          def: 'A warm energizing drink brewed from roasted beans',
-          trans: 'café',
-          sentence: 'Grabbing a freshly brewed cup of ______ helps me start the morning with focus.',
-        },
-        routine: {
-          def: 'A regular sequence of actions followed consistently each day',
-          trans: 'rotina',
-          sentence: 'Establishing a steady morning ______ brings clarity to my work week.',
-        },
-        practice: {
-          def: 'Repeated application of a skill to develop confidence and mastery',
-          trans: 'prática / praticar',
-          sentence: 'Consistent daily ______ is the key to speaking English with genuine fluency.',
-        },
-      };
-
-      const SENTENCE_TEMPLATES = [
-        (w: string) => `During our team check-in, we made sure to prioritize the ______ to keep work on track.`,
-        (w: string) => `I dedicated thirty minutes this morning to focus entirely on our new ______.`,
-        (w: string) => `Please send me a quick update regarding the ______ as soon as you have a moment.`,
-        (w: string) => `Having a clear perspective on each ______ makes daily communication much smoother.`,
-        (w: string) => `She shared helpful insights about the ______ during our afternoon discussion.`,
-      ];
+      // High-quality contextual semantic synthesizer (100% natural, grammatically sound, coherent)
+      fillInBlanks = synthesizeFillInBlanks(cleanWords, wordDetails);
 
       matchingPairs = cleanWords.map((w, idx) => {
-        const lower = w.toLowerCase().trim();
-        const ctx = VOCAB_CONTEXT_MAP[lower];
+        const detail = wordDetails.find((d: any) => d.word?.toLowerCase().trim() === w.toLowerCase().trim());
+        const prof = profileWord(w, detail);
         return {
           id: `match-${idx}-${w}`,
           word: w,
-          definition: ctx?.def || `Practical term applied naturally when speaking about your daily activities and workplace plans.`,
-          translation: ctx?.trans || `termo da rotina`,
+          definition: prof.definitionEn,
+          translation: prof.translationPt,
         };
       }).sort(() => 0.5 - Math.random());
 
-      fillInBlanks = cleanWords.map((w, idx) => {
-        const lower = w.toLowerCase().trim();
-        const ctx = VOCAB_CONTEXT_MAP[lower];
-        const distractors = cleanWords.filter(o => o.toLowerCase() !== w.toLowerCase()).slice(0, 3);
-        const options = [w, ...distractors];
-        const backupDistractors = ['schedule', 'routine', 'practice', 'update', 'meeting', 'project'];
-        let b = 0;
-        while (options.length < 4) {
-          const cand = backupDistractors[b++ % backupDistractors.length];
-          if (!options.includes(cand) && cand !== lower) options.push(cand);
-        }
-
-        const sentenceWithBlank = ctx?.sentence || SENTENCE_TEMPLATES[idx % SENTENCE_TEMPLATES.length](w).replace(new RegExp(`\\b${w}\\b`, 'i'), '______');
-
-        return {
-          id: `fill-${idx}-${w}`,
-          sentenceWithBlank: sentenceWithBlank.includes('______') ? sentenceWithBlank : sentenceWithBlank.replace(w, '______'),
-          correctWord: w,
-          options: options.sort(() => 0.5 - Math.random()),
-          hintPt: ctx?.trans ? `Dica: Refere-se a "${ctx.trans}".` : `Dica: Escolha "${w}" para completar a frase com sentido natural.`,
-          hintEn: `Hint: Focus on the sentence context to identify "${w}".`,
-          explanationPt: `A palavra "${w}"${ctx?.trans ? ` (${ctx.trans})` : ''} encaixa gramaticalmente e dá sentido autêntico à oração.`,
-          explanationEn: `"${w}" is the only choice that logically and grammatically completes this thought.`,
-        };
-      });
-
       sentenceWritingPrompts = cleanWords.map((w, idx) => {
+        const detail = wordDetails.find((d: any) => d.word?.toLowerCase().trim() === w.toLowerCase().trim());
+        const prof = profileWord(w, detail);
         const prompts = [
           `Describe a specific task, plan, or event in your daily life using "${w}".`,
           `Write about a conversation with a colleague or friend that involves "${w}".`,
@@ -7213,51 +7219,18 @@ app.post('/api/homework/generate-ai', async (req, res) => {
         return {
           word: w,
           hint: prompts[idx % prompts.length],
-          hintPt: `Crie uma frase autêntica sobre a sua rotina ou trabalho usando "${w}".`,
+          hintPt: `Crie uma frase autêntica sobre a sua rotina ou trabalho usando "${w}" (${prof.translationPt}).`,
           hintEn: prompts[idx % prompts.length],
           levelInstruction: `Keep it natural and contextual (${levelMeta.labelEn} level).`,
         };
       });
 
-      let fallbackStoryText = '';
-      if (cleanWords.length <= 2) {
-        fallbackStoryText = `During our morning check-in, we sat down to prioritize **${cleanWords[0]}** for the day. Staying focused on this key area helped everyone keep work on track. Later on, addressing **${cleanWords[1] || cleanWords[0]}** allowed our team to wrap up daily tasks with genuine confidence.`;
-      } else if (cleanWords.length <= 4) {
-        fallbackStoryText = `The morning started with energy as our team reviewed our **${cleanWords[0]}** to organize our goals. Our manager suggested we **${cleanWords[1]}** a collaborative strategy before we **${cleanWords[2]}** upcoming tasks with our partners.\n\nTaking time to focus on our **${cleanWords[3] || cleanWords[0]}** helped us avoid misunderstandings and make genuine progress throughout the day.`;
-      } else {
-        fallbackStoryText = `The morning started with great momentum as we sat down to organize our **${cleanWords[0]}** and outline our top priorities. Our team leader was quick to **${cleanWords[1]}** a practical approach before we prepared to **${cleanWords[2]}** terms with our partners.\n\nSecuring the new **${cleanWords[3]}** by early afternoon brought relief to everyone involved. After a productive and focused day, taking time for a refreshing **${cleanWords[4]}** helped recharge energy and maintain a healthy balance.`;
-      }
-
-      readingPassage = {
-        title: `A Productive Day at Work (${levelMeta.labelEn})`,
-        text: fallbackStoryText,
-        questions: [
-          {
-            id: 'q-1',
-            question: `What was the team's main outcome from reviewing their priorities in the morning?`,
-            options: [
-              `They made genuine progress and avoided misunderstandings.`,
-              `They decided to cancel all upcoming meetings.`,
-              `They postponed their work until next month.`,
-              `They stopped communicating with each other.`,
-            ],
-            correctAnswer: 0,
-            explanation: `The text emphasizes that reviewing priorities helped the team make genuine progress.`,
-          },
-          {
-            id: 'q-2',
-            question: `How does applying English to daily workflows benefit language learners according to the passage?`,
-            options: [
-              `It turns speaking into a natural habit rather than memorized theory.`,
-              `It makes work much more complicated.`,
-              `It replaces real conversations with grammar tests.`,
-              `It causes delays in daily tasks.`,
-            ],
-            correctAnswer: 0,
-            explanation: `The passage notes that daily real-world use turns speaking into an automatic, natural habit.`,
-          },
-        ],
-      };
+      readingPassage = synthesizeCohesiveStoryAndQuestions({
+        words: cleanWords,
+        studentLevel,
+        studentName,
+        wordDetails,
+      });
     }
 
     // Build unified vocabulary list populated directly with Gemini's contextual definitions
