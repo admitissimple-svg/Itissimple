@@ -18,6 +18,8 @@ import {
   NativeFriendTutor,
   StudentDictionaryEntry,
   LiveLessonVocabNote,
+  DailyJournalEntry,
+  WritingEvaluationResult,
 } from './types';
 import { defaultRoutinesByDay } from './data/defaultRoutines';
 import { INITIAL_NATIVE_FRIENDS } from './data/tutors';
@@ -75,6 +77,17 @@ import { AdminApprovalsModal } from './components/AdminApprovalsModal';
 import { EditTutorProfileModal } from './components/EditTutorProfileModal';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { PersonalDictionaryModal } from './components/PersonalDictionaryModal';
+import { StudentJournalModal } from './components/StudentJournalModal';
+import {
+  saveStudentVocabularyToFirestore,
+  fetchStudentVocabularyFromFirestore,
+  saveStudentJournalEntryToFirestore,
+  fetchStudentJournalFromFirestore,
+  saveLiveLessonToFirestore,
+  updateLiveLessonInFirestore,
+  deleteLiveLessonFromFirestore,
+  fetchStudentLessonsFromFirestore,
+} from './utils/studentPersistence';
 import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
 import { OnboardingWizardModal, OnboardingResultData } from './components/OnboardingWizardModal';
@@ -264,6 +277,8 @@ export default function App() {
   const [isStudentProfileOpen, setIsStudentProfileOpen] = useState<boolean>(false);
   const [isPersonalDictionaryOpen, setIsPersonalDictionaryOpen] = useState<boolean>(false);
   const [studentDictionaryEntries, setStudentDictionaryEntries] = useState<StudentDictionaryEntry[]>([]);
+  const [dailyJournalEntries, setDailyJournalEntries] = useState<DailyJournalEntry[]>([]);
+  const [isJournalModalOpen, setIsJournalModalOpen] = useState<boolean>(false);
   const [isManageSubscriptionOpen, setIsManageSubscriptionOpen] = useState<boolean>(false);
   const [subscriptionTargetTutor, setSubscriptionTargetTutor] = useState<NativeFriendTutor | null>(null);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
@@ -500,11 +515,29 @@ export default function App() {
     const uid = currentAccount.uid || '';
     const queryParams = `email=${encodeURIComponent(email)}&role=${encodeURIComponent(role)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`;
 
-    // 1. Fetch user-isolated lessons
+    // 1. Fetch user-isolated lessons directly from Firestore + API
+    fetchStudentLessonsFromFirestore(uid, email).then((fsLessons) => {
+      if (Array.isArray(fsLessons) && fsLessons.length > 0) {
+        setLessons((prev) => {
+          const map = new Map<string, LiveLesson>();
+          fsLessons.forEach((l) => map.set(l.id, l));
+          prev.forEach((l) => map.set(l.id, l));
+          return Array.from(map.values());
+        });
+      }
+    });
+
     fetch(`/api/lessons?${queryParams}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
-        if (Array.isArray(data)) setLessons(data);
+        if (Array.isArray(data)) {
+          setLessons((prev) => {
+            const map = new Map<string, LiveLesson>();
+            prev.forEach((l) => map.set(l.id, l));
+            data.forEach((l: LiveLesson) => map.set(l.id, l));
+            return Array.from(map.values());
+          });
+        }
       })
       .catch((err) => console.warn('Could not fetch isolated lessons:', err));
 
@@ -612,15 +645,54 @@ export default function App() {
       loadTeacherProfile();
     }
 
-    // Fetch user-isolated student dictionary entries
+    // Fetch user-isolated student dictionary entries and journal entries directly from Firestore
     const dictEmail = (role === 'student' ? email : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
     if (dictEmail || (role === 'student' && uid)) {
+      // 1. Direct Firestore fetch for vocabulary
+      fetchStudentVocabularyFromFirestore(uid, dictEmail).then((fsEntries) => {
+        if (Array.isArray(fsEntries) && fsEntries.length > 0) {
+          setStudentDictionaryEntries(fsEntries);
+        }
+      });
+
+      // 2. Mirror from backend
       fetch(`/api/student-dictionary?studentEmail=${encodeURIComponent(dictEmail)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
         .then((r) => (r.ok ? r.json() : []))
         .then((data) => {
-          if (Array.isArray(data)) setStudentDictionaryEntries(data);
+          if (Array.isArray(data) && data.length > 0) {
+            setStudentDictionaryEntries((prev) => {
+              const map = new Map<string, StudentDictionaryEntry>();
+              prev.forEach((e) => map.set(e.word.toLowerCase(), e));
+              data.forEach((e: StudentDictionaryEntry) => map.set(e.word.toLowerCase(), e));
+              return Array.from(map.values());
+            });
+          }
         })
         .catch((err) => console.warn('Could not fetch student dictionary:', err));
+
+      // 3. Direct Firestore fetch for student journal
+      fetchStudentJournalFromFirestore(uid, dictEmail).then((fsJournal) => {
+        if (Array.isArray(fsJournal) && fsJournal.length > 0) {
+          setDailyJournalEntries(fsJournal);
+        }
+      });
+
+      // 4. Backend journal mirror
+      fetch(`/api/student-journal?studentEmail=${encodeURIComponent(dictEmail)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setDailyJournalEntries((prev) => {
+              const map = new Map<string, DailyJournalEntry>();
+              prev.forEach((e) => map.set(e.id, e));
+              data.forEach((e: DailyJournalEntry) => map.set(e.id, e));
+              const list = Array.from(map.values());
+              list.sort((a, b) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+              return list;
+            });
+          }
+        })
+        .catch(() => {});
     }
   }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter, userProfile?.email]);
 
@@ -630,10 +702,23 @@ export default function App() {
     const dictEmail = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
     const uid = currentAccount?.uid || '';
     if (dictEmail || uid) {
+      fetchStudentVocabularyFromFirestore(uid, dictEmail).then((fsEntries) => {
+        if (Array.isArray(fsEntries) && fsEntries.length > 0) {
+          setStudentDictionaryEntries(fsEntries);
+        }
+      });
+
       fetch(`/api/student-dictionary?studentEmail=${encodeURIComponent(dictEmail)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
         .then((r) => (r.ok ? r.json() : []))
         .then((data) => {
-          if (Array.isArray(data)) setStudentDictionaryEntries(data);
+          if (Array.isArray(data) && data.length > 0) {
+            setStudentDictionaryEntries((prev) => {
+              const map = new Map<string, StudentDictionaryEntry>();
+              prev.forEach((e) => map.set(e.word.toLowerCase(), e));
+              data.forEach((e: StudentDictionaryEntry) => map.set(e.word.toLowerCase(), e));
+              return Array.from(map.values());
+            });
+          }
         })
         .catch((err) => console.warn('Could not refresh student dictionary:', err));
     }
@@ -1552,6 +1637,9 @@ export default function App() {
 
     setLessons((prev) => [newLesson, ...prev]);
 
+    // Direct Firestore persistence
+    saveLiveLessonToFirestore(newLesson);
+
     // Update students state so student appears immediately in teacher's filter and list
     setStudents((prev) => {
       const cleanEmail = finalStudentEmail;
@@ -1652,6 +1740,9 @@ export default function App() {
       prev.map((l) => (l.id === lessonId ? { ...l, status: 'completed' } : l))
     );
 
+    // Persist status change in Firestore
+    updateLiveLessonInFirestore(lessonId, { status: 'completed' }, currentAccount?.uid);
+
     try {
       await fetch(`/api/lessons/${lessonId}/complete`, { method: 'POST' });
     } catch {
@@ -1694,6 +1785,15 @@ export default function App() {
           : l
       );
     });
+
+    // Persist cancellation in Firestore
+    updateLiveLessonInFirestore(lessonId, {
+      status: 'cancelled',
+      cancelledAt: new Date().toISOString(),
+      cancelledBy: finalCancelledBy,
+      cancellationReason: finalReason,
+    }, currentAccount?.uid);
+
     try {
       await fetch(`/api/lessons/${lessonId}/cancel`, {
         method: 'POST',
@@ -1744,6 +1844,13 @@ export default function App() {
           : l
       )
     );
+
+    // Persist not completed in Firestore
+    updateLiveLessonInFirestore(lessonId, {
+      status: 'not_completed',
+      notCompletedResponsible: responsible,
+      notCompletedReason: reason,
+    }, currentAccount?.uid);
 
     try {
       await fetch(`/api/lessons/${lessonId}/not-completed`, {
@@ -1982,6 +2089,9 @@ export default function App() {
     }
 
     if (targetEmail || targetUid) {
+      // Direct Firestore persistence
+      saveStudentVocabularyToFirestore(targetUid, entries, targetEmail);
+
       try {
         await fetch('/api/student-dictionary', {
           method: 'POST',
@@ -2002,10 +2112,20 @@ export default function App() {
 
   // Handler: Save manual entry in Personal Dictionary
   const handleSaveCustomDictionaryEntry = async (entry: StudentDictionaryEntry) => {
+    let updatedList: StudentDictionaryEntry[] = [];
     setStudentDictionaryEntries((prev) => {
       const existing = prev.filter((e) => e.word.toLowerCase() !== entry.word.toLowerCase());
-      return [...existing, entry].sort((a, b) => a.word.localeCompare(b.word));
+      updatedList = [...existing, entry].sort((a, b) => a.word.localeCompare(b.word));
+      return updatedList;
     });
+
+    const targetUid = currentAccount?.uid || userProfile?.id || '';
+    const targetEmail = currentAccount?.email || userProfile?.email || '';
+
+    // Direct Firestore persistence
+    if (targetUid || targetEmail) {
+      saveStudentVocabularyToFirestore(targetUid, [entry], targetEmail);
+    }
 
     if (currentAccount?.email) {
       try {
@@ -2563,12 +2683,46 @@ export default function App() {
     return list;
   }, [routinesByDay, lessons]);
 
-  // Handler: Save Daily Sentence
-  const handleSaveDailySentence = (sentence: string, wordsUsed: string[]) => {
+  // Handler: Save Daily Sentence and persist in Firestore Journal
+  const handleSaveDailySentence = async (
+    sentence: string,
+    wordsUsed: string[],
+    evaluationResult?: WritingEvaluationResult | null
+  ) => {
+    const studentUid = currentAccount?.uid || userProfile?.id || '';
+    const studentEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
+
+    const newJournalEntry: DailyJournalEntry = {
+      id: `journal_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      date: new Date().toISOString().split('T')[0],
+      sentence,
+      wordsUsed,
+      correctedSentence: evaluationResult?.correctedSentence,
+      explanation: evaluationResult?.explanation,
+      hasErrors: evaluationResult?.hasAnyError,
+      createdAt: new Date().toISOString(),
+      studentUid,
+      studentEmail,
+    };
+
+    setDailyJournalEntries((prev) => [newJournalEntry, ...prev.filter((e) => e.id !== newJournalEntry.id)]);
+
+    setUserProfile((prev) => ({
+      ...prev,
+      dailyJournalEntries: [
+        newJournalEntry,
+        ...(prev.dailyJournalEntries || []).filter((e) => e.id !== newJournalEntry.id),
+      ],
+    }));
+
+    if (studentUid || studentEmail) {
+      saveStudentJournalEntryToFirestore(studentUid, newJournalEntry, studentEmail);
+    }
+
     setNotifications((prev) => [
       {
         id: `notif-${Date.now()}`,
-        title: currentLanguage === 'en' ? 'Sentence of the Day Recorded!' : 'Frase do Dia Registrada!',
+        title: currentLanguage === 'en' ? 'Sentence Saved to Journal!' : 'Frase Salva no Diário!',
         message: sentence,
         type: 'success',
         timestamp: new Date().toISOString(),
@@ -2576,6 +2730,14 @@ export default function App() {
       },
       ...prev,
     ]);
+  };
+
+  const handleDeleteJournalEntry = async (entryId: string) => {
+    setDailyJournalEntries((prev) => prev.filter((e) => e.id !== entryId));
+    setUserProfile((prev) => ({
+      ...prev,
+      dailyJournalEntries: (prev.dailyJournalEntries || []).filter((e) => e.id !== entryId),
+    }));
   };
 
   // Comprehensive Teachers list for scheduling dropdowns, matching, and controls
@@ -3388,6 +3550,7 @@ export default function App() {
                   onUpdateTimeActivity={handleUpdateActivityTime}
                   userProfile={userProfile}
                   onSaveDailySentence={handleSaveDailySentence}
+                  onOpenJournalModal={() => setIsJournalModalOpen(true)}
                   onOpenEmailModal={() => setIsEmailModalOpen(true)}
                   onTest30MinReminder={() => {
                     setNotifications((prev) => [
@@ -3420,6 +3583,8 @@ export default function App() {
                   userProfile={userProfile}
                   onOpenHomeworkModal={handleOpenHomeworkModal}
                   onOpenDictionaryModal={() => setIsPersonalDictionaryOpen(true)}
+                  onOpenJournalModal={() => setIsJournalModalOpen(true)}
+                  journalEntriesCount={dailyJournalEntries.length}
                   currentLanguage={currentLanguage}
                   dictionaryEntries={studentDictionaryEntries}
                   wordsFromRoutines={wordsFromRoutines}
@@ -3807,6 +3972,7 @@ export default function App() {
         userProfile={userProfile}
         currentLanguage={currentLanguage}
         onSaveDailySentence={handleSaveDailySentence}
+        onOpenJournalModal={() => setIsJournalModalOpen(true)}
       />
 
       {/* Admin Landing Content Editor Modal */}
@@ -3859,7 +4025,18 @@ export default function App() {
         wordsFromRoutines={wordsFromRoutines}
         customSavedEntries={studentDictionaryEntries}
         onSaveCustomEntry={handleSaveCustomDictionaryEntry}
+        onOpenJournalModal={() => setIsJournalModalOpen(true)}
         currentLanguage={currentLanguage}
+      />
+
+      {/* Student Journal Modal (Saved & AI Corrected Sentences) */}
+      <StudentJournalModal
+        isOpen={isJournalModalOpen}
+        onClose={() => setIsJournalModalOpen(false)}
+        entries={dailyJournalEntries}
+        currentLanguage={currentLanguage}
+        onDeleteEntry={handleDeleteJournalEntry}
+        onOpenDailySentenceSection={() => setIsDailySentenceModalOpen(true)}
       />
     </div>
   );

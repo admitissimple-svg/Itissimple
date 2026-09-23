@@ -9,6 +9,7 @@ import {
   Wand2,
   AlertTriangle,
   CheckCircle2,
+  BookOpen,
 } from 'lucide-react';
 import { RoutineItem, UserProfile, WritingEvaluationResult, Language } from '../types';
 import { checkStudentWritingApi } from '../utils/writingChecker';
@@ -20,7 +21,8 @@ interface DailySentenceModalProps {
   todayRoutines: RoutineItem[];
   userProfile: UserProfile;
   currentLanguage: Language;
-  onSaveDailySentence: (sentence: string, wordsUsed: string[]) => void;
+  onSaveDailySentence: (sentence: string, wordsUsed: string[], evaluationResult?: WritingEvaluationResult | null) => void;
+  onOpenJournalModal?: () => void;
 }
 
 export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
@@ -30,6 +32,7 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
   userProfile,
   currentLanguage,
   onSaveDailySentence,
+  onOpenJournalModal,
 }) => {
   const isEn = currentLanguage === 'en';
   const [sentenceInput, setSentenceInput] = useState<string>('');
@@ -75,7 +78,7 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
     e.preventDefault();
     if (!sentenceInput.trim() || sentenceInput.trim().length < 5) return;
 
-    onSaveDailySentence(sentenceInput.trim(), matchedWords);
+    onSaveDailySentence(sentenceInput.trim(), matchedWords, evaluation);
     setSaveSuccess(true);
     setTimeout(() => {
       setSaveSuccess(false);
@@ -104,13 +107,30 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-[#1C4C96] transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {onOpenJournalModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenJournalModal();
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-[#F4CA54] text-xs font-bold border border-[#9AB4FF]/30 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title={isEn ? 'View Journal' : 'Ver Diário'}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{isEn ? 'Journal' : 'Diário'}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-xl text-[#9AB4FF] hover:text-white hover:bg-[#1C4C96] transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Form */}

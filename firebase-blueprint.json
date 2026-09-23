@@ -213,6 +213,42 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["studentUid", "weekId"]
+    },
+    "StudentDictionaryEntry": {
+      "title": "StudentDictionaryEntry",
+      "description": "Student vocabulary word entry in personal dictionary",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Entry ID" },
+        "word": { "type": "string", "description": "The English word" },
+        "phonetic": { "type": "string", "description": "Phonetic pronunciation" },
+        "translation": { "type": "string", "description": "Portuguese translation" },
+        "source": { "type": "string", "description": "Source of the word (video, audio, live lesson)" },
+        "sourceContext": { "type": "string", "description": "Context sentence where word was heard" },
+        "exampleSentence": { "type": "string", "description": "Example usage sentence" },
+        "addedAt": { "type": "string", "format": "date-time", "description": "When word was saved" },
+        "studentEmail": { "type": "string", "format": "email" },
+        "studentUid": { "type": "string" }
+      },
+      "required": ["word"]
+    },
+    "StudentJournalEntry": {
+      "title": "StudentJournalEntry",
+      "description": "Student saved sentence and AI pedagogical feedback/corrections in daily journal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Journal entry ID" },
+        "date": { "type": "string", "description": "Date of entry (YYYY-MM-DD)" },
+        "sentence": { "type": "string", "description": "Student original written sentence" },
+        "wordsUsed": { "type": "array", "description": "Words from routine included in sentence" },
+        "correctedSentence": { "type": "string", "description": "Pedagogical AI corrected sentence" },
+        "explanation": { "type": "string", "description": "Grammatical explanation or suggestion" },
+        "hasErrors": { "type": "boolean", "description": "Whether grammatical errors were found" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "studentUid": { "type": "string" },
+        "studentEmail": { "type": "string", "format": "email" }
+      },
+      "required": ["sentence", "date"]
     }
   },
   "firestore": {
@@ -227,6 +263,18 @@
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profiles partitioned by user UID"
+    },
+    "/users/{userId}/vocabulary/{wordId}": {
+      "schema": "StudentDictionaryEntry",
+      "description": "Personal dictionary words saved by student or teacher"
+    },
+    "/users/{userId}/journal/{entryId}": {
+      "schema": "StudentJournalEntry",
+      "description": "Daily journal entries and AI corrected sentences saved by student"
+    },
+    "/users/{userId}/lessons/{lessonId}": {
+      "schema": "LiveLesson",
+      "description": "Live and trial lessons scheduled for the student"
     },
     "/users/{userId}/weeklyHistory/{weekId}": {
       "schema": "WeeklyHistory",

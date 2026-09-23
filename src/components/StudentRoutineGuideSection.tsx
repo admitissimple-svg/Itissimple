@@ -94,7 +94,8 @@ interface StudentRoutineGuideSectionProps {
   onUpdateTimeActivity?: (activityId: string, newTime: string) => void;
   onSaveLearnedWords: (activityId: string, words: string[]) => void;
   userProfile: UserProfile;
-  onSaveDailySentence: (sentence: string, wordsUsed: string[]) => void;
+  onSaveDailySentence: (sentence: string, wordsUsed: string[], evaluationResult?: WritingEvaluationResult | null) => void;
+  onOpenJournalModal?: () => void;
   onOpenEmailModal?: () => void;
   onTest30MinReminder?: () => void;
   currentLanguage: Language;
@@ -119,6 +120,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   onSaveLearnedWords,
   userProfile,
   onSaveDailySentence,
+  onOpenJournalModal,
   onOpenEmailModal,
   onTest30MinReminder,
   currentLanguage,
@@ -432,7 +434,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     e.preventDefault();
     const clean = sentenceInput.trim();
     if (!clean || clean.length < 5) return;
-    onSaveDailySentence(clean, matchedSentenceWords);
+    onSaveDailySentence(clean, matchedSentenceWords, sentenceEvaluation);
     setSentenceSavedSuccess(true);
     setTimeout(() => {
       setSentenceSavedSuccess(false);
@@ -2439,6 +2441,18 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   </span>
                 </div>
               </div>
+
+              {onOpenJournalModal && (
+                <button
+                  type="button"
+                  onClick={onOpenJournalModal}
+                  className="px-2.5 py-1 bg-[#062863] hover:bg-[#000035] text-white border border-[#1C4C96] rounded-xl text-[10px] font-bold flex items-center gap-1 transition cursor-pointer self-start sm:self-auto shadow-xs"
+                  title={isEn ? 'View saved sentences & journal' : 'Ver diário de frases salvas'}
+                >
+                  <Sparkles className="w-3 h-3 text-[#F4CA54]" />
+                  <span>{isEn ? 'View Journal' : 'Ver Diário'}</span>
+                </button>
+              )}
 
               {onTest30MinReminder && (
                 <button

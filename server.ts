@@ -42,6 +42,7 @@ import {
   getWeeklyYouTubeVideosForLevel,
   getDailyYouTubeVideoForStudent,
 } from './src/utils/youtube';
+import { DayOfWeek } from './src/types';
 
 const GEMINI_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
@@ -78,6 +79,7 @@ interface AppDb {
   weeklyStudyDaysTargets?: Record<string, number>;
   weeklyStudyDays?: Record<string, string[]>;
   studentDictionaryMap?: Record<string, any[]>;
+  studentJournalMap?: Record<string, any[]>;
   authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
   transactions?: any[];
   youtubePlaylists?: any[];
@@ -4970,6 +4972,56 @@ app.post('/api/student-dictionary', async (req, res) => {
 
   await writeDbSync(db);
   res.json({ success: true, dictionary: updated });
+});
+
+// Endpoint: Get student journal entries
+app.get('/api/student-journal', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = (req.query.uid as string) || '';
+
+  if (studentEmail || uid) {
+    const fromEmail = (studentEmail && db.studentJournalMap?.[studentEmail]) || [];
+    const fromUid = (uid && db.studentJournalMap?.[uid]) || [];
+    const map = new Map<string, any>();
+    [...fromEmail, ...fromUid].forEach((entry: any) => {
+      if (entry?.id) map.set(entry.id, entry);
+    });
+    const list = Array.from(map.values()).sort((a, b) => {
+      const tA = new Date(a.createdAt || a.date).getTime();
+      const tB = new Date(b.createdAt || b.date).getTime();
+      return tB - tA;
+    });
+    return res.json(list);
+  }
+  res.json([]);
+});
+
+// Endpoint: Save student journal entry
+app.post('/api/student-journal', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, entry } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  if (!cleanEmail && !studentUid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  if (!db.studentJournalMap) db.studentJournalMap = {};
+  const currentList: any[] =
+    (cleanEmail && db.studentJournalMap[cleanEmail]) ||
+    (studentUid && db.studentJournalMap[studentUid]) ||
+    [];
+
+  const filtered = currentList.filter((e: any) => e.id !== entry.id);
+  const updated = [entry, ...filtered];
+
+  if (cleanEmail) db.studentJournalMap[cleanEmail] = updated;
+  if (studentUid) db.studentJournalMap[studentUid] = updated;
+
+  await writeDbSync(db);
+  res.json({ success: true, journal: updated });
 });
 
 // Endpoint: Strict UID correlation verification between Student and Native Friend

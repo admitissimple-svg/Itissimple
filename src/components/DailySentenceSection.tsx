@@ -10,6 +10,7 @@ import {
   Clock,
   Send,
   History,
+  BookOpen,
 } from 'lucide-react';
 import { RoutineItem, UserProfile, WritingEvaluationResult, Language } from '../types';
 import { Translations } from '../utils/i18n';
@@ -22,7 +23,9 @@ interface DailySentenceSectionProps {
   userProfile: UserProfile;
   currentLanguage: Language;
   t: Translations;
-  onSaveDailySentence: (sentence: string, wordsUsed: string[]) => void;
+  onSaveDailySentence: (sentence: string, wordsUsed: string[], evaluationResult?: WritingEvaluationResult | null) => void;
+  onOpenJournalModal?: () => void;
+  savedEntriesCount?: number;
   onTest30MinReminder?: () => void;
 }
 
@@ -32,6 +35,8 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
   currentLanguage,
   t,
   onSaveDailySentence,
+  onOpenJournalModal,
+  savedEntriesCount,
   onTest30MinReminder,
 }) => {
   const [sentenceInput, setSentenceInput] = useState<string>('');
@@ -90,7 +95,7 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
     const finalMatched = allLearnedWordsToday.filter((w) =>
       Boolean(w && textToSave.toLowerCase().includes(w.toLowerCase()))
     );
-    onSaveDailySentence(textToSave, finalMatched);
+    onSaveDailySentence(textToSave, finalMatched, sentenceEvaluation);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -156,19 +161,38 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
           </div>
         </div>
 
-        {onTest30MinReminder && (
-          <button
-            type="button"
-            onClick={onTest30MinReminder}
-            className="px-3 py-1.5 bg-[#9AB4FF]/10 hover:bg-[#9AB4FF]/20 text-[#062863] border border-[#607EC9]/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs self-start sm:self-auto"
-            title={`Simular lembrete das ${reminderTime} (30 min antes da última atividade)`}
-          >
-            <Clock className="w-3.5 h-3.5 text-[#1C4C96]" />
-            <span>
-              {currentLanguage === 'en' ? `Test 30-min Reminder (${reminderTime})` : `Testar Lembrete (${reminderTime})`}
-            </span>
-          </button>
-        )}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          {onOpenJournalModal && (
+            <button
+              type="button"
+              onClick={onOpenJournalModal}
+              className="px-3 py-1.5 bg-[#062863] hover:bg-[#000035] text-white border border-[#1C4C96] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title={currentLanguage === 'en' ? 'View all saved journal sentences' : 'Ver diário de frases salvas'}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-[#F4CA54]" />
+              <span>{currentLanguage === 'en' ? 'View Journal' : 'Ver Diário de Frases'}</span>
+              {typeof savedEntriesCount === 'number' && savedEntriesCount > 0 && (
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-[#F4CA54] text-[#000035]">
+                  {savedEntriesCount}
+                </span>
+              )}
+            </button>
+          )}
+
+          {onTest30MinReminder && (
+            <button
+              type="button"
+              onClick={onTest30MinReminder}
+              className="px-3 py-1.5 bg-[#9AB4FF]/10 hover:bg-[#9AB4FF]/20 text-[#062863] border border-[#607EC9]/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title={`Simular lembrete das ${reminderTime} (30 min antes da última atividade)`}
+            >
+              <Clock className="w-3.5 h-3.5 text-[#1C4C96]" />
+              <span>
+                {currentLanguage === 'en' ? `Test Reminder (${reminderTime})` : `Testar Lembrete (${reminderTime})`}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Words Learned Today Bank */}

@@ -32,6 +32,8 @@ interface StudentWeeklyActivitySectionProps {
   userProfile?: UserProfile;
   onOpenHomeworkModal: () => void;
   onOpenDictionaryModal: () => void;
+  onOpenJournalModal?: () => void;
+  journalEntriesCount?: number;
   currentLanguage: Language;
   dictionaryEntries?: StudentDictionaryEntry[];
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
@@ -93,6 +95,8 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   userProfile,
   onOpenHomeworkModal,
   onOpenDictionaryModal,
+  onOpenJournalModal,
+  journalEntriesCount = 0,
   currentLanguage,
   dictionaryEntries,
   wordsFromRoutines,
@@ -343,11 +347,11 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
           </div>
 
           {/* Right Action Buttons */}
-          <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-auto">
+          <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-auto flex-wrap">
             <button
               type="button"
               onClick={onOpenDictionaryModal}
-              className="px-3.5 py-2.5 bg-[#000035]/80 hover:bg-[#000035] text-white rounded-2xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shadow-md border border-[#9AB4FF]/40"
+              className="px-3.5 py-2.5 bg-[#000035]/80 hover:bg-[#000035] text-white rounded-2xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shadow-md border border-[#9AB4FF]/40 hover:border-[#F4CA54]"
             >
               <BookMarked className="w-4 h-4 text-[#F4CA54]" />
               <span>{isEn ? 'My Dictionary' : 'Meu Dicionário'}</span>
@@ -355,6 +359,23 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                 {totalWords}
               </span>
             </button>
+
+            {onOpenJournalModal && (
+              <button
+                type="button"
+                onClick={onOpenJournalModal}
+                className="px-3.5 py-2.5 bg-[#000035]/80 hover:bg-[#000035] text-white rounded-2xl font-bold text-xs transition flex items-center gap-2 cursor-pointer shadow-md border border-[#9AB4FF]/40 hover:border-[#9AB4FF]"
+                title={isEn ? 'View saved sentences and AI corrections' : 'Ver frases salvas e correções pedagógicas da IA'}
+              >
+                <Sparkles className="w-4 h-4 text-[#9AB4FF]" />
+                <span>{isEn ? 'View Journal' : 'Ver Diário'}</span>
+                {journalEntriesCount > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-[#9AB4FF] text-[#000035]">
+                    {journalEntriesCount}
+                  </span>
+                )}
+              </button>
+            )}
 
             <button
               type="button"
@@ -367,8 +388,8 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
           </div>
         </div>
 
-        {/* 3 Metric / Feature Boxes */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+        {/* 4 Metric / Feature Boxes */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
           {/* Metric 1: Learned Words */}
           <div className="p-3.5 bg-[#000035]/60 rounded-2xl border border-[#607EC9]/40 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-[#1C4C96]/60 flex items-center justify-center text-[#9AB4FF] shrink-0 border border-[#9AB4FF]/30">
@@ -419,10 +440,32 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
               </div>
               <div className="min-w-0">
                 <span className="text-[10px] text-[#9AB4FF]/75 font-bold block uppercase tracking-wider">
-                  {isEn ? 'Access My Dictionary' : 'Acessar Meu Dicionário'}
+                  {isEn ? 'My Dictionary' : 'Meu Dicionário'}
                 </span>
                 <p className="text-[10px] text-white font-semibold truncate mt-0.5">
-                  {isEn ? 'English definitions & examples' : 'Definições e exemplos em inglês'}
+                  {isEn ? 'Definitions & audio' : 'Definições e áudio'}
+                </p>
+              </div>
+            </div>
+            <ArrowRight className="w-4 h-4 text-[#9AB4FF] group-hover:translate-x-1 transition shrink-0" />
+          </button>
+
+          {/* Metric 4: Saved Sentences / Journal */}
+          <button
+            type="button"
+            onClick={onOpenJournalModal}
+            className="p-3.5 bg-[#000035]/60 hover:bg-[#000035] rounded-2xl border border-[#607EC9]/40 hover:border-[#9AB4FF] transition flex items-center justify-between gap-3 text-left cursor-pointer group"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-[#1C4C96]/60 flex items-center justify-center text-[#9AB4FF] shrink-0 border border-[#9AB4FF]/30">
+                <BookOpen className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-[10px] text-[#9AB4FF]/75 font-bold block uppercase tracking-wider">
+                  {isEn ? 'Saved Sentences' : 'Frases Salvas'}
+                </span>
+                <p className="text-[10px] text-white font-semibold truncate mt-0.5">
+                  {isEn ? 'Daily journal & AI polish' : 'Diário & correções da IA'}
                 </p>
               </div>
             </div>

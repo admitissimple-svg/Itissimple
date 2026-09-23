@@ -274,7 +274,7 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
                   Teach English by Living Life
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-600">
-                  No boring grammar textbooks. Connect with Brazilian learners through practical, real-world conversation about daily routines and habits.
+                  No boring grammar textbooks. Connect with learners through practical, real-world conversation about daily routines and habits.
                 </p>
               </div>
 

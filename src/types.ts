@@ -189,6 +189,11 @@ export interface DailyJournalEntry {
   sentence: string;
   wordsUsed: string[];
   createdAt: string;
+  correctedSentence?: string;
+  explanation?: string;
+  hasErrors?: boolean;
+  studentUid?: string;
+  studentEmail?: string;
 }
 
 export interface UserProfile {
@@ -395,6 +400,9 @@ export interface LiveLesson {
   calendarHtmlLink?: string;
   status: 'scheduled' | 'completed' | 'not_completed' | 'cancelled';
   completedAt?: string;
+  cancelledAt?: string;
+  cancelledBy?: 'student' | 'teacher';
+  cancellationReason?: string;
   notCompletedAt?: string;
   notCompletedResponsible?: 'student' | 'teacher';
   notCompletedReason?: string;

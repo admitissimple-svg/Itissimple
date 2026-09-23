@@ -152,7 +152,7 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
 
       if (latestVideo?.title) {
         list.push(
-          `"Regarding '${latestVideo.title}', did you agree with the main point of the video, or would you do things differently in Brazil/your country?"`
+          `"Regarding '${latestVideo.title}', did you agree with the main point of the video, or would you do things differently in your country?"`
         );
       } else {
         list.push(

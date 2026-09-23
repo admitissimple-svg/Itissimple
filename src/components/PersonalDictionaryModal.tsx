@@ -9,6 +9,7 @@ import {
   Globe,
   Loader2,
   AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import { StudentDictionaryEntry, Language, DayOfWeek } from '../types';
 import { speakText } from '../utils/audio';
@@ -21,6 +22,7 @@ interface PersonalDictionaryModalProps {
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   customSavedEntries?: StudentDictionaryEntry[];
   onSaveCustomEntry?: (entry: StudentDictionaryEntry) => void;
+  onOpenJournalModal?: () => void;
 }
 
 export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = ({
@@ -30,6 +32,7 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
   wordsFromRoutines = [],
   customSavedEntries = [],
   onSaveCustomEntry,
+  onOpenJournalModal,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isAddingCustom, setIsAddingCustom] = useState(false);
@@ -236,7 +239,21 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {onOpenJournalModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenJournalModal();
+                }}
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-[#F4CA54]" />
+                <span>{isEn ? 'View Journal' : 'Ver Diário'}</span>
+              </button>
+            )}
+
             <span className="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-white/10 text-white border border-white/15">
               {allDictionaryEntries.length} {allDictionaryEntries.length === 1 ? 'palavra' : 'palavras'}
             </span>
