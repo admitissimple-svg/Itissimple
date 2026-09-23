@@ -26,6 +26,10 @@ import {
 import { Translations, getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from '../utils/notifications';
 import { getDailyMemorizationSchedule } from '../utils/homeworkGenerator';
+import {
+  saveStudentWeeklyChecksToFirestore,
+  fetchStudentWeeklyChecksFromFirestore,
+} from '../utils/studentPersistence';
 
 interface StudentWeeklyActivitySectionProps {
   homework: WeeklyHomeworkData | null;
@@ -39,6 +43,8 @@ interface StudentWeeklyActivitySectionProps {
   dictionaryEntries?: StudentDictionaryEntry[];
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   onUpdateUserProfile?: (updated: Partial<UserProfile>) => void;
+  weeklyChecks?: Record<string, boolean>;
+  onToggleWeeklyCheck?: (stepId: string, dayKey: DayOfWeek) => void;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
@@ -102,10 +108,13 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   dictionaryEntries,
   wordsFromRoutines,
   onUpdateUserProfile,
+  weeklyChecks: propWeeklyChecks,
+  onToggleWeeklyCheck,
 }) => {
   const isEn = currentLanguage === 'en';
   const t = getTranslations(currentLanguage);
   const studentEmail = userProfile?.email || '';
+  const studentUid = userProfile?.uid || userProfile?.id || '';
   const todayDay = getTodayDayOfWeek();
 
   // Active study days from student's single source of truth plan
@@ -217,25 +226,46 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   }, [userProfile?.weeklyNativeLessonsTarget]);
 
   // 7-day checklist grid state: map of "stepId_dayKey" -> boolean
-  // Starts with no markings (0%) and persists in backend server database for multi-device sync
-  const [weeklyChecks, setWeeklyChecks] = useState<Record<string, boolean>>({});
+  // Starts with no markings (0%) and persists in Firestore users/{studentUID} and backend server
+  const [localWeeklyChecks, setLocalWeeklyChecks] = useState<Record<string, boolean>>({});
 
-  // Reset weekly checks immediately when a new week begins
+  // Use props if provided from App level, otherwise fall back to local state
+  const weeklyChecks = propWeeklyChecks !== undefined ? propWeeklyChecks : localWeeklyChecks;
+
+  // Reset local weekly checks immediately when a new week begins
   useEffect(() => {
-    setWeeklyChecks({});
-  }, [userProfile?.weeklyCycle]);
+    if (propWeeklyChecks === undefined) {
+      setLocalWeeklyChecks({});
+    }
+  }, [userProfile?.weeklyCycle, propWeeklyChecks]);
 
-  // Fetch weekly checks and weekly native target from server API for multi-device sync
+  // Fetch weekly checks and weekly native target from Firestore & server API for multi-device sync
   useEffect(() => {
     let isMounted = true;
+    if (propWeeklyChecks === undefined && (studentUid || studentEmail)) {
+      fetchStudentWeeklyChecksFromFirestore(studentUid, studentEmail)
+        .then((data) => {
+          if (isMounted && data) {
+            if (data.checks) {
+              setLocalWeeklyChecks(data.checks);
+            }
+            if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
+              setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('Notice loading weekly checks from Firestore:', err);
+        });
+    }
+
+    // Also fetch target from endpoint
     fetch(`/api/routines/weekly-checks?studentEmail=${encodeURIComponent(studentEmail)}`)
       .then((res) => res.json())
       .then((data) => {
         if (isMounted && data) {
-          if (data.checks) {
-            setWeeklyChecks(data.checks);
-          } else {
-            setWeeklyChecks({});
+          if (propWeeklyChecks === undefined && data.checks && Object.keys(data.checks).length > 0) {
+            setLocalWeeklyChecks((prev) => (Object.keys(prev).length === 0 ? data.checks : prev));
           }
           if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
             setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
@@ -248,7 +278,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     return () => {
       isMounted = false;
     };
-  }, [studentEmail, userProfile?.weeklyCycle]);
+  }, [studentEmail, studentUid, userProfile?.weeklyCycle, propWeeklyChecks]);
 
   const handleTargetChange = (newTarget: number) => {
     const safeTarget = Math.max(1, Math.min(7, newTarget));
@@ -256,41 +286,39 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     if (onUpdateUserProfile) {
       onUpdateUserProfile({ weeklyNativeLessonsTarget: safeTarget });
     }
-    fetch('/api/routines/weekly-checks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        studentEmail,
-        checks: weeklyChecks,
-        weeklyNativeLessonsTarget: safeTarget,
-      }),
-    }).catch((err) => {
-      console.warn('Error saving weeklyNativeLessonsTarget to server:', err);
-    });
+    // Save to Firestore and server
+    saveStudentWeeklyChecksToFirestore(
+      studentUid,
+      weeklyChecks,
+      studentEmail,
+      safeTarget,
+      weeklyStudyDaysTarget
+    );
   };
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
     // Only allow marking days configured in the student's study plan (tutor_live remains independent)
     if (stepId !== 'tutor_live' && !activeStudyDays.includes(dayKey)) return;
 
+    if (onToggleWeeklyCheck) {
+      onToggleWeeklyCheck(stepId, dayKey);
+      return;
+    }
+
     const key = `${stepId}_${dayKey}`;
-    setWeeklyChecks((prev) => {
+    setLocalWeeklyChecks((prev) => {
       const updated = {
         ...prev,
         [key]: !prev[key],
       };
-      // Persist directly to backend database
-      fetch('/api/routines/weekly-checks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentEmail,
-          checks: updated,
-          weeklyNativeLessonsTarget: weeklyNativeTarget,
-        }),
-      }).catch((err) => {
-        console.warn('Error saving weekly checks to server:', err);
-      });
+      // Persist directly to Firestore users/{studentUID} and backend database
+      saveStudentWeeklyChecksToFirestore(
+        studentUid,
+        updated,
+        studentEmail,
+        weeklyNativeTarget,
+        weeklyStudyDaysTarget
+      );
       return updated;
     });
   };

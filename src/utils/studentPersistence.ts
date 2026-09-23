@@ -484,3 +484,153 @@ export async function fetchStudentLessonsFromFirestore(
     return [];
   }
 }
+
+/**
+ * Persist student S-Path (Gráfico S) weekly checks directly to Firestore document users/{studentUID}
+ * Saves fields:
+ * - weeklyChecks: Record<string, boolean>
+ * - sPathChecks: Record<string, boolean>
+ * - updatedAt: ISO string
+ */
+export async function saveStudentWeeklyChecksToFirestore(
+  studentUid: string,
+  checks: Record<string, boolean>,
+  studentEmail?: string,
+  weeklyNativeLessonsTarget?: number,
+  weeklyStudyDaysTarget?: number
+): Promise<boolean> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  try {
+    const sanitizedChecks: Record<string, boolean> = JSON.parse(JSON.stringify(checks || {}));
+
+    // 1. Direct write to Firestore document users/{studentUID}
+    if (db && cleanUid) {
+      const userRef = doc(db, 'users', cleanUid);
+      const payload: Record<string, any> = {
+        weeklyChecks: sanitizedChecks,
+        sPathChecks: sanitizedChecks,
+        updatedAt: new Date().toISOString(),
+      };
+      if (typeof weeklyNativeLessonsTarget === 'number') {
+        payload.weeklyNativeLessonsTarget = weeklyNativeLessonsTarget;
+      }
+      if (typeof weeklyStudyDaysTarget === 'number') {
+        payload.weeklyStudyDaysTarget = weeklyStudyDaysTarget;
+      }
+
+      await withFirestoreTimeout(setDoc(userRef, payload, { merge: true }), 3500, null);
+
+      // If email differs from cleanUid, also mirror to email-based doc for multi-id lookup redundancy
+      if (cleanEmail) {
+        const emailDocId = normalizeUid(null, cleanEmail);
+        if (emailDocId && emailDocId !== cleanUid) {
+          const altRef = doc(db, 'users', emailDocId);
+          await withFirestoreTimeout(
+            setDoc(altRef, payload, { merge: true }),
+            2000,
+            null
+          );
+        }
+      }
+    }
+
+    // 2. Mirror to backend server API for disk persistence & multi-device sync
+    if (cleanEmail || cleanUid) {
+      fetch('/api/routines/weekly-checks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: cleanEmail || cleanUid,
+          studentUid: cleanUid,
+          checks: sanitizedChecks,
+          weeklyNativeLessonsTarget,
+          weeklyStudyDaysTarget,
+        }),
+      }).catch(() => {});
+    }
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/weeklyChecks`);
+    return false;
+  }
+}
+
+/**
+ * Fetch student S-Path (Gráfico S) weekly checks directly from Firestore document users/{studentUID}
+ */
+export async function fetchStudentWeeklyChecksFromFirestore(
+  studentUid: string,
+  studentEmail?: string
+): Promise<{
+  checks: Record<string, boolean>;
+  weeklyNativeLessonsTarget?: number;
+  weeklyStudyDaysTarget?: number;
+}> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  // 1. Try reading directly from Firestore users/{studentUID}
+  if (db && cleanUid) {
+    try {
+      const userRef = doc(db, 'users', cleanUid);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
+      if (userSnap && userSnap.exists()) {
+        const data = userSnap.data();
+        if (data?.weeklyChecks || data?.sPathChecks) {
+          return {
+            checks: data.weeklyChecks || data.sPathChecks || {},
+            weeklyNativeLessonsTarget: data.weeklyNativeLessonsTarget,
+            weeklyStudyDaysTarget: data.weeklyStudyDaysTarget,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Notice fetching weeklyChecks from Firestore UID:', err);
+    }
+  }
+
+  // 2. Try email-based doc fallback
+  if (db && cleanEmail) {
+    const emailDocId = normalizeUid(null, cleanEmail);
+    if (emailDocId && emailDocId !== cleanUid) {
+      try {
+        const altRef = doc(db, 'users', emailDocId);
+        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
+        if (altSnap && altSnap.exists()) {
+          const altData = altSnap.data();
+          if (altData?.weeklyChecks || altData?.sPathChecks) {
+            return {
+              checks: altData.weeklyChecks || altData.sPathChecks || {},
+              weeklyNativeLessonsTarget: altData.weeklyNativeLessonsTarget,
+              weeklyStudyDaysTarget: altData.weeklyStudyDaysTarget,
+            };
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 3. Fallback to server API
+  if (cleanEmail) {
+    try {
+      const res = await fetch(
+        `/api/routines/weekly-checks?studentEmail=${encodeURIComponent(cleanEmail)}`
+      );
+      if (res.ok) {
+        const apiData = await res.json();
+        return {
+          checks: apiData?.checks || {},
+          weeklyNativeLessonsTarget: apiData?.weeklyNativeLessonsTarget,
+          weeklyStudyDaysTarget: apiData?.weeklyStudyDaysTarget,
+        };
+      }
+    } catch {}
+  }
+
+  return { checks: {} };
+}

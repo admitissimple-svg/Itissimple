@@ -87,6 +87,8 @@ import {
   updateLiveLessonInFirestore,
   deleteLiveLessonFromFirestore,
   fetchStudentLessonsFromFirestore,
+  saveStudentWeeklyChecksToFirestore,
+  fetchStudentWeeklyChecksFromFirestore,
 } from './utils/studentPersistence';
 import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
@@ -255,6 +257,9 @@ export default function App() {
   // 7. Weekly Homework State
   const [weeklyHomework, setWeeklyHomework] = useState<WeeklyHomeworkData | null>(null);
   const [homeworkTargetDay, setHomeworkTargetDay] = useState<DayOfWeek>(getTodayDayOfWeek());
+
+  // 7b. S-Path (Gráfico S) Weekly Checks State
+  const [weeklyChecks, setWeeklyChecks] = useState<Record<string, boolean>>({});
 
   // 8. Notifications State
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -529,6 +534,7 @@ export default function App() {
     if (!currentAccount?.email) {
       setLessons([]);
       setStudents([]);
+      setWeeklyChecks({});
       setUserProfile(createDefaultStudentProfile(null));
       setRoutinesByDay(defaultRoutinesByDay);
       return;
@@ -630,6 +636,17 @@ export default function App() {
           if (todayItems.length > 0) {
             setSelectedActivityId(todayItems[0].id);
           }
+
+          // Fetch student-isolated S-Path weekly checks directly from Firestore
+          fetchStudentWeeklyChecksFromFirestore(uid, email)
+            .then((checksData) => {
+              if (checksData && checksData.checks) {
+                setWeeklyChecks(checksData.checks);
+              }
+            })
+            .catch((err) => {
+              console.warn('Notice loading weekly checks from Firestore:', err);
+            });
         } catch (err) {
           console.warn('Could not fetch student data:', err);
         }
@@ -1297,14 +1314,82 @@ export default function App() {
     }
   };
 
+  // Handler: Update S-Path (Gráfico S) check for a pillar with instant UI reflection & Firestore users/{studentUID} persistence
+  const handleUpdateSPathCheck = useCallback(
+    (
+      stepId: 'video_day' | 'audio_day' | 'memorization' | 'tutor_live',
+      dayKey: DayOfWeek,
+      isCompleted: boolean = true,
+      targetUid?: string,
+      targetEmail?: string
+    ) => {
+      const checkKey = `${stepId}_${dayKey}`;
+      const uid = targetUid || currentAccount?.uid || userProfile?.id || '';
+      const email = targetEmail || currentAccount?.email || userProfile?.email || '';
+
+      setWeeklyChecks((prev) => {
+        if (prev[checkKey] === isCompleted) return prev;
+        const nextChecks = { ...prev, [checkKey]: isCompleted };
+
+        // 1. Direct write to Firestore users/{studentUID} + server API mirror
+        saveStudentWeeklyChecksToFirestore(
+          uid,
+          nextChecks,
+          email,
+          userProfile?.weeklyNativeLessonsTarget,
+          userProfile?.weeklyStudyDaysTarget
+        );
+
+        return nextChecks;
+      });
+
+      // Feedback toast/notification for student
+      if (isCompleted) {
+        const stepLabels: Record<string, { en: string; pt: string }> = {
+          video_day: { en: 'Daily Video', pt: 'Vídeo do Dia' },
+          audio_day: { en: 'Daily Audio', pt: 'Áudio do Dia' },
+          memorization: { en: 'Daily Memorization Activity', pt: 'Atividade de Memorização do Dia' },
+          tutor_live: { en: 'Live Lesson with Native Friend', pt: 'Aula com Amigo Nativo' },
+        };
+        const dayLabels: Record<DayOfWeek, { en: string; pt: string }> = {
+          monday: { en: 'Monday', pt: 'Segunda-feira' },
+          tuesday: { en: 'Tuesday', pt: 'Terça-feira' },
+          wednesday: { en: 'Wednesday', pt: 'Quarta-feira' },
+          thursday: { en: 'Thursday', pt: 'Quinta-feira' },
+          friday: { en: 'Friday', pt: 'Sexta-feira' },
+          saturday: { en: 'Saturday', pt: 'Sábado' },
+          sunday: { en: 'Sunday', pt: 'Domingo' },
+        };
+
+        setNotifications((prev) => [
+          {
+            id: `toast-spath-${Date.now()}`,
+            title: currentLanguage === 'en' ? '🎉 S-Path Updated!' : '🎉 Gráfico S Atualizado!',
+            message:
+              currentLanguage === 'en'
+                ? `${stepLabels[stepId]?.en || stepId} marked as completed for ${dayLabels[dayKey]?.en || dayKey} on your S-Path.`
+                : `${stepLabels[stepId]?.pt || stepId} marcado como concluído para ${dayLabels[dayKey]?.pt || dayKey} no seu Gráfico S.`,
+            type: 'success',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+      }
+    },
+    [currentAccount?.uid, currentAccount?.email, userProfile?.id, userProfile?.email, userProfile?.weeklyNativeLessonsTarget, userProfile?.weeklyStudyDaysTarget, currentLanguage]
+  );
+
   // Handler: Toggle activity completed status
   const handleToggleActivityComplete = async (activityId: string) => {
     let nowCompleted = false;
     let videoIdToArchive: string | null = null;
+    let currentActivity: RoutineItem | undefined;
 
     setRoutinesByDay((prev) => {
       const updatedDayList = (prev[selectedDay] || []).map((item) => {
         if (item.id === activityId) {
+          currentActivity = item;
           nowCompleted = !item.completedToday;
           if (nowCompleted) {
             const v = item.teacherVideos?.[0];
@@ -1325,6 +1410,37 @@ export default function App() {
     // Requirement 2: Guarantee that upon completing a video activity, the video ID is persistently added to watchedVideosHistory
     if (nowCompleted && videoIdToArchive && studentUid) {
       addVideoToWatchedHistoryInFirestore(studentUid, videoIdToArchive).catch(() => {});
+    }
+
+    // Automatic S-Path (Gráfico S) marking based on activity type
+    const actName = (currentActivity?.activityName || '').toLowerCase();
+    const isVideoActivity = Boolean(
+      (currentActivity?.teacherVideos && currentActivity.teacherVideos.length > 0) ||
+      actName.includes('video') ||
+      actName.includes('vídeo') ||
+      actName.includes('assistir') ||
+      actName.includes('watch') ||
+      activityId.endsWith('1')
+    );
+
+    const isAudioActivity = Boolean(
+      currentActivity?.teacherSpotify ||
+      actName.includes('áudio') ||
+      actName.includes('audio') ||
+      actName.includes('som') ||
+      actName.includes('ouvir') ||
+      actName.includes('listen') ||
+      actName.includes('podcast') ||
+      actName.includes('música') ||
+      actName.includes('music') ||
+      activityId.endsWith('2')
+    );
+
+    if (isVideoActivity) {
+      handleUpdateSPathCheck('video_day', selectedDay, nowCompleted);
+    }
+    if (isAudioActivity) {
+      handleUpdateSPathCheck('audio_day', selectedDay, nowCompleted);
     }
 
     try {
@@ -1381,6 +1497,16 @@ export default function App() {
           weeklyStudyDaysTarget: effectiveStudyTarget,
           weeklyStudyDays: effectiveStudyDays,
         }));
+
+        // Reset S-Path checks for the new week in memory and Firestore users/{studentUID}
+        setWeeklyChecks({});
+        saveStudentWeeklyChecksToFirestore(
+          uid,
+          {},
+          studentEmail,
+          userProfile?.weeklyNativeLessonsTarget || 1,
+          effectiveStudyTarget
+        );
 
         // Persist weekly checks and study targets via weekly-checks endpoint as well
         fetch('/api/routines/weekly-checks', {
@@ -1758,14 +1884,36 @@ export default function App() {
     setScheduleStudentInfo(null);
   };
 
-  // Handler: Complete lesson
+  // Handler: Complete lesson (Automatically marks S-Path tutor_live for the lesson's day)
   const handleCompleteLesson = async (lessonId: string) => {
-    setLessons((prev) =>
-      prev.map((l) => (l.id === lessonId ? { ...l, status: 'completed' } : l))
-    );
+    let completedLesson: LiveLesson | undefined;
+    setLessons((prev) => {
+      completedLesson = prev.find((l) => l.id === lessonId);
+      return prev.map((l) => (l.id === lessonId ? { ...l, status: 'completed' } : l));
+    });
+
+    const targetLesson = completedLesson || lessons.find((l) => l.id === lessonId);
+    const targetStudentUid = targetLesson?.studentUid || currentAccount?.uid || userProfile?.id || '';
+    const targetStudentEmail = targetLesson?.studentEmail || currentAccount?.email || userProfile?.email || '';
+
+    // Calculate lesson day of week
+    let lessonDay: DayOfWeek = 'monday';
+    if (targetLesson?.startDateTime) {
+      const d = new Date(targetLesson.startDateTime);
+      const dayNames: DayOfWeek[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const idx = d.getDay();
+      if (dayNames[idx]) {
+        lessonDay = dayNames[idx];
+      }
+    } else {
+      lessonDay = selectedDay;
+    }
+
+    // Auto-mark S-Path for Native Friend session
+    handleUpdateSPathCheck('tutor_live', lessonDay, true, targetStudentUid, targetStudentEmail);
 
     // Persist status change in Firestore
-    updateLiveLessonInFirestore(lessonId, { status: 'completed' }, currentAccount?.uid);
+    updateLiveLessonInFirestore(lessonId, { status: 'completed' }, targetStudentUid || currentAccount?.uid);
 
     try {
       await fetch(`/api/lessons/${lessonId}/complete`, { method: 'POST' });
@@ -3602,6 +3750,8 @@ export default function App() {
                   weeklyCycle={userProfile?.weeklyCycle || 1}
                   onStartNewWeek={handleStartNewWeek}
                   isStarting={isStartingNewWeek}
+                  weeklyChecks={weeklyChecks}
+                  onUpdateSPathCheck={handleUpdateSPathCheck}
                 />
 
                 {/* Section 3: Weekly Activity (Image 3) */}
@@ -3619,6 +3769,11 @@ export default function App() {
                   wordsFromRoutines={wordsFromRoutines}
                   onUpdateUserProfile={(partial) => {
                     handleSaveStudentProfile({ ...userProfile, ...partial });
+                  }}
+                  weeklyChecks={weeklyChecks}
+                  onToggleWeeklyCheck={(stepId, dayKey) => {
+                    const isCurrentlyChecked = Boolean(weeklyChecks[`${stepId}_${dayKey}`]);
+                    handleUpdateSPathCheck(stepId as any, dayKey, !isCurrentlyChecked);
                   }}
                 />
               </div>
@@ -3745,31 +3900,7 @@ export default function App() {
       onRegenerateWithAi={handleRegenerateHomeworkWithAi}
       isGeneratingAi={isGeneratingHomeworkAi}
       onCompleteTodayPart={(partKey, day) => {
-        const cleanEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
-        if (cleanEmail) {
-          fetch('/api/routines/weekly-checks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              studentEmail: cleanEmail,
-              checks: { [`memorization_${day}`]: true },
-              merge: true,
-            }),
-          }).catch(() => {});
-        }
-        setNotifications((prev) => [
-          {
-            id: `toast-mem-${Date.now()}`,
-            title: currentLanguage === 'en' ? 'S-Path Updated!' : 'Gráfico S Atualizado!',
-            message: currentLanguage === 'en'
-              ? `Daily memorization part completed and registered on your S-Path for ${day}.`
-              : `Parte diária de memorização concluída e registrada no seu Gráfico S para ${day}.`,
-            type: 'success',
-            timestamp: new Date().toISOString(),
-            read: false,
-          },
-          ...prev,
-        ]);
+        handleUpdateSPathCheck('memorization', day, true);
       }}
       onSubmitToTeacher={(updated) => {
         setWeeklyHomework(updated);
