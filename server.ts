@@ -6888,6 +6888,177 @@ function normalizeStudentLevel(lvl?: string): {
 // Cache for AI memorization to provide instant (<5ms) responses and avoid rate limiting
 const aiMemorizationCache = new Map<string, { data: any; expiry: number }>();
 
+// Detection for stale, formulaic, or robotic story templates that should never be shown to students
+function isBadStoryText(text: string): boolean {
+  if (!text || typeof text !== 'string' || text.trim().length < 80) return true;
+  const t = text.toLowerCase();
+  return (
+    t.includes('the day began with great purpose as') ||
+    t.includes('reviewed key plans regarding') ||
+    t.includes('address **') ||
+    t.includes('managing **') ||
+    t.includes('progress made on **') ||
+    t.includes('to make sure everything stayed aligned') ||
+    t.includes('quick to ') ||
+    t.includes('refreshing weather') ||
+    t.includes('storm terms') ||
+    t.includes('a productive day of focus and growth') ||
+    t.includes('finishing the workday on schedule allowed everyone to celebrate')
+  );
+}
+
+// Dedicated Generator for Part 4: Mini-Story / Routine Reading & Interpretation with Gemini API
+// 100% INÉDITA, ORGANIC VOCABULARY INTEGRATION, AND DYNAMIC STORY-GROUNDED COMPREHENSION QUESTIONS
+async function generatePart4StoryWithGemini(
+  words: string[],
+  studentLevel: string,
+  studentName: string = 'Student'
+): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !Array.isArray(words) || words.length === 0) return null;
+
+  const levelMeta = normalizeStudentLevel(studentLevel);
+  const protagonist = (studentName && studentName !== 'Student' ? studentName.split(' ')[0] : 'Regina').trim();
+
+  const systemInstruction = `You are a distinguished literary author, linguistic stylist, and senior instructional designer for "It's Simple - Learn English by Living Your Life".
+Your mission is to craft a 100% ORIGINAL, INÉDITA, and COMPELLING mini-story (Part 4: Routine Reading & Interpretation) and dynamic, narrative-grounded reading comprehension questions tailored to the student's proficiency level (${levelMeta.labelEn} - CEFR ${levelMeta.cefr}).
+
+CRITICAL MANDATORY RULES (STRICTLY ENFORCED):
+
+1. GERAÇÃO DE CONTEÚDO 100% INÉDITO (ZERO TEMPLATES / ZERO REUSO):
+   - You must construct a brand-new, vivid, and original storyline specifically customized to the provided words of the day.
+   - ABSOLUTE PROHIBITION ON STATIC TEMPLATES: You are strictly forbidden from reusing formulaic slot templates where only the target words change.
+   - Specifically NEVER write or mimic sentences like:
+     * "The day began with great purpose as [Name] reviewed key plans regarding [word]..."
+     * "Taking decisive steps early in the morning ensured everyone was prepared to address [word]..."
+     * "Transitioning into the afternoon, the team focused their energy on managing [word]..."
+     * "At the same time, dedicating careful attention to [word] strengthened mutual trust..."
+     * "Before wrapping up the day, taking a moment to evaluate the progress made on [word]..."
+     * "Finishing the workday on schedule allowed everyone to celebrate their achievements..."
+   - Vary the scenario and genre creatively and realistically across calls:
+     * High-stakes workplace discussions, design critiques, urgent troubleshooting, software or product launches
+     * Culinary arts, artisan workshops, pottery, architecture, craftmanship
+     * Travel complications, transit logistics, airport connections, international conferences
+     * Everyday moments, personal triumphs, community initiatives, athletic or health challenges
+   - Featuring ${protagonist} as a capable, relatable protagonist navigating this concrete situation.
+
+2. INTEGRAÇÃO ORGÂNICA DAS PALAVRAS DO DIA:
+   - Every single word from the day's vocabulary list must be woven naturally and grammatically into the story.
+   - Respect real-world parts of speech:
+     * Verbs must be used as genuine actions or states (e.g. "negotiate terms", "reinforce the foundation", "exited through the side door").
+     * Adjectives must modify nouns or follow linking verbs (e.g. "a perfect alignment", "the weather was perfect", "remained willing to assist").
+     * Nouns must function as subjects, direct objects, or complements.
+   - NEVER force a verb or adjective into an awkward noun position (e.g. NEVER write "plans regarding perfect", "manage willing", "progress made on reinforce").
+   - Every target word MUST be highlighted in markdown bold: **word**.
+
+3. COERÊNCIA TOTAL DAS PERGUNTAS DE INTERPRETAÇÃO:
+   - Generate 2 to 3 multiple-choice reading comprehension questions based EXCLUSIVELY on the newly generated mini-story.
+   - 100% STORY-GROUNDED: Every question must probe specific plot events, character motivations, decisions, or concrete outcomes from the story you just wrote.
+   - ZERO GENERIC QUESTIONS: Prohibit any question about English study habits, vocabulary memorization, grammar theory, or general philosophies (e.g., NEVER ask "What is the importance of learning English?", "Why do students practice vocabulary?").
+   - 4 Narrative-specific options: Exactly 4 options per question ([Option A, Option B, Option C, Option D]). 1 option must be unambiguously correct based on the story, and 3 must be plausible narrative distractors derived from the story context.
+   - Accurate zero-based correctAnswer index (0, 1, 2, or 3).
+   - Clear explanation directly referencing the story sentence that proves the answer.
+
+Output format must be a strict JSON object:
+{
+  "title": "A captivating, story-specific title",
+  "text": "The 100% original narrative (1 to 3 paragraphs) with each target word highlighted as **word**.",
+  "questions": [
+    {
+      "id": "q-1",
+      "question": "Specific question testing a plot development or character action",
+      "options": ["Story Option A", "Story Option B", "Story Option C", "Story Option D"],
+      "correctAnswer": 0,
+      "explanation": "Citation from the story text confirming this choice"
+    }
+  ]
+}`;
+
+  const userPrompt = `Generate a 100% INÉDITA mini-story and 2-3 coherent comprehension questions for:
+Student: "${protagonist}"
+Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+Target Words of the Day to weave in organically with **word**:
+${JSON.stringify(words)}
+
+MANDATORY RULES:
+1. Plot must be 100% original, lively, and engaging. Absolutely ZERO formulaic templates!
+2. All target words must be used with grammatical precision and highlighted as **word**.
+3. All questions must test factual events, decisions, and turning points in this narrative.
+Return strict JSON only.`;
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  const candidateModels = [
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.8-flash',
+    'gemini-flash-latest',
+  ];
+
+  for (const model of candidateModels) {
+    try {
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            temperature: 0.85,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout model ${model}`)), 12000)
+        ),
+      ]);
+
+      if (response && response.text) {
+        const parsed = JSON.parse(response.text.trim());
+        if (
+          parsed &&
+          parsed.title &&
+          parsed.text &&
+          !isBadStoryText(parsed.text) &&
+          Array.isArray(parsed.questions) &&
+          parsed.questions.length > 0
+        ) {
+          // Normalize correctAnswer to 0-3 index even if model returned the option string
+          parsed.questions = parsed.questions.map((q: any, idx: number) => {
+            let corrIdx = 0;
+            if (typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4) {
+              corrIdx = q.correctAnswer;
+            } else if (typeof q.correctAnswer === 'string' && Array.isArray(q.options)) {
+              const foundIdx = q.options.findIndex(
+                (opt: string) => opt.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()
+              );
+              corrIdx = foundIdx >= 0 ? foundIdx : 0;
+            }
+            return {
+              ...q,
+              id: q.id || `q-${idx + 1}`,
+              correctAnswer: corrIdx,
+            };
+          });
+
+          return parsed;
+        }
+      }
+    } catch {
+      // Continue to next candidate model
+    }
+  }
+
+  return null;
+}
+
 // Specialized Native English Teacher & Instructional Designer Generator for Weekly Memorization Activity
 async function generateDirectMemorizationAi(
   words: string[],
@@ -6900,40 +7071,40 @@ async function generateDirectMemorizationAi(
   const cacheKey = `${words.map((w) => w.toLowerCase().trim()).sort().join('|')}_${studentLevel.toLowerCase()}`;
   const cached = aiMemorizationCache.get(cacheKey);
   if (cached && Date.now() < cached.expiry) {
-    return cached.data;
+    const cachedStory = cached.data?.readingPassage?.text || '';
+    if (!isBadStoryText(cachedStory)) {
+      return cached.data;
+    }
+    aiMemorizationCache.delete(cacheKey);
   }
 
   const levelMeta = normalizeStudentLevel(studentLevel);
+  const protagonist = (studentName && studentName !== 'Student' ? studentName.split(' ')[0] : 'Regina').trim();
 
   const systemInstruction = `You are an expert Native English Teacher and Instructional Designer for "It's Simple - Learn English by Living Your Life".
 Your mission is to generate native, fluid, authentic, and natural instructional content for the 4-part "Weekly Memorization Activity", strictly based on the student's weekly words and calibrated to their exact proficiency level (${levelMeta.labelEn} - CEFR ${levelMeta.cefr}).
 
 CRITICAL PEDAGOGICAL RULES (STRICTLY ENFORCED):
 1. PROHIBIT ROBOTIC DEFINITIONS: Never write mechanical dictionary descriptions (e.g., do NOT write "The act or state of...", "Denoting an action...", "Relating to..."). Write natural, functional explanations showing how native speakers actually use the word in everyday reality.
-2. PROHIBIT METALANGUAGE: Never use metalinguistic filler or commentary (e.g., do NOT write "The concept of...", "This term refers to...", "In this sentence...", "This word is used to..."). Speak directly and naturally to the learner.
-3. PROHIBIT REPETITIVE OR FORMULAIC PHRASES: Never use repetitive sentence templates (e.g., avoid "When executing my scheduled responsibilities...", "In my busy daily routine..."). Write modern, authentic, natural English sentences as spoken by real native speakers in daily routines, workplace situations, social events, commutes, and home life.
+2. PROHIBIT METALANGUAGE: Never use metalinguistic filler or commentary. Speak directly and naturally to the learner.
+3. PROHIBIT REPETITIVE OR FORMULAIC PHRASES: Never use repetitive sentence templates. Write modern, authentic, natural English sentences as spoken by real native speakers.
 4. CALIBRATE TO PROFICIENCY LEVEL:
    - Beginner (A1-A2): Direct everyday vocabulary, concise sentences (8-14 words), clear context clues.
-   - Intermediate (B1-B2): Natural compound and complex sentences with connectors (while, because, although, whenever, so), phrasal verbs, realistic modern workplace and social situations (14-22 words).
+   - Intermediate (B1-B2): Natural compound and complex sentences with connectors, phrasal verbs, realistic modern workplace and social situations (14-22 words).
    - Advanced (C1-C2): Rich nuanced vocabulary, varied cadence, idiomatic collocations, professional or reflective depth (18-28 words).
 5. THE 4 MANDATORY PARTS TO GENERATE:
-   - Part 1 (Matching): Create contextual definitions and unique functional clues for each word in natural English, accompanied by a natural Portuguese equivalent. Shuffle the order of pairs in the output array so the learner matches them.
+   - Part 1 (Matching): Create contextual definitions and unique functional clues for each word in natural English, accompanied by a natural Portuguese equivalent. Shuffle the order of pairs in the output array.
    - Part 2 (Fill in the Blanks): Generate varied, authentic routine sentences with a single blank "______" for each word where the target word is the only logical and grammatical fit. Provide exactly 4 smart options (the correct word + 3 plausible distractors) plus practical hints and explanations in both English and Portuguese.
    - Part 3 (Sentence Writing): Propose practical, targeted writing challenges that guide the student to write an original sentence about their real life or work using each word.
    - Part 4 (Mini-Story & Reading Comprehension):
-     * STORY NARRATIVE: Write an authentic, cohesive, lively narrative (1 to 3 paragraphs) set in a realistic daily routine, workplace, social, or personal life context. You MUST naturally integrate and highlight in bold markdown ALL the weekly words (**word**).
-     * STRICTEST MANDATORY RULE FOR COMPREHENSION QUESTIONS:
-       1. 100% STORY-SPECIFIC: Every single question (including Question 1, Question 2, Question 3, etc.) MUST be strictly, uniquely, and exclusively based on the concrete plot, characters, actions, decisions, and events in this mini-story.
-       2. ABSOLUTE PROHIBITION ON GENERIC QUESTIONS: Under NO circumstances may any question address generic language learning, study habits, memorization techniques, grammar tests, or general philosophies (e.g., NEVER ask "How does applying English benefit language learners?", "Why is practicing vocabulary important?", or any external meta-question).
-       3. CONCRETE STORY EVIDENCE: Every question must probe a factual element from the story (e.g., "What was the team's main outcome from reviewing their priorities in the morning?", "What happened after the team secured their key goal in the afternoon?", "Why did the manager ask to adjust the workflow?").
-       4. FOUR STORY OPTIONS: Provide exactly 4 options per question (A, B, C, D) strictly drawn from the narrative context, where 1 is clearly true according to the story and 3 are plausible narrative distractors.
-       5. ACCURATE ANSWER INDEX: correctAnswer must be the exact zero-based integer index (0, 1, 2, or 3) of the correct option.
-       6. EXPLANATION: The explanation must cite the specific sentence from the mini-story proving why that option is correct.
+     * 100% INÉDITO & ORIGINAL: Craft a completely new, vivid story featuring ${protagonist}. ZERO static templates! Prohibit phrases like "The day began with great purpose as...".
+     * ORGANIC INTEGRATION: Every target word MUST be used according to its real part of speech and highlighted with **word**.
+     * 100% STORY-GROUNDED QUESTIONS: Every single comprehension question MUST test concrete events, actions, and decisions in this story. Zero generic questions about English study.
 
 Output MUST be a strict, valid JSON object matching the requested schema.`;
 
   const userPrompt = `Create the 4-part Weekly Memorization Activity:
-- Student Name: "${studentName}"
+- Student Name: "${protagonist}"
 - Target Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
 - Pedagogical Focus: ${levelMeta.grammarFocusEn}
 - Target Audience: Adult professional learning English through their real daily routine.
@@ -6942,21 +7113,9 @@ Weekly Words to Master:
 ${JSON.stringify(words)}
 
 MANDATORY INSTRUCTIONS FOR PART 4 (MINI-STORY & COMPREHENSION QUESTIONS):
-1. COHESION & GRAMMATICAL SENSE ARE MANDATORY:
-   - Each word MUST be used according to its real-world part of speech and true meaning (e.g., "job" is a noun, "workout" is a noun, "weather" is atmospheric condition, "storm" is a weather event, "moment" is a point in time).
-   - NEVER force words into arbitrary ungrammatical slots (e.g. NEVER write "quick to job", "prepared to storm terms", "refreshing weather", or "securing the new moment").
-   - Weave words into an authentic daily routine, workplace challenge, or personal accomplishment (e.g. Lucas noticing an incoming storm, completing an indoor workout, heading to his job, pausing for a quiet moment of focus, and concluding as the weather clears).
-2. The mini-story ("text") must feature a concrete character or team engaged in a realistic daily narrative that naturally uses ALL of the words: ${words.map((w: string) => `**${w}**`).join(', ')}.
-3. GENERATE 2 TO 3 COMPREHENSION QUESTIONS ("questions"):
-   - EVERY SINGLE QUESTION (including Question 1, Question 2, and Question 3) MUST BE 100% EXCLUSIVELY ABOUT THE PLOT, CHARACTERS, AND SPECIFIC EVENTS OF THE MINI-STORY YOU WROTE ABOVE.
-   - DO NOT ASK ANY GENERAL QUESTIONS ABOUT LANGUAGE LEARNING, ENGLISH STUDIES, HABITS, OR LIFE PHILOSOPHY.
-   - Example of FORBIDDEN question: "How does applying English to daily workflows benefit language learners?" -> NEVER DO THIS!
-   - Example of REQUIRED question: "Why did Lucas complete his **workout** at home in the morning?" or "What happened during the team's key **moment** at their **job**?"
-4. Each question must have:
-   - "question": Direct question about the story's events or characters.
-   - "options": Exactly 4 options ([Option A, Option B, Option C, Option D]) related to the story context.
-   - "correctAnswer": 0-3 index of the correct option.
-   - "explanation": Direct citation from your mini-story explaining why this option is correct.
+1. 100% INÉDITA NARRATIVE: Create an original, compelling story from scratch featuring ${protagonist}. Strictly FORBIDDEN to use formulaic frames or static templates.
+2. ORGANIC GRAMMAR: Weave each target word naturally according to its true part of speech with **word**.
+3. STORY-GROUNDED QUESTIONS: 2 to 3 questions exclusively probing the plot, characters, and events of this story.
 
 Required JSON Schema:
 {
@@ -6990,8 +7149,8 @@ Required JSON Schema:
     }
   ],
   "readingPassage": {
-    "title": "Engaging title for the story",
-    "text": "A cohesive, lively, well-crafted mini-story (1-3 paragraphs) that uses all target words naturally. Every target word MUST be enclosed in double asterisks like **word**.",
+    "title": "Engaging, story-specific title",
+    "text": "A cohesive, lively, 100% original mini-story that uses all target words naturally with **word**.",
     "questions": [
       {
         "id": "q-1",
@@ -7020,19 +7179,16 @@ Required JSON Schema:
     },
   });
 
-  // Fast models in priority order, avoiding deprecated models and long delays
   const candidateModels = [
-    'gemini-3.1-flash-lite-preview',
-    'gemini-3.8-flash',
-    GEMINI_TEXT_MODEL,
-    'gemini-flash-latest',
     'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.8-flash',
+    'gemini-flash-latest',
   ];
-  const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
 
-  for (const model of modelsToTry) {
+  for (const model of candidateModels) {
     try {
-      // 6.5s per-model timeout to guarantee ultra-responsive UX without freezing or hanging
       const response = await Promise.race([
         ai.models.generateContent({
           model,
@@ -7040,10 +7196,11 @@ Required JSON Schema:
           config: {
             systemInstruction,
             responseMimeType: 'application/json',
+            temperature: 0.75,
           },
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout model ${model}`)), 6500)
+          setTimeout(() => reject(new Error(`Timeout model ${model}`)), 14000)
         ),
       ]);
 
@@ -7056,11 +7213,18 @@ Required JSON Schema:
           Array.isArray(parsed.fillInBlanks) &&
           parsed.fillInBlanks.length > 0 &&
           Array.isArray(parsed.sentenceWritingPrompts) &&
-          parsed.sentenceWritingPrompts.length > 0 &&
-          parsed.readingPassage?.text
+          parsed.sentenceWritingPrompts.length > 0
         ) {
-          // Strict validation: ensure all readingPassage questions are 100% story-based with zero generic language learning prompts
-          if (Array.isArray(parsed.readingPassage.questions)) {
+          // If story was missing or formulaic, generate it via dedicated Part 4 generator
+          if (!parsed.readingPassage?.text || isBadStoryText(parsed.readingPassage.text)) {
+            const dedicatedStory = await generatePart4StoryWithGemini(words, studentLevel, studentName);
+            if (dedicatedStory && !isBadStoryText(dedicatedStory.text)) {
+              parsed.readingPassage = dedicatedStory;
+            }
+          }
+
+          // Strict validation on questions
+          if (Array.isArray(parsed.readingPassage?.questions)) {
             parsed.readingPassage.questions = parsed.readingPassage.questions.map((q: any, qIdx: number) => {
               const qText = (q.question || '').toLowerCase();
               const isGeneric =
@@ -7076,15 +7240,15 @@ Required JSON Schema:
                 const targetW = words[qIdx % words.length] || words[0] || 'task';
                 return {
                   id: q.id || `q-${qIdx + 1}`,
-                  question: `According to the story, what was the direct result of completing **${targetW}**?`,
+                  question: `According to the story, what was the concrete outcome involving **${targetW}**?`,
                   options: [
-                    `It allowed the team to make genuine progress and stay on schedule.`,
-                    `It caused unexpected confusion and delayed the rest of the workday.`,
+                    `It allowed ${protagonist} and the team to make genuine progress on their goal.`,
+                    `It caused unexpected confusion and delayed the entire schedule.`,
                     `It forced everyone to postpone their plans until next month.`,
                     `It was completely ignored by the participants in the story.`,
                   ],
                   correctAnswer: 0,
-                  explanation: `In the narrative, managing this key priority helped the team make genuine progress and wrap up work on schedule.`,
+                  explanation: `In the narrative, managing this key priority helped ${protagonist} move the project forward effectively.`,
                 };
               }
               return q;
@@ -7100,7 +7264,7 @@ Required JSON Schema:
         }
       }
     } catch {
-      // Move immediately to next candidate model without lingering or blocking Express
+      // Move immediately to next candidate model
     }
   }
 
@@ -7157,12 +7321,7 @@ app.post('/api/homework/generate-ai', async (req, res) => {
     const cachedResponse = aiMemorizationCache.get(cacheKey);
     if (cachedResponse && Date.now() < cachedResponse.expiry) {
       const cachedText = cachedResponse.data?.homework?.readingPassage?.text || '';
-      const isBadCache =
-        cachedText.includes('to make sure everything stayed aligned') ||
-        cachedText.includes('quick to ') ||
-        cachedText.includes('refreshing weather') ||
-        cachedText.includes('storm terms');
-      if (!isBadCache) {
+      if (!isBadStoryText(cachedText)) {
         return res.json(cachedResponse.data);
       }
       aiMemorizationCache.delete(cacheKey);
@@ -7177,24 +7336,27 @@ app.post('/api/homework/generate-ai', async (req, res) => {
     let sentenceWritingPrompts: any[] = [];
     let readingPassage: any = null;
 
-    const isAiStoryCoherent =
+    if (
       aiResult &&
-      aiResult.readingPassage?.text &&
-      !aiResult.readingPassage.text.includes('quick to ') &&
-      !aiResult.readingPassage.text.includes('refreshing weather') &&
-      !aiResult.readingPassage.text.includes('storm terms') &&
-      !aiResult.readingPassage.text.includes('to make sure everything stayed aligned') &&
-      aiResult.readingPassage.text.length >= 80;
-
-    if (isAiStoryCoherent) {
+      Array.isArray(aiResult.matchingPairs) &&
+      aiResult.matchingPairs.length > 0 &&
+      Array.isArray(aiResult.fillInBlanks) &&
+      aiResult.fillInBlanks.length > 0
+    ) {
       matchingPairs = aiResult.matchingPairs;
       fillInBlanks = aiResult.fillInBlanks;
-      sentenceWritingPrompts = aiResult.sentenceWritingPrompts;
-      readingPassage = aiResult.readingPassage;
-    } else {
-      // High-quality contextual semantic synthesizer (100% natural, grammatically sound, coherent)
-      fillInBlanks = synthesizeFillInBlanks(cleanWords, wordDetails);
+      sentenceWritingPrompts = aiResult.sentenceWritingPrompts || [];
 
+      if (aiResult.readingPassage?.text && !isBadStoryText(aiResult.readingPassage.text)) {
+        readingPassage = aiResult.readingPassage;
+      } else {
+        // Generate a 100% original story via dedicated Gemini generator
+        readingPassage = await generatePart4StoryWithGemini(cleanWords, studentLevel, studentName);
+      }
+    }
+
+    // Fallbacks if any section was missing
+    if (!matchingPairs || matchingPairs.length === 0) {
       matchingPairs = cleanWords.map((w, idx) => {
         const detail = wordDetails.find((d: any) => d.word?.toLowerCase().trim() === w.toLowerCase().trim());
         const prof = profileWord(w, detail);
@@ -7205,7 +7367,13 @@ app.post('/api/homework/generate-ai', async (req, res) => {
           translation: prof.translationPt,
         };
       }).sort(() => 0.5 - Math.random());
+    }
 
+    if (!fillInBlanks || fillInBlanks.length === 0) {
+      fillInBlanks = synthesizeFillInBlanks(cleanWords, wordDetails);
+    }
+
+    if (!sentenceWritingPrompts || sentenceWritingPrompts.length === 0) {
       sentenceWritingPrompts = cleanWords.map((w, idx) => {
         const detail = wordDetails.find((d: any) => d.word?.toLowerCase().trim() === w.toLowerCase().trim());
         const prof = profileWord(w, detail);
@@ -7224,7 +7392,13 @@ app.post('/api/homework/generate-ai', async (req, res) => {
           levelInstruction: `Keep it natural and contextual (${levelMeta.labelEn} level).`,
         };
       });
+    }
 
+    if (!readingPassage || isBadStoryText(readingPassage.text)) {
+      readingPassage = await generatePart4StoryWithGemini(cleanWords, studentLevel, studentName);
+    }
+
+    if (!readingPassage || isBadStoryText(readingPassage.text)) {
       readingPassage = synthesizeCohesiveStoryAndQuestions({
         words: cleanWords,
         studentLevel,
@@ -7273,6 +7447,50 @@ app.post('/api/homework/generate-ai', async (req, res) => {
   } catch (error: any) {
     console.error('Error generating AI memorization activity:', error);
     res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+// Dedicated Endpoint for Part 4 (Mini-Story / Routine Reading & Interpretation)
+// Delivers 100% original story narratives and dynamic comprehension questions using Gemini API
+app.post(['/api/homework/generate-part4', '/api/homework/generate-story'], async (req, res) => {
+  try {
+    const {
+      words = [],
+      studentLevel = 'Intermediate',
+      studentName = 'Student',
+      wordDetails = [],
+    } = req.body;
+
+    const rawList = Array.isArray(words) ? words : [];
+    const cleanWords = Array.from(
+      new Set(
+        rawList
+          .map((item: any) => (typeof item === 'string' ? item : item?.word || '').trim())
+          .filter((w: string) => Boolean(w))
+      )
+    );
+
+    if (cleanWords.length === 0) {
+      return res.status(400).json({ error: 'No words provided for Part 4 generation' });
+    }
+
+    // Direct generation via dedicated Gemini Prompt Architecture
+    const aiStory = await generatePart4StoryWithGemini(cleanWords, studentLevel, studentName);
+    if (aiStory && !isBadStoryText(aiStory.text)) {
+      return res.json({ success: true, readingPassage: aiStory, isAiGenerated: true });
+    }
+
+    // Dynamic fallback ensuring zero template-reuse
+    const fallbackStory = synthesizeCohesiveStoryAndQuestions({
+      words: cleanWords,
+      studentLevel,
+      studentName,
+      wordDetails,
+    });
+    return res.json({ success: true, readingPassage: fallbackStory, isAiGenerated: false });
+  } catch (error: any) {
+    console.error('Error in /api/homework/generate-part4:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate Part 4 story' });
   }
 });
 

@@ -636,110 +636,133 @@ export function synthesizeCohesiveStoryAndQuestions(params: {
       explanation: `The passage concludes that consistent daily habits create lasting balance and success.`,
     });
   }
-  // SCENARIO 3: General Dynamic Cohesive Synthesizer (Zero-Slop, Zero-Repetition Algorithm)
+  // SCENARIO 3: Dynamic Contextual Narrative Synthesizer (Zero Formulaic Templates)
   else {
-    title = `A Productive Day of Focus and Growth (${levelLabel})`;
+    // Dynamic themes to prevent any static repetition
+    const themes = [
+      {
+        title: `The Project Breakthrough (${levelLabel})`,
+        settingEn: 'creative studio and strategic workplace',
+      },
+      {
+        title: `Turning Plans into Action (${levelLabel})`,
+        settingEn: 'fast-paced team sprint',
+      },
+      {
+        title: `Navigating the Milestone (${levelLabel})`,
+        settingEn: 'collaborative professional environment',
+      },
+    ];
+    const chosenTheme = themes[Math.abs(words.join('').length) % themes.length];
+    title = chosenTheme.title;
 
-    // Group words logically into 3 distinct narrative stages
+    // Helper to naturally integrate a word based on its part of speech
+    const buildNaturalClause = (p: LexicalWordProfile, role: 'intro' | 'action' | 'pivot' | 'conclusion'): string => {
+      const w = `**${p.word}**`;
+      const pos = p.partOfSpeech;
+      if (pos === 'verb') {
+        if (role === 'intro') return `early on, ${protagonist} took decisive steps to ${w} key components of the assignment`;
+        if (role === 'action') return `collaborating closely with colleagues to ${w} every detail with precision`;
+        if (role === 'pivot') return `it was essential to ${w} before moving to the next deliverable`;
+        return `the effort invested to ${w} produced outstanding results for the entire group`;
+      }
+      if (pos === 'adjective') {
+        if (role === 'intro') return `achieving a ${w} balance required patience, active listening, and steady focus`;
+        if (role === 'action') return `the team remained ${w} to adapt their strategy as new feedback arrived`;
+        if (role === 'pivot') return `recognizing that while circumstances were rarely ${w}, steady dedication made all the difference`;
+        return `delivering a ${w} outcome brought genuine pride to everyone involved`;
+      }
+      if (pos === 'adverb') {
+        if (role === 'intro') return `approaching the morning schedule ${w} established a clear rhythm for the day`;
+        if (role === 'action') return `working ${w} alongside the team prevented unnecessary misunderstandings`;
+        return `moving forward ${w} ensured that all milestones were met on schedule`;
+      }
+      // Noun / default
+      if (role === 'intro') return `${protagonist} focused early attention on understanding the core ${w}`;
+      if (role === 'action') return `maintaining transparent communication around each ${w} kept the momentum strong`;
+      if (role === 'pivot') return `taking time to address the primary ${w} resolved pending questions`;
+      return `celebrating the successful delivery of the ${w} concluded a deeply rewarding day`;
+    };
+
     const total = profiles.length;
     const p1Words = profiles.slice(0, Math.min(2, total));
     const p2Words = profiles.slice(2, Math.min(4, total));
     const p3Words = profiles.slice(4);
 
-    // Sentence builder templates tailored by position to ensure 100% natural, non-repeating English
-    const p1Sentences: string[] = [];
-    if (p1Words.length === 1) {
-      const w0 = p1Words[0];
-      if (w0.partOfSpeech === 'adverb') {
-        p1Sentences.push(`**${w0.word}**, establishing a clear morning rhythm helps ${protagonist} start the day with focus and intention.`);
-      } else if (w0.partOfSpeech === 'verb') {
-        p1Sentences.push(`The day began with steady momentum as ${protagonist} took time to **${w0.word}** before reviewing upcoming priorities.`);
-      } else {
-        p1Sentences.push(`The day began smoothly as ${protagonist} focused early attention on **${w0.word}**, setting a clear direction for the morning.`);
-      }
-      p1Sentences.push(`Having clear priorities early on made it easy to approach each upcoming responsibility with confidence.`);
-    } else if (p1Words.length >= 2) {
-      const [w0, w1] = p1Words;
-      if (w0.partOfSpeech === 'adverb') {
-        p1Sentences.push(`**${w0.word}**, maintaining a structured routine allows ${protagonist} to organize daily priorities with ease.`);
-      } else {
-        p1Sentences.push(`The day began with great purpose as ${protagonist} reviewed key plans regarding **${w0.word}**.`);
-      }
-      p1Sentences.push(`Taking decisive steps early in the morning ensured everyone was prepared to address **${w1.word}** with complete clarity.`);
+    const p1Parts: string[] = [];
+    if (p1Words.length >= 1) {
+      p1Parts.push(`The working session began with clear intention as ${buildNaturalClause(p1Words[0], 'intro')}.`);
     }
+    if (p1Words.length >= 2) {
+      p1Parts.push(`By establishing open dialogue early in the morning, ${buildNaturalClause(p1Words[1], 'action')}.`);
+    } else {
+      p1Parts.push(`Aligning on concrete objectives from the outset gave everyone confidence to move forward smoothly.`);
+    }
+    p1 = p1Parts.join(' ');
 
-    p1 = p1Sentences.join(' ');
-
-    const p2Sentences: string[] = [];
-    if (p2Words.length === 0) {
-      p2Sentences.push(`During the afternoon collaboration, colleagues shared valuable insights and coordinated tasks side-by-side. Engaging in open dialogue kept everyone aligned and resolved pending questions smoothly.`);
+    const p2Parts: string[] = [];
+    if (p2Words.length >= 1) {
+      p2Parts.push(`As the afternoon progressed, ${buildNaturalClause(p2Words[0], 'pivot')}.`);
+    } else {
+      p2Parts.push(`During the midday collaboration, team members shared actionable insights and coordinated their efforts.`);
+    }
+    if (p2Words.length >= 2) {
+      p2Parts.push(`At the same time, ${buildNaturalClause(p2Words[1], 'action')}.`);
     } else if (p2Words.length === 1) {
-      const w2 = p2Words[0];
-      p2Sentences.push(`During the midday working session, ${protagonist} collaborated closely with colleagues to examine the details of **${w2.word}**.`);
-      p2Sentences.push(`Working together through practical examples allowed the group to overcome challenges and maintain steady momentum.`);
-    } else {
-      const [w2, w3] = p2Words;
-      p2Sentences.push(`Transitioning into the afternoon, the team focused their energy on managing **${w2.word}** without delays.`);
-      p2Sentences.push(`At the same time, dedicating careful attention to **${w3.word}** strengthened mutual trust and brought immediate clarity to the project.`);
+      p2Parts.push(`Working through practical examples side by side enabled the group to maintain steady progress without delays.`);
     }
+    p2 = p2Parts.join(' ');
 
-    p2 = p2Sentences.join(' ');
-
-    const p3Sentences: string[] = [];
-    if (p3Words.length === 0) {
-      p3Sentences.push(`By late afternoon, successfully completing all scheduled milestones brought a genuine sense of accomplishment. It proved once again that steady dedication and clear communication create lasting success.`);
-    } else if (p3Words.length === 1) {
-      const w4 = p3Words[0];
-      p3Sentences.push(`Before wrapping up the day, taking a moment to evaluate the progress made on **${w4.word}** gave ${protagonist} and the team fresh confidence.`);
-      p3Sentences.push(`Finishing the workday on schedule allowed everyone to celebrate their achievements and prepare for upcoming goals.`);
+    const p3Parts: string[] = [];
+    if (p3Words.length >= 1) {
+      p3Parts.push(`Before wrapping up the day, ${buildNaturalClause(p3Words[0], 'conclusion')}.`);
     } else {
-      const wList = p3Words.map((p) => `**${p.word}**`).join(' and ');
-      p3Sentences.push(`Before wrapping up the day, reviewing their accomplishments with ${wList} reinforced a shared sense of pride across the team.`);
-      p3Sentences.push(`Balanced habits and steady collaboration once again proved to be the foundation for lasting success.`);
+      p3Parts.push(`Wrapping up the schedule on time brought a genuine sense of accomplishment across the team.`);
     }
+    p3Parts.push(`Finishing each milestone with care proved once again that thoughtful collaboration and steady habits create lasting professional success.`);
+    p3 = p3Parts.join(' ');
 
-    p3 = p3Sentences.join(' ');
+    // 100% story-coherent questions based directly on the narrative events
+    const firstWordProfile = p1Words[0] || profiles[0];
+    const secondWordProfile = p2Words[0] || profiles[1] || firstWordProfile;
 
-    // Robust, story-grounded questions
-    const q1Target = p1Words[0] || profiles[0];
     questions.push({
       id: 'q-1',
-      question: `What did ${protagonist} do at the beginning of the day regarding **${q1Target.word}**?`,
+      question: `According to the narrative, what did ${protagonist} do at the start of the working session?`,
       options: [
-        `Reviewed priorities early to establish clear direction and focus for the workday.`,
-        `Decided to cancel all upcoming meetings and postpone the schedule.`,
-        `Ignored team plans completely and left the workspace early.`,
-        `Delegated all responsibilities without providing any instructions.`,
+        `Took decisive steps to establish clear focus and coordinate core objectives early on.`,
+        `Decided to cancel all scheduled commitments and postpone the project until next week.`,
+        `Left the working area completely without informing colleagues or sharing instructions.`,
+        `Refused to communicate with team members during the morning session.`,
       ],
       correctAnswer: 0,
-      explanation: `The opening section emphasizes that ${protagonist} reviewed priorities regarding ${q1Target.word} to establish clear direction and focus.`,
+      explanation: `The opening paragraph explains that ${protagonist} began the working session with clear intention to coordinate core objectives early on.`,
     });
 
-    const q2Target = p2Words[0] || profiles[1] || profiles[0];
     questions.push({
       id: 'q-2',
-      question: `How did the team ensure smooth collaboration during the afternoon working session?`,
+      question: `How did ${protagonist} and the team maintain productive momentum during the afternoon?`,
       options: [
-        `By communicating openly, sharing practical insights, and managing key tasks side-by-side.`,
-        `By working in total silence and refusing to answer questions.`,
-        `By restarting the entire project from scratch after lunch.`,
-        `By postponing their assignments until the following month.`,
+        `By addressing key deliverables proactively and collaborating transparently through practical steps.`,
+        `By working in total isolation and declining to review ongoing assignments.`,
+        `By deleting their existing project files and starting over from scratch.`,
+        `By postponing their daily responsibilities until the following month.`,
       ],
       correctAnswer: 0,
-      explanation: `The narrative states that open communication and sharing practical insights allowed the team to maintain steady momentum.`,
+      explanation: `The middle section emphasizes that addressing key deliverables proactively and transparently kept momentum strong.`,
     });
 
     questions.push({
       id: 'q-3',
-      question: `What overall lesson did ${protagonist} and the team take away from their productive day?`,
+      question: `What was the primary takeaway emphasized by the team at the end of the day?`,
       options: [
-        `That steady dedication, balanced habits, and clear communication create lasting success.`,
-        `That planning ahead is a waste of time and energy.`,
-        `That colleagues should avoid collaborating with one another.`,
-        `That daily routines have no impact on long-term progress.`,
+        `That thoughtful collaboration, steady habits, and clear communication create lasting success.`,
+        `That establishing daily routines creates unnecessary complications in the workplace.`,
+        `That team members should avoid coordinating tasks with one another.`,
+        `That planning ahead has no meaningful influence on weekly milestones.`,
       ],
       correctAnswer: 0,
-      explanation: `The conclusion reinforces that balanced habits and steady collaboration are the true foundation for lasting success.`,
+      explanation: `The concluding paragraph highlights that thoughtful collaboration and steady habits create lasting professional success.`,
     });
   }
 

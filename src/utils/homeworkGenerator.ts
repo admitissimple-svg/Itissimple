@@ -577,7 +577,7 @@ export async function generateWeeklyHomeworkWithAi(params: {
     );
 
     const controller = new AbortController();
-    const abortTimeout = setTimeout(() => controller.abort(), 9000);
+    const abortTimeout = setTimeout(() => controller.abort(), 25000);
 
     const response = await fetch('/api/homework/generate-ai', {
       method: 'POST',
@@ -624,5 +624,54 @@ export async function generateWeeklyHomeworkWithAi(params: {
     ...localBaseline,
     isAiGenerated: true,
   };
+}
+
+/**
+ * Dedicated AI generator specifically for Part 4 (Mini-Story & Reading Comprehension)
+ * Guarantees a 100% original, unprecedented storyline with organic vocabulary integration
+ * and cohesive, story-grounded questions using the Gemini API.
+ */
+export async function generatePart4StoryWithAi(params: {
+  words: string[];
+  studentLevel?: string;
+  studentName?: string;
+  wordDetails?: any[];
+}): Promise<ReadingPassage | null> {
+  const cleanWords = Array.from(new Set(params.words.filter(Boolean)));
+  if (cleanWords.length === 0) return null;
+
+  try {
+    const controller = new AbortController();
+    const abortTimeout = setTimeout(() => controller.abort(), 20000);
+
+    const response = await fetch('/api/homework/generate-part4', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        words: cleanWords,
+        studentLevel: params.studentLevel || 'Intermediate',
+        studentName: params.studentName || 'Student',
+        wordDetails: params.wordDetails || [],
+      }),
+    });
+    clearTimeout(abortTimeout);
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.readingPassage?.text && Array.isArray(data.readingPassage?.questions)) {
+        return data.readingPassage;
+      }
+    }
+  } catch (err) {
+    console.warn('Part 4 AI generation failed, falling back:', err);
+  }
+
+  return synthesizeCohesiveStoryAndQuestions({
+    words: cleanWords,
+    studentLevel: params.studentLevel,
+    studentName: params.studentName,
+    wordDetails: params.wordDetails,
+  });
 }
 

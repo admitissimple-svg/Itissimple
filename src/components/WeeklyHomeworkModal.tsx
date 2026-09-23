@@ -25,7 +25,7 @@ import { WeeklyHomeworkData, Language, HomeworkAiEvaluation, SentenceWritingProm
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi, evaluateWeeklyHomeworkApi } from '../utils/writingChecker';
 import { getMemorizationTranslations } from '../utils/i18n/memorizationActivity';
-import { getDailyMemorizationSchedule } from '../utils/homeworkGenerator';
+import { getDailyMemorizationSchedule, generatePart4StoryWithAi } from '../utils/homeworkGenerator';
 
 interface WeeklyHomeworkModalProps {
   isOpen: boolean;
@@ -336,6 +336,39 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   const [sentenceFeedbacks, setSentenceFeedbacks] = useState<Record<string, any>>({});
   const [isCheckingSentence, setIsCheckingSentence] = useState<Record<string, boolean>>({});
   const [submittedFeedbackToast, setSubmittedFeedbackToast] = useState<string | null>(null);
+  const [isRegeneratingPart4, setIsRegeneratingPart4] = useState<boolean>(false);
+
+  const handleRegeneratePart4Story = async () => {
+    if (isRegeneratingPart4) return;
+    const currentWords = homework?.vocabularyList?.map((v) => v.word) || [];
+    if (currentWords.length === 0) return;
+
+    setIsRegeneratingPart4(true);
+    try {
+      const newPassage = await generatePart4StoryWithAi({
+        words: currentWords,
+        studentLevel: homework.studentLevel,
+        studentName: homework.studentName,
+        wordDetails: homework.vocabularyList,
+      });
+      if (newPassage && newPassage.text) {
+        const updated: WeeklyHomeworkData = {
+          ...homework,
+          readingPassage: newPassage,
+          studentAnswers: {
+            ...(homework.studentAnswers || {}),
+            quizAnswers: {},
+          },
+        };
+        setQuizAnswers({});
+        onSaveProgress(updated);
+      }
+    } catch (err) {
+      console.error('Failed to regenerate Part 4 story:', err);
+    } finally {
+      setIsRegeneratingPart4(false);
+    }
+  };
 
   const handleCompleteTodayPart = () => {
     const updated: WeeklyHomeworkData = {
@@ -1364,6 +1397,23 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                       <p className="text-xs text-slate-500 mt-0.5">
                         {memT.part4.instruction}
                       </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={isRegeneratingPart4 || !homework.vocabularyList?.length}
+                        onClick={handleRegeneratePart4Story}
+                        className="px-2.5 py-1 bg-white hover:bg-slate-100 text-[#000035] rounded-lg border border-slate-200 transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer disabled:opacity-50 shadow-2xs"
+                        title={isEn ? "Generate a 100% original, unprecedented story with Gemini AI" : "Gerar história 100% inédita com Gemini AI"}
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 text-[#1C4C96] ${isRegeneratingPart4 ? 'animate-spin' : ''}`} />
+                        <span>
+                          {isRegeneratingPart4
+                            ? (isEn ? 'Crafting new story...' : 'Criando história...')
+                            : (isEn ? 'New Original Story (AI)' : 'Nova História Inédita (IA)')}
+                        </span>
+                      </button>
                     </div>
                   </div>
 

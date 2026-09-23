@@ -450,11 +450,18 @@ export default function App() {
     setWeeklyHomework((prev) => {
       if (prev?.isAiGenerated && !prev.isEmpty && prev.totalWordsCollected > 0 && prev.targetDay === homeworkTargetDay) {
         const prevText = prev.readingPassage?.text || '';
+        const prevTextLower = prevText.toLowerCase();
         const isBadOldStory =
           prevText.includes('to make sure everything stayed aligned') ||
           prevText.includes('quick to ') ||
           prevText.includes('refreshing weather') ||
           prevText.includes('storm terms') ||
+          prevTextLower.includes('the day began with great purpose as') ||
+          prevTextLower.includes('reviewed key plans regarding') ||
+          prevTextLower.includes('a productive day of focus and growth') ||
+          prevTextLower.includes('address **') ||
+          prevTextLower.includes('managing **') ||
+          prevTextLower.includes('progress made on **') ||
           prevText.length < 80;
 
         if (!isBadOldStory) {
