@@ -6793,12 +6793,17 @@ async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Pro
   for (const model of modelsToTry) {
     let timerId: any = null;
     try {
+      const config: any = {
+        responseMimeType: 'application/json',
+      };
+      if (model.includes('gemini-3')) {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      }
+
       const generatePromise = ai.models.generateContent({
         model,
         contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
+        config,
       });
 
       const timeoutPromise = new Promise((_, reject) => {
@@ -7281,36 +7286,50 @@ app.post('/api/email-logs', (req, res) => {
   res.json({ success: true });
 });
 
-// 12. Writing / Grammar Evaluation via Gemini API with Level Adaptation & Gentle Feedback
+// 12. Writing / Grammar Evaluation via Gemini API with Target Word & Trigger Challenge Evaluation
 app.post('/api/check-writing', async (req, res) => {
-  const { words = [], sentence = '', activityName = 'Routine', level = 'iniciante' } = req.body;
+  const {
+    words = [],
+    sentence = '',
+    activityName = 'Weekly Memorization Activity',
+    level = 'iniciante',
+    targetWord = '',
+    instruction = '',
+    levelInstruction = '',
+    language = 'pt',
+  } = req.body;
   const levelMeta = normalizeStudentLevel(level);
+  const allTargetWords = targetWord ? Array.from(new Set([targetWord, ...words])) : words;
+  const mainTarget = targetWord || allTargetWords[0] || '';
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
-    const prompt = `You are a supportive, expert English teacher at "It's Simple".
-Analyze the student's written sentence and target vocabulary, calibrated to their proficiency level:
+    const prompt = `You are an encouraging, expert English teacher at "It's Simple".
+Evaluate the student's written sentence for Part 3: Sentence Writing (Weekly Memorization Activity), calibrated to their proficiency level:
 
 STUDENT PROFICIENCY LEVEL: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
-Level Focus: ${levelMeta.grammarFocusEn}
-
-INPUTS:
-Words to include: ${JSON.stringify(words)}
+Target Vocabulary to use: ${JSON.stringify(allTargetWords)}
+Situation / Prompt Instruction: "${instruction || 'Write an authentic sentence in a daily situation'}"
+Specific Challenge / Trigger required: "${levelInstruction || 'Form a natural, complete sentence'}"
 Student's sentence: "${sentence}"
-Context: ${activityName}
 
-PEDAGOGICAL EVALUATION GUIDELINES ALIGNED TO LEVEL:
-- If Beginner: Be very encouraging, celebrate simple clear Subject + Verb + Object sentences, gently fix capitalization, spelling or simple punctuation without overwhelming the student.
-- If Intermediate: Check clause connections, verb tenses (e.g. past vs present perfect), prepositions, and natural phrasing. Suggest connectors ('because', 'although', 'so') if appropriate.
-- If Advanced: Evaluate stylistic flow, precision of target word collocation, natural idioms, and executive/expressive tone.
+EVALUATION OBJECTIVES:
+1. Target Word Check: Did the student use "${mainTarget}" (or an acceptable inflected form)?
+2. Challenge / Trigger Check: Did the student follow the required challenge/trigger "${levelInstruction}"? (e.g. if asked to use 'because' or 'since' to explain reason, did they? If modal like 'might'/'should', did they? If 'whenever', did they?)
+3. Context & Coherence: Does the sentence make sense and fit the requested situation?
+4. Grammar, Spelling & Natural Phrasing: Are capitalization, punctuation, verb tense, and syntax correct?
 
-Provide constructive, warm, non-judgmental explanations in both Portuguese (explanationPt) and English (explanationEn).
-If there is an error, offer a natural correctedSentence and a helpful level tip (levelTipsPt, levelTipsEn).
+Provide constructive, warm pedagogical feedback in both Portuguese and English.
+If the sentence is good, celebrate it! If there are improvements or missing triggers, give gentle feedback and provide an enhanced version in "correctedSentence".
 
 Output STRICT JSON matching this schema:
 {
   "hasAnyError": boolean,
   "isCorrect": boolean,
+  "usedTargetWord": boolean,
+  "usedTrigger": boolean,
+  "targetWordFeedback": "string",
+  "triggerFeedback": "string",
   "wordFeedbacks": [
     {
       "original": "string",
@@ -7334,9 +7353,9 @@ Output STRICT JSON matching this schema:
   "levelTipsEn": "string"
 }`;
 
-    const parsed = await callGeminiSafeJson(prompt, 9000);
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.wordFeedbacks)) {
-      parsed.isCorrect = !parsed.hasAnyError;
+    const parsed = await callGeminiSafeJson(prompt, 10000);
+    if (parsed && typeof parsed === 'object') {
+      parsed.isCorrect = typeof parsed.isCorrect === 'boolean' ? parsed.isCorrect : !parsed.hasAnyError;
       parsed.explanation =
         parsed.explanation ||
         parsed.sentenceFeedback?.explanationPt ||
@@ -7346,8 +7365,43 @@ Output STRICT JSON matching this schema:
     }
   }
 
-  // Fallback heuristic with level tips
-  const wordFeedbacks = (words as string[]).map((w: string) => ({
+  // Fallback heuristic with level tips and trigger detection
+  const cleanTarget = mainTarget.trim().toLowerCase();
+  const lowerSentence = (sentence || '').toLowerCase().trim();
+  const targetRoot = cleanTarget.replace(/(ing|ed|s|es|d)$/i, '');
+  const usedTargetWord = Boolean(
+    cleanTarget &&
+    (lowerSentence.includes(cleanTarget) || (targetRoot.length >= 4 && lowerSentence.includes(targetRoot)))
+  );
+
+  let usedTrigger = true;
+  let triggerFeedback = '';
+  if (levelInstruction && levelInstruction.trim()) {
+    const triggerLower = levelInstruction.toLowerCase();
+    if (triggerLower.includes('because') || triggerLower.includes('since')) {
+      usedTrigger = /\b(because|since)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: você usou "because" ou "since" para justificar o motivo.'
+        : 'Desafio: lembre-se de usar "because" ou "since" para explicar a sua razão.';
+    } else if (triggerLower.includes('whenever')) {
+      usedTrigger = /\bwhenever\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: você aplicou "whenever" para descrever um hábito.'
+        : 'Desafio: inclua o conectivo "whenever" para indicar frequência ou hábito.';
+    } else if (triggerLower.includes('modal') || triggerLower.includes('might') || triggerLower.includes('should')) {
+      usedTrigger = /\b(might|should|could|would|can|must)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: verbo modal aplicado adequadamente.'
+        : 'Desafio: use um verbo modal como "might", "should" ou "could".';
+    } else if (triggerLower.includes('conditional') || triggerLower.includes('if')) {
+      usedTrigger = /\b(if|unless)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: oração condicional aplicada.'
+        : 'Desafio: formule uma condição usando "if" ou "unless".';
+    }
+  }
+
+  const wordFeedbacks = allTargetWords.map((w: string) => ({
     original: w,
     hasError: false,
     corrected: w,
@@ -7378,9 +7432,17 @@ Output STRICT JSON matching this schema:
     }
   }
 
+  const hasAnyError = hasSentenceError || !usedTargetWord || !usedTrigger;
+
   res.json({
-    hasAnyError: hasSentenceError,
-    isCorrect: !hasSentenceError,
+    hasAnyError,
+    isCorrect: !hasAnyError,
+    usedTargetWord,
+    usedTrigger,
+    targetWordFeedback: usedTargetWord
+      ? `Palavra-alvo "${mainTarget}" aplicada corretamente.`
+      : `Inclua a palavra "${mainTarget}" na sua frase.`,
+    triggerFeedback,
     wordFeedbacks,
     sentenceFeedback: sentence
       ? {
@@ -7393,16 +7455,20 @@ Output STRICT JSON matching this schema:
       : undefined,
     correctedSentence,
     explanation: explanationPt,
-    overallSummaryPt: isBeg
-      ? 'Ótimo trabalho! Sua frase está clara e direta para o nível iniciante.'
-      : isAdv
-      ? 'Excelente domínio! Frase com ótima escolha lexical e naturalidade.'
-      : 'Muito bom! Frase natural e adequada ao nível intermediário.',
-    overallSummaryEn: isBeg
-      ? 'Great job! Your sentence is clear and direct for beginner level.'
-      : isAdv
-      ? 'Outstanding command! Expressive, natural, and fluent.'
-      : 'Well done! Natural phrasing suitable for intermediate level.',
+    overallSummaryPt: !hasAnyError
+      ? `Muito bom! Frase natural, com a palavra "${mainTarget}" e o gatilho cumprido.`
+      : !usedTargetWord
+      ? `Por favor, inclua a palavra "${mainTarget}" na sua frase.`
+      : !usedTrigger
+      ? triggerFeedback || 'Ajuste o gatilho solicitado na instrução.'
+      : 'Revisamos a pontuação e gramática da sua frase.',
+    overallSummaryEn: !hasAnyError
+      ? `Great job! Natural sentence using "${mainTarget}" and fulfilling the challenge trigger.`
+      : !usedTargetWord
+      ? `Please incorporate the target word "${mainTarget}" into your sentence.`
+      : !usedTrigger
+      ? 'Review the challenge trigger specified in the prompt.'
+      : 'Reviewed punctuation and sentence grammar.',
     levelTipsPt: isBeg
       ? 'Dica Iniciante: Lembre-se sempre de manter Sujeito + Verbo + Complemento.'
       : isAdv

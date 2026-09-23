@@ -2,9 +2,13 @@ import { EnglishLevel, WritingEvaluationResult, WordFeedback, SentenceFeedback, 
 
 export interface CheckWritingParams {
   words?: string[];
+  targetWord?: string;
   sentence?: string;
   activityName?: string;
   level?: EnglishLevel | string;
+  instruction?: string;
+  levelInstruction?: string;
+  language?: string;
 }
 
 export async function checkStudentWritingApi(
@@ -176,8 +180,9 @@ export async function evaluateWeeklyHomeworkApi(params: {
 }
 
 function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
-  const { words = [], sentence = '', level = 'iniciante' } = params;
+  const { words = [], targetWord = '', sentence = '', level = 'iniciante', levelInstruction = '', instruction = '', language = 'pt' } = params;
 
+  const allWords = targetWord ? Array.from(new Set([targetWord, ...words])) : words;
   const wordFeedbacks: WordFeedback[] = [];
 
   // Common spelling errors map for routine vocabulary
@@ -196,7 +201,7 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     'morrning': { correct: 'morning', explPt: '"Morning" tem apenas um "r".', explEn: '"Morning" has a single "r".' },
   };
 
-  for (const w of words) {
+  for (const w of allWords) {
     const clean = w.trim();
     if (!clean) continue;
     const lower = clean.toLowerCase();
@@ -225,8 +230,54 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
   let correctedSentence = sentence;
   let hasSentenceError = false;
 
-  if (sentence && sentence.trim().length >= 4) {
-    const sClean = sentence.trim();
+  const sClean = sentence.trim();
+  const lowerSentence = sClean.toLowerCase();
+
+  // Target word presence check
+  const mainTarget = targetWord || (allWords[0] || '');
+  const cleanTarget = mainTarget.trim().toLowerCase();
+  const targetRoot = cleanTarget.replace(/(ing|ed|s|es|d)$/i, '');
+  const usedTargetWord = Boolean(
+    cleanTarget &&
+    (lowerSentence.includes(cleanTarget) || (targetRoot.length >= 4 && lowerSentence.includes(targetRoot)))
+  );
+
+  // Trigger check based on levelInstruction
+  let usedTrigger: boolean | undefined = undefined;
+  let triggerFeedback = '';
+  if (levelInstruction && levelInstruction.trim()) {
+    const triggerLower = levelInstruction.toLowerCase();
+    if (triggerLower.includes('because') || triggerLower.includes('since')) {
+      usedTrigger = /\b(because|since)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: você usou "because" ou "since" para justificar o motivo.'
+        : 'Desafio: lembre-se de usar "because" ou "since" para explicar a sua razão.';
+    } else if (triggerLower.includes('whenever')) {
+      usedTrigger = /\bwhenever\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: você aplicou "whenever" para descrever um hábito.'
+        : 'Desafio: inclua o conectivo "whenever" para indicar frequência ou hábito.';
+    } else if (triggerLower.includes('modal') || triggerLower.includes('might') || triggerLower.includes('should')) {
+      usedTrigger = /\b(might|should|could|would|can|must)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: verbo modal aplicado adequadamente.'
+        : 'Desafio: use um verbo modal como "might", "should" ou "could".';
+    } else if (triggerLower.includes('conditional') || triggerLower.includes('if')) {
+      usedTrigger = /\b(if|unless)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: oração condicional aplicada.'
+        : 'Desafio: formule uma condição usando "if" ou "unless".';
+    } else if (triggerLower.includes('connector') || triggerLower.includes('although')) {
+      usedTrigger = /\b(although|though|however|while|but)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: conectivo de transição utilizado.'
+        : 'Desafio: conecte as ideias usando um conectivo como "although" ou "while".';
+    } else {
+      usedTrigger = true;
+    }
+  }
+
+  if (sClean.length >= 4) {
     let sFixed = sClean;
 
     // Check basic capitalization and punctuation
@@ -265,34 +316,68 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
 
     correctedSentence = sFixed;
 
+    const explanationPt = hasSentenceError
+      ? 'Ajustamos a pontuação, maiúscula inicial ou concordância dos termos.'
+      : !usedTargetWord && mainTarget
+      ? `A frase está bem escrita, mas certifique-se de incluir a palavra-alvo "${mainTarget}".`
+      : 'Sua frase está gramaticalmente correta, fluente e natural em inglês.';
+
+    const explanationEn = hasSentenceError
+      ? 'Adjusted punctuation, initial capitalization, or natural word phrasing.'
+      : !usedTargetWord && mainTarget
+      ? `Good sentence, but remember to explicitly use the target word "${mainTarget}".`
+      : 'Your sentence is grammatically sound, natural, and fluent.';
+
     sentenceFeedback = {
       original: sClean,
-      hasError: hasSentenceError,
+      hasError: hasSentenceError || (mainTarget ? !usedTargetWord : false),
       corrected: sFixed,
-      explanationPt: hasSentenceError
-        ? 'Ajustamos a pontuação, maiúscula inicial e a concordância natural dos termos.'
-        : 'Sua frase está gramaticalmente correta, fluente e natural em inglês.',
-      explanationEn: hasSentenceError
-        ? 'Adjusted punctuation, initial capitalization, and natural phrase phrasing.'
-        : 'Your sentence is grammatically sound, natural, and fluent.',
+      explanationPt,
+      explanationEn,
     };
   }
 
-  const hasAnyError = wordFeedbacks.some((wf) => wf.hasError) || hasSentenceError;
+  const hasAnyError =
+    wordFeedbacks.some((wf) => wf.hasError) ||
+    hasSentenceError ||
+    (mainTarget ? !usedTargetWord : false) ||
+    (usedTrigger === false);
 
   const lvlStr = String(level).toLowerCase();
   const isAdv = lvlStr.includes('avanc') || lvlStr.includes('advan');
   const isBeg = lvlStr.includes('inic') || lvlStr.includes('begin');
 
+  const targetWordFeedback = mainTarget
+    ? usedTargetWord
+      ? `Palavra-alvo "${mainTarget}" aplicada com sucesso.`
+      : `Lembre-se de incorporar a palavra "${mainTarget}" na frase.`
+    : '';
+
   return {
     hasAnyError,
     isCorrect: !hasAnyError,
+    usedTargetWord,
+    usedTrigger,
+    targetWordFeedback,
+    triggerFeedback,
     wordFeedbacks,
     sentenceFeedback,
     correctedSentence,
-    explanation: sentenceFeedback?.explanationPt || (hasAnyError ? 'Identificamos correções sugeridas.' : 'Tudo correto!'),
-    overallSummaryPt: hasAnyError ? 'Revisamos o vocabulário e a estrutura da frase.' : 'Excelente! Vocabulário e frase sem erros.',
-    overallSummaryEn: hasAnyError ? 'Reviewed vocabulary and sentence structure.' : 'Outstanding! Everything is accurate.',
+    explanation: sentenceFeedback?.explanationPt || (hasAnyError ? 'Identificamos sugestões para sua frase.' : 'Tudo correto!'),
+    overallSummaryPt: !hasAnyError
+      ? `Excelente! Você utilizou "${mainTarget || 'a palavra-alvo'}" com precisão e cumpriu o desafio pedagógico.`
+      : !usedTargetWord
+      ? `Inclua a palavra-alvo "${mainTarget}" na sua frase para validar a atividade.`
+      : usedTrigger === false
+      ? triggerFeedback || 'Revise o gatilho solicitado para a frase.'
+      : 'Revisamos a pontuação e estrutura da frase.',
+    overallSummaryEn: !hasAnyError
+      ? `Outstanding! You naturally applied "${mainTarget || 'target word'}" and fulfilled the pedagogical challenge.`
+      : !usedTargetWord
+      ? `Please include the target word "${mainTarget}" in your sentence.`
+      : usedTrigger === false
+      ? 'Review the requested challenge trigger in your sentence.'
+      : 'Reviewed punctuation and sentence flow.',
     levelTipsPt: isBeg
       ? 'Dica Iniciante: Lembre-se de manter Sujeito + Verbo + Complemento.'
       : isAdv

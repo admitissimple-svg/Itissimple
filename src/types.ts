@@ -624,4 +624,8 @@ export interface WritingEvaluationResult {
   overallSummaryEn?: string;
   levelTipsPt?: string;
   levelTipsEn?: string;
+  usedTargetWord?: boolean;
+  usedTrigger?: boolean;
+  targetWordFeedback?: string;
+  triggerFeedback?: string;
 }

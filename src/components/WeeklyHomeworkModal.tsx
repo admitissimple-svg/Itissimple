@@ -21,7 +21,7 @@ import {
   CheckSquare,
   ChevronRight,
 } from 'lucide-react';
-import { WeeklyHomeworkData, Language, HomeworkAiEvaluation } from '../types';
+import { WeeklyHomeworkData, Language, HomeworkAiEvaluation, SentenceWritingPrompt } from '../types';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi, evaluateWeeklyHomeworkApi } from '../utils/writingChecker';
 import { getMemorizationTranslations } from '../utils/i18n/memorizationActivity';
@@ -126,23 +126,108 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   const [isCheckingSentence, setIsCheckingSentence] = useState<Record<string, boolean>>({});
   const [submittedFeedbackToast, setSubmittedFeedbackToast] = useState<string | null>(null);
 
-  const handleCheckSentence = async (word: string) => {
-    const text = sentenceAnswers[word];
-    if (!text || !text.trim()) return;
+  const handleCheckSentence = async (prompt: SentenceWritingPrompt, textOverride?: string) => {
+    const wordKey = prompt.word;
+    const directVal = textOverride !== undefined
+      ? textOverride
+      : (sentenceAnswers[wordKey] || sentenceAnswers[wordKey.trim()] || sentenceAnswers[wordKey.toUpperCase()] || sentenceAnswers[wordKey.toLowerCase()] || '');
+    const cleanText = directVal.trim();
 
-    setIsCheckingSentence((prev) => ({ ...prev, [word]: true }));
+    if (!cleanText) {
+      setSubmittedFeedbackToast(
+        currentLanguage === 'en'
+          ? `Please write your sentence for "${wordKey}" before checking with AI.`
+          : `Por favor, digite sua frase para "${wordKey}" antes de verificar com a IA.`
+      );
+      setTimeout(() => setSubmittedFeedbackToast(null), 3500);
+      return;
+    }
+
+    setIsCheckingSentence((prev) => ({
+      ...prev,
+      [wordKey]: true,
+      [wordKey.toUpperCase()]: true,
+      [wordKey.toLowerCase()]: true,
+    }));
+
     try {
+      const promptInstruction =
+        currentLanguage === 'pt' && prompt.hintPt
+          ? prompt.hintPt
+          : currentLanguage === 'en' && prompt.hintEn
+          ? prompt.hintEn
+          : prompt.hint || '';
+
       const result = await checkStudentWritingApi({
-        sentence: text.trim(),
-        words: [word],
-        activityName: 'Weekly Homework',
-        level: homework?.studentLevel || 'Beginner',
+        sentence: cleanText,
+        targetWord: wordKey,
+        words: [wordKey],
+        instruction: promptInstruction,
+        levelInstruction: prompt.levelInstruction || '',
+        activityName: 'Weekly Memorization Activity - Part 3',
+        level: homework?.studentLevel || 'Intermediate',
+        language: currentLanguage,
       });
-      setSentenceFeedbacks((prev) => ({ ...prev, [word]: result }));
-    } catch {
-      // fallback handled in API
+
+      setSentenceFeedbacks((prev) => ({
+        ...prev,
+        [wordKey]: result,
+        [wordKey.toUpperCase()]: result,
+        [wordKey.toLowerCase()]: result,
+      }));
+
+      // Update state & persist student answers
+      const updatedSentences = {
+        ...sentenceAnswers,
+        [wordKey]: cleanText,
+      };
+      setSentenceAnswers(updatedSentences);
+
+      if (onSaveProgress) {
+        onSaveProgress({
+          ...homework,
+          studentAnswers: {
+            ...homework.studentAnswers,
+            sentences: {
+              ...(homework.studentAnswers?.sentences || {}),
+              ...updatedSentences,
+            },
+          },
+        });
+      }
+
+      const isOk = result?.isCorrect ?? !result?.hasAnyError;
+      setSubmittedFeedbackToast(
+        currentLanguage === 'en'
+          ? isOk ? `✓ Sentence evaluated for "${wordKey}"!` : `💡 Feedback ready for "${wordKey}".`
+          : isOk ? `✓ Frase analisada com sucesso para "${wordKey}"!` : `💡 Sugestões da IA prontas para "${wordKey}".`
+      );
+      setTimeout(() => setSubmittedFeedbackToast(null), 3500);
+    } catch (err) {
+      console.error(`Check error for ${wordKey}:`, err);
+      const fallbackResult = {
+        hasAnyError: false,
+        isCorrect: true,
+        wordFeedbacks: [],
+        sentenceFeedback: {
+          original: cleanText,
+          hasError: false,
+          corrected: cleanText,
+          explanationPt: `Frase registrada para "${wordKey}".`,
+          explanationEn: `Sentence recorded for "${wordKey}".`,
+        },
+        correctedSentence: cleanText,
+        overallSummaryPt: `Frase registrada com sucesso para "${wordKey}".`,
+        overallSummaryEn: `Sentence saved successfully for "${wordKey}".`,
+      };
+      setSentenceFeedbacks((prev) => ({ ...prev, [wordKey]: fallbackResult }));
     } finally {
-      setIsCheckingSentence((prev) => ({ ...prev, [word]: false }));
+      setIsCheckingSentence((prev) => ({
+        ...prev,
+        [wordKey]: false,
+        [wordKey.toUpperCase()]: false,
+        [wordKey.toLowerCase()]: false,
+      }));
     }
   };
 
@@ -724,14 +809,28 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
                   <div className="space-y-3">
                     {homework.sentenceWritingPrompts.map((prompt, idx) => {
-                      const val = sentenceAnswers[prompt.word] || '';
-                      const feedback = sentenceFeedbacks[prompt.word];
-                      const isChecking = isCheckingSentence[prompt.word];
+                      const promptWord = prompt.word;
+                      const val =
+                        sentenceAnswers[promptWord] ??
+                        sentenceAnswers[promptWord.trim()] ??
+                        sentenceAnswers[promptWord.toUpperCase()] ??
+                        sentenceAnswers[promptWord.toLowerCase()] ??
+                        '';
+                      const feedback =
+                        sentenceFeedbacks[promptWord] ||
+                        sentenceFeedbacks[promptWord.trim()] ||
+                        sentenceFeedbacks[promptWord.toUpperCase()] ||
+                        sentenceFeedbacks[promptWord.toLowerCase()];
+                      const isChecking = Boolean(
+                        isCheckingSentence[promptWord] ||
+                        isCheckingSentence[promptWord.trim()] ||
+                        isCheckingSentence[promptWord.toUpperCase()]
+                      );
 
                       return (
                         <div
                           key={idx}
-                          className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2.5"
+                          className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2.5 transition shadow-2xs hover:border-slate-300"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -754,73 +853,155 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
                             <button
                               type="button"
-                              onClick={() => handleCheckSentence(prompt.word)}
+                              onClick={() => handleCheckSentence(prompt, val)}
                               disabled={isChecking || !val.trim()}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
-                                val.trim()
-                                  ? 'bg-[#000035] text-white hover:bg-[#062863] shadow-2xs'
+                              aria-label={`${memT.part3.checkWithAi} - ${prompt.word}`}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition select-none cursor-pointer ${
+                                isChecking
+                                  ? 'bg-[#000035]/70 text-white cursor-wait opacity-90'
+                                  : val.trim()
+                                  ? 'bg-[#000035] text-white hover:bg-[#062863] active:scale-95 shadow-2xs'
                                   : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
                               }`}
+                              title={!val.trim() ? (isEn ? 'Type a sentence first' : 'Digite uma frase primeiro') : ''}
                             >
-                              <Sparkles className={`w-3 h-3 text-[#9AB4FF] ${isChecking ? 'animate-spin' : ''}`} />
-                              <span>{isChecking ? memT.part3.checking : memT.part3.checkWithAi}</span>
+                              <Sparkles className={`w-3.5 h-3.5 text-[#9AB4FF] ${isChecking ? 'animate-spin' : ''}`} />
+                              <span>{isChecking ? (memT.part3.checking || 'Checking...') : memT.part3.checkWithAi}</span>
                             </button>
                           </div>
 
                           <textarea
                             rows={2}
                             value={val}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const newVal = e.target.value;
                               setSentenceAnswers((prev) => ({
                                 ...prev,
-                                [prompt.word]: e.target.value,
-                              }))
-                            }
+                                [prompt.word]: newVal,
+                              }));
+                            }}
                             placeholder={memT.part3.placeholder(prompt.word)}
-                            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1C4C96] focus:border-[#1C4C96]"
+                            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1C4C96] focus:border-[#1C4C96] transition"
                           />
 
                           {feedback && (
                             <div
-                              className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                              className={`p-3.5 rounded-xl border text-xs space-y-2.5 transition animate-in fade-in duration-200 ${
                                 feedback.hasAnyError
-                                  ? 'bg-amber-50/80 border-amber-200 text-amber-950'
-                                  : 'bg-emerald-50/80 border-emerald-200 text-emerald-950'
+                                  ? 'bg-amber-50/90 border-amber-300 text-amber-950'
+                                  : 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
                               }`}
                             >
-                              <div className="flex items-center gap-1.5 font-bold text-xs">
-                                {feedback.hasAnyError ? (
-                                  <>
-                                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                                    <span>{memT.part3.suggestionLabel}</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                                    <span>{memT.part3.greatSentence}</span>
-                                  </>
-                                )}
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                                    {feedback.hasAnyError ? (
+                                      <>
+                                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                                        <span>{memT.part3.suggestionLabel || (isEn ? 'AI Feedback' : 'Sugestões da IA')}</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                                        <span>{memT.part3.greatSentence || (isEn ? 'Great sentence!' : 'Excelente frase!')}</span>
+                                      </>
+                                    )}
+                                  </div>
+
+                                  {feedback.usedTargetWord !== undefined && (
+                                    <span
+                                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                                        feedback.usedTargetWord
+                                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                          : 'bg-amber-100 text-amber-900 border-amber-300'
+                                      }`}
+                                    >
+                                      {feedback.usedTargetWord
+                                        ? `✓ ${isEn ? `Word "${prompt.word}" used` : `Palavra "${prompt.word}" aplicada`}`
+                                        : `⚠ ${isEn ? `Use word "${prompt.word}"` : `Use a palavra "${prompt.word}"`}`}
+                                    </span>
+                                  )}
+
+                                  {prompt.levelInstruction && (
+                                    <span
+                                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                                        feedback.usedTrigger === false
+                                          ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                          : 'bg-blue-100/90 text-[#000035] border-blue-200'
+                                      }`}
+                                    >
+                                      🎯 {feedback.usedTrigger === false
+                                        ? (isEn ? 'Trigger missed' : 'Gatilho ausente')
+                                        : (isEn ? 'Trigger satisfied' : 'Gatilho cumprido')}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSentenceFeedbacks((prev) => {
+                                      const next = { ...prev };
+                                      delete next[prompt.word];
+                                      delete next[prompt.word.toLowerCase()];
+                                      delete next[prompt.word.toUpperCase()];
+                                      return next;
+                                    });
+                                  }}
+                                  className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1 py-0.5 cursor-pointer"
+                                  title={isEn ? 'Dismiss feedback' : 'Ocultar feedback'}
+                                >
+                                  ✕
+                                </button>
                               </div>
 
-                              {feedback.correctedSentence && feedback.correctedSentence !== val && (
-                                <p className="text-[11px] font-semibold text-slate-900 bg-white/70 p-2 rounded-lg border border-slate-200/60">
-                                  <span className="text-slate-500 mr-1 font-normal">
-                                    {isEn ? 'Enhanced sentence:' : 'Frase sugerida:'}
-                                  </span>
-                                  "{feedback.correctedSentence}"
-                                </p>
-                              )}
+                              {feedback.correctedSentence &&
+                                feedback.correctedSentence.trim().toLowerCase() !== val.trim().toLowerCase() && (
+                                  <div className="bg-white/95 p-2.5 rounded-lg border border-slate-200/80 space-y-1.5 shadow-2xs">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-[11px] font-bold text-slate-700">
+                                        {isEn ? 'Enhanced sentence suggestion:' : 'Sugestão aprimorada da IA:'}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSentenceAnswers((prev) => ({
+                                            ...prev,
+                                            [prompt.word]: feedback.correctedSentence!,
+                                          }));
+                                        }}
+                                        className="text-[10px] font-bold text-[#1C4C96] hover:text-[#000035] underline cursor-pointer"
+                                      >
+                                        {isEn ? 'Apply suggestion' : 'Usar esta versão'}
+                                      </button>
+                                    </div>
+                                    <p className="text-xs font-semibold text-slate-900 italic">
+                                      "{feedback.correctedSentence}"
+                                    </p>
+                                  </div>
+                                )}
 
                               <p className="text-[11px] leading-relaxed">
                                 {currentLanguage === 'en'
-                                  ? (feedback.overallSummaryEn || feedback.overallSummaryPt)
-                                  : (feedback.overallSummaryPt || feedback.overallSummaryEn)}
+                                  ? (feedback.overallSummaryEn || feedback.explanation || feedback.overallSummaryPt)
+                                  : (feedback.overallSummaryPt || feedback.explanation || feedback.overallSummaryEn)}
                               </p>
 
+                              {(feedback.triggerFeedback || feedback.targetWordFeedback) && (
+                                <div className="text-[11px] text-slate-700 pt-1 border-t border-slate-200/60 space-y-0.5">
+                                  {feedback.targetWordFeedback && <p>• {feedback.targetWordFeedback}</p>}
+                                  {feedback.triggerFeedback && <p>• {feedback.triggerFeedback}</p>}
+                                </div>
+                              )}
+
                               {(feedback.levelTipsPt || feedback.levelTipsEn) && (
-                                <p className="text-[11px] text-[#1C4C96] font-medium pt-0.5 border-t border-amber-200/50 flex items-center gap-1">
-                                  <Compass className="w-3 h-3 text-[#1C4C96] shrink-0" />
-                                  <span>{isEn ? feedback.levelTipsEn : feedback.levelTipsPt}</span>
+                                <p className="text-[11px] text-[#1C4C96] font-medium pt-1 border-t border-slate-200/60 flex items-center gap-1.5">
+                                  <Compass className="w-3.5 h-3.5 text-[#1C4C96] shrink-0" />
+                                  <span>
+                                    {isEn
+                                      ? (feedback.levelTipsEn || feedback.levelTipsPt)
+                                      : (feedback.levelTipsPt || feedback.levelTipsEn)}
+                                  </span>
                                 </p>
                               )}
                             </div>
