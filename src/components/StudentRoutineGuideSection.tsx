@@ -28,6 +28,7 @@ import {
   Star,
   RefreshCw,
   Target,
+  Loader2,
 } from 'lucide-react';
 import { StartNewWeekModal } from './StartNewWeekModal';
 import {
@@ -414,13 +415,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   // Handlers for Sentence of the Day
   const handleCheckGrammar = async () => {
-    if (!sentenceInput.trim() || sentenceInput.trim().length < 4) return;
+    const clean = sentenceInput.trim();
+    if (!clean) return;
     setIsCheckingSentence(true);
     try {
       const evaluation = await checkStudentWritingApi({
-        sentence: sentenceInput.trim(),
+        sentence: clean,
         words: matchedSentenceWords,
-        level: userProfile.level,
+        level: userProfile?.level,
       });
       setSentenceEvaluation(evaluation);
     } catch (err) {
@@ -430,17 +432,23 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     }
   };
 
-  const handleSaveSentence = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleApplySentenceCorrection = () => {
+    if (sentenceEvaluation?.correctedSentence) {
+      setSentenceInput(sentenceEvaluation.correctedSentence);
+    }
+  };
+
+  const handleSaveSentence = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     const clean = sentenceInput.trim();
-    if (!clean || clean.length < 5) return;
+    if (!clean) return;
     onSaveDailySentence(clean, matchedSentenceWords, sentenceEvaluation);
     setSentenceSavedSuccess(true);
     setTimeout(() => {
       setSentenceSavedSuccess(false);
       setSentenceInput('');
       setSentenceEvaluation(null);
-    }, 2000);
+    }, 2500);
   };
 
   // Automated level-based Spotify & YouTube curriculum sequential distribution
@@ -2495,16 +2503,25 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                       .toLowerCase()
                       .includes(word.toLowerCase());
                     return (
-                      <span
+                      <button
                         key={word}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition ${
+                        type="button"
+                        onClick={() => {
+                          setSentenceInput((prev) => {
+                            const trimmed = prev.trim();
+                            return trimmed ? `${trimmed} ${word}` : word;
+                          });
+                          if (sentenceEvaluation) setSentenceEvaluation(null);
+                        }}
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition cursor-pointer ${
                           isUsed
                             ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                            : 'bg-white text-[#062863] border-[#9AB4FF]/50'
+                            : 'bg-white text-[#062863] border-[#9AB4FF]/50 hover:border-[#1C4C96]'
                         }`}
+                        title={isEn ? 'Click to insert word' : 'Clique para inserir a palavra'}
                       >
                         {word}
-                      </span>
+                      </button>
                     );
                   })
                 )}
@@ -2515,7 +2532,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             <form onSubmit={handleSaveSentence} className="mt-3">
               <textarea
                 value={sentenceInput}
-                onChange={(e) => setSentenceInput(e.target.value)}
+                onChange={(e) => {
+                  setSentenceInput(e.target.value);
+                  if (sentenceEvaluation) setSentenceEvaluation(null);
+                }}
                 rows={3}
                 placeholder={
                   isEn
@@ -2525,6 +2545,151 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-[#000035] focus:outline-none focus:ring-1 focus:ring-[#1C4C96] placeholder:text-slate-400 placeholder:font-normal"
               />
             </form>
+
+            {/* AI Grammar Analysis Result Card */}
+            {sentenceEvaluation && (
+              <div className="mt-3 animate-in fade-in duration-200">
+                {sentenceEvaluation.hasAnyError ||
+                (sentenceEvaluation.correctedSentence &&
+                  sentenceEvaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase()) ? (
+                  <div className="p-3.5 sm:p-4 bg-gradient-to-br from-[#FFF8F6] to-white rounded-2xl border-2 border-rose-200 shadow-xs space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200">
+                          <AlertTriangle className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <h4 className="text-xs sm:text-sm font-extrabold text-rose-900">
+                              {isEn ? 'AI Grammar Analysis & Feedback' : 'Correção Gramatical da IA'}
+                            </h4>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                              {isEn ? 'Improvement' : 'Melhoria'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-rose-700 mt-0.5">
+                            {isEn
+                              ? 'Suggested adjustments to make your sentence natural and grammatically accurate:'
+                              : 'Ajustes sugeridos para tornar sua frase natural e gramaticalmente correta:'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {sentenceEvaluation.correctedSentence && (
+                          <button
+                            type="button"
+                            onClick={handleApplySentenceCorrection}
+                            className="px-2.5 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white text-[11px] font-bold rounded-xl transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            title={isEn ? 'Replace textarea with this corrected version' : 'Usar versão corrigida no campo'}
+                          >
+                            <Wand2 className="w-3 h-3 text-[#F4CA54]" />
+                            <span>{isEn ? 'Apply & Use' : 'Aplicar Frase'}</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSentenceEvaluation(null)}
+                          className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                          title={isEn ? 'Dismiss' : 'Fechar'}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {sentenceEvaluation.correctedSentence && (
+                      <div className="p-3 bg-white rounded-xl border border-rose-200 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-rose-900 uppercase tracking-wider block">
+                            {isEn ? '✨ Suggested Natural Version:' : '✨ Versão Natural Sugerida:'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => speakText(sentenceEvaluation.correctedSentence || '')}
+                            className="text-[#1C4C96] hover:text-[#062863] text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                            title={isEn ? 'Listen with audio' : 'Ouvir pronúncia'}
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                            <span>{isEn ? 'Listen' : 'Ouvir'}</span>
+                          </button>
+                        </div>
+                        <p className="text-xs sm:text-sm font-bold text-[#000035] leading-relaxed">
+                          "{sentenceEvaluation.correctedSentence}"
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Word-level highlights */}
+                    {sentenceEvaluation.wordFeedbacks && sentenceEvaluation.wordFeedbacks.some((wf) => wf.hasError) && (
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-600 block">
+                          {isEn ? 'Target adjustments:' : 'Ajustes identificados:'}
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {sentenceEvaluation.wordFeedbacks.filter((wf) => wf.hasError).map((wf, i) => (
+                            <span
+                              key={i}
+                              className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white border border-rose-300 text-rose-900 font-bold"
+                              title={isEn ? wf.explanationEn : wf.explanationPt}
+                            >
+                              <span className="line-through text-rose-400">{wf.original}</span> → <span className="text-emerald-700">{wf.corrected}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Constructive explanation */}
+                    {(sentenceEvaluation.sentenceFeedback?.explanationPt ||
+                      sentenceEvaluation.sentenceFeedback?.explanationEn ||
+                      sentenceEvaluation.explanation ||
+                      sentenceEvaluation.overallSummaryPt ||
+                      sentenceEvaluation.overallSummaryEn) && (
+                      <p className="text-[11px] text-rose-900 bg-rose-50/80 p-2.5 rounded-xl leading-relaxed border border-rose-100">
+                        💡 <span className="font-semibold">{isEn ? 'Explanation:' : 'Explicação:'}</span>{' '}
+                        {isEn
+                          ? (sentenceEvaluation.sentenceFeedback?.explanationEn || sentenceEvaluation.overallSummaryEn || sentenceEvaluation.explanation)
+                          : (sentenceEvaluation.sentenceFeedback?.explanationPt || sentenceEvaluation.overallSummaryPt || sentenceEvaluation.explanation)}
+                      </p>
+                    )}
+
+                    {/* Pedagogical level tip */}
+                    {(sentenceEvaluation.levelTipsPt || sentenceEvaluation.levelTipsEn) && (
+                      <div className="text-[10px] text-[#062863] bg-[#9AB4FF]/15 p-2 rounded-xl border border-[#607EC9]/30 flex items-center gap-1.5">
+                        <Sparkles className="w-3 h-3 text-[#1C4C96] shrink-0" />
+                        <span>{isEn ? sentenceEvaluation.levelTipsEn : sentenceEvaluation.levelTipsPt}</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 text-emerald-900 flex items-center justify-between gap-2 text-xs shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold block">
+                          {isEn
+                            ? '✨ Outstanding! Your sentence is grammatically correct and natural.'
+                            : '✨ Excelente! Sua frase está gramaticalmente correta e natural.'}
+                        </span>
+                        {(sentenceEvaluation.overallSummaryPt || sentenceEvaluation.overallSummaryEn) && (
+                          <span className="text-[11px] text-emerald-700 block mt-0.5">
+                            {isEn ? sentenceEvaluation.overallSummaryEn : sentenceEvaluation.overallSummaryPt}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSentenceEvaluation(null)}
+                      className="text-emerald-700 hover:text-emerald-900 text-[10px] font-bold px-2 py-1 rounded-md hover:bg-emerald-100 transition cursor-pointer"
+                    >
+                      OK
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Footer Actions */}
@@ -2546,21 +2711,27 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
               <button
                 type="button"
                 onClick={handleCheckGrammar}
-                disabled={isCheckingSentence}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#000035] rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-300"
+                disabled={!sentenceInput.trim() || isCheckingSentence}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#000035] rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-300 disabled:opacity-50"
               >
-                <Wand2 className="w-3 h-3 text-[#1C4C96]" />
-                <span>
-                  {isCheckingSentence
-                    ? isEn ? 'Checking...' : 'Verificando...'
-                    : isEn ? 'Check Grammar' : 'Verificar Gramática'}
-                </span>
+                {isCheckingSentence ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1C4C96]" />
+                    <span>{isEn ? 'Checking...' : 'Verificando...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-3.5 h-3.5 text-[#1C4C96]" />
+                    <span>{isEn ? 'Check Grammar' : 'Verificar Gramática'}</span>
+                  </>
+                )}
               </button>
 
               <button
                 type="button"
                 onClick={handleSaveSentence}
-                className="px-4 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-[11px] font-black flex items-center gap-1.5 transition cursor-pointer shadow-2xs border border-[#9AB4FF]/40"
+                disabled={!sentenceInput.trim() || isCheckingSentence}
+                className="px-4 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-[11px] font-black flex items-center gap-1.5 transition cursor-pointer shadow-2xs border border-[#9AB4FF]/40 disabled:opacity-50"
               >
                 <Save className="w-3 h-3" />
                 <span>{isEn ? 'Save Sentence of the Day' : 'Salvar Frase do Dia'}</span>

@@ -24,6 +24,12 @@ export async function checkStudentWritingApi(
         return {
           ...data,
           isCorrect: typeof data.isCorrect === 'boolean' ? data.isCorrect : !data.hasAnyError,
+          explanation:
+            data.explanation ||
+            data.sentenceFeedback?.explanationPt ||
+            data.sentenceFeedback?.explanationEn ||
+            data.overallSummaryPt ||
+            'Análise gramatical concluída com sucesso.',
         } as WritingEvaluationResult;
       }
     }
@@ -242,6 +248,14 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     });
 
     // Check common verb tense / grammatical slip-ups
+    if (/\byou has\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\byou has\b/gi, 'you have');
+      hasSentenceError = true;
+    }
+    if (/\bin the end of the day\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\bin the end of the day\b/gi, 'At the end of the day');
+      hasSentenceError = true;
+    }
     if (/\bi have (\w+) today\b/i.test(sFixed) && !/\bi have had\b/i.test(sFixed)) {
       if (/\bi have breakfast today\b/i.test(sFixed)) {
         sFixed = sFixed.replace(/\bI have breakfast today\b/i, 'I had breakfast today');

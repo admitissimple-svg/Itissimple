@@ -6774,6 +6774,7 @@ async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Pro
   if (!apiKey) return null;
 
   const candidateModels = [
+    'gemini-3.8-flash',
     GEMINI_TEXT_MODEL,
     'gemini-3.1-flash-lite',
     'gemini-flash-latest',
@@ -7333,9 +7334,14 @@ Output STRICT JSON matching this schema:
   "levelTipsEn": "string"
 }`;
 
-    const parsed = await callGeminiSafeJson(prompt, 6000);
+    const parsed = await callGeminiSafeJson(prompt, 9000);
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.wordFeedbacks)) {
       parsed.isCorrect = !parsed.hasAnyError;
+      parsed.explanation =
+        parsed.explanation ||
+        parsed.sentenceFeedback?.explanationPt ||
+        parsed.sentenceFeedback?.explanationEn ||
+        parsed.overallSummaryPt;
       return res.json(parsed);
     }
   }
@@ -7352,20 +7358,41 @@ Output STRICT JSON matching this schema:
   const isBeg = levelMeta.key === 'beginner';
   const isAdv = levelMeta.key === 'advanced';
 
+  let hasSentenceError = false;
+  let correctedSentence = sentence;
+  let explanationPt = 'Frase correta e bem estruturada.';
+  let explanationEn = 'Correct and well-structured sentence.';
+
+  if (sentence && sentence.trim()) {
+    if (/\byou has\b/i.test(correctedSentence)) {
+      hasSentenceError = true;
+      correctedSentence = correctedSentence.replace(/\byou has\b/gi, 'you have');
+      explanationPt = "Com o sujeito 'you', a concordância correta é 'have' (you have).";
+      explanationEn = "With the subject 'you', the correct verb agreement is 'have' (you have).";
+    }
+    if (/\bin the end of the day\b/i.test(correctedSentence)) {
+      hasSentenceError = true;
+      correctedSentence = correctedSentence.replace(/\bin the end of the day\b/gi, 'At the end of the day');
+      explanationPt = "A expressão idiomática natural em inglês é 'At the end of the day'.";
+      explanationEn = "The natural English idiom is 'At the end of the day'.";
+    }
+  }
+
   res.json({
-    hasAnyError: false,
-    isCorrect: true,
+    hasAnyError: hasSentenceError,
+    isCorrect: !hasSentenceError,
     wordFeedbacks,
     sentenceFeedback: sentence
       ? {
           original: sentence,
-          hasError: false,
-          corrected: sentence,
-          explanationPt: 'Frase correta e bem estruturada.',
-          explanationEn: 'Correct and well-structured sentence.',
+          hasError: hasSentenceError,
+          corrected: correctedSentence,
+          explanationPt,
+          explanationEn,
         }
       : undefined,
-    correctedSentence: sentence,
+    correctedSentence,
+    explanation: explanationPt,
     overallSummaryPt: isBeg
       ? 'Ótimo trabalho! Sua frase está clara e direta para o nível iniciante.'
       : isAdv

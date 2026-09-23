@@ -2698,7 +2698,12 @@ export default function App() {
       sentence,
       wordsUsed,
       correctedSentence: evaluationResult?.correctedSentence,
-      explanation: evaluationResult?.explanation,
+      explanation:
+        evaluationResult?.explanation ||
+        evaluationResult?.sentenceFeedback?.explanationPt ||
+        evaluationResult?.sentenceFeedback?.explanationEn ||
+        evaluationResult?.overallSummaryPt ||
+        '',
       hasErrors: evaluationResult?.hasAnyError,
       createdAt: new Date().toISOString(),
       studentUid,

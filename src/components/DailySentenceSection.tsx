@@ -11,6 +11,7 @@ import {
   Send,
   History,
   BookOpen,
+  Loader2,
 } from 'lucide-react';
 import { RoutineItem, UserProfile, WritingEvaluationResult, Language } from '../types';
 import { Translations } from '../utils/i18n';
@@ -283,15 +284,24 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
             <button
               type="button"
               onClick={handleManualCheck}
-              disabled={sentenceInput.trim().length < 4 || isCheckingSentence}
+              disabled={!sentenceInput.trim() || isCheckingSentence}
               className="px-4 py-2.5 bg-white hover:bg-[#9AB4FF]/15 text-[#062863] border border-[#607EC9]/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
             >
-              <Wand2 className={`w-3.5 h-3.5 text-[#1C4C96] ${isCheckingSentence ? 'animate-spin' : ''}`} />
-              <span>
-                {isCheckingSentence
-                  ? (currentLanguage === 'en' ? 'Checking...' : 'Analisando...')
-                  : (currentLanguage === 'en' ? 'Check Grammar' : 'Verificar Gramática')}
-              </span>
+              {isCheckingSentence ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1C4C96]" />
+                  <span>
+                    {currentLanguage === 'en' ? 'Checking...' : 'Analisando...'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Wand2 className="w-3.5 h-3.5 text-[#1C4C96]" />
+                  <span>
+                    {currentLanguage === 'en' ? 'Check Grammar' : 'Verificar Gramática'}
+                  </span>
+                </>
+              )}
             </button>
 
             <button
