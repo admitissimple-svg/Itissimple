@@ -286,6 +286,7 @@ export interface ConsumedTrackItem {
   coverUrl?: string;
   listenedAt: string;
   dayOfWeek?: DayOfWeek;
+  url?: string;
 }
 
 export interface WeeklyVocabularyItem {

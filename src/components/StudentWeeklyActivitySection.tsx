@@ -847,6 +847,32 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                           );
                         }
 
+                        if (row.id === 'video_day' || row.id === 'audio_day') {
+                          return (
+                            <div
+                              key={d.key}
+                              className="w-6 h-6 rounded-full flex items-center justify-center select-none"
+                              title={
+                                isChecked
+                                  ? (isEn
+                                      ? `${row.titleEn} (${d.label}) • Completed`
+                                      : `${row.titlePt} (${d.label}) • Concluído`)
+                                  : (isEn
+                                      ? `${row.titleEn} (${d.label}) • Completed automatically upon watching/listening`
+                                      : `${row.titlePt} (${d.label}) • Concluído automaticamente ao praticar`)
+                              }
+                            >
+                              {isChecked ? (
+                                <div className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-400/80 shadow-xs">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                </div>
+                              ) : (
+                                <div className="w-5 h-5 rounded-full border-2 border-[#607EC9]/30 bg-[#000035]/30" />
+                              )}
+                            </div>
+                          );
+                        }
+
                         return (
                           <button
                             key={d.key}
@@ -854,7 +880,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                             onClick={() => {
                               if (row.id === 'memorization') {
                                 onOpenHomeworkModal(d.key);
-                              } else {
+                              } else if (row.id === 'tutor_live') {
                                 toggleCheck(row.id, d.key);
                               }
                             }}

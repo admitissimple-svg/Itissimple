@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Youtube, ExternalLink, Play, RotateCcw, Sparkles, CheckCircle2, Clock, BookOpen } from 'lucide-react';
+import React from 'react';
+import { Youtube, ExternalLink, RotateCcw, Sparkles, CheckCircle2, Clock } from 'lucide-react';
 import { extractYouTubeVideoId, getYouTubeEmbedUrl, getYouTubeWatchUrl } from '../utils/youtube';
+import { useBehavioralVideoTracker } from '../hooks/useBehavioralMediaTracker';
 
 export interface YouTubePlayerProps {
   videoId?: string | null;
@@ -12,7 +13,8 @@ export interface YouTubePlayerProps {
   instructions?: string | null;
   duration?: string | null;
   isEn?: boolean;
-  onMarkWatched?: (videoId: string) => void;
+  isCompleted?: boolean;
+  onMarkWatched?: (videoId: string, title?: string) => void;
   className?: string;
 }
 
@@ -26,23 +28,34 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
   instructions,
   duration = '5-10 min',
   isEn = false,
+  isCompleted = false,
   onMarkWatched,
   className = '',
 }) => {
   const rawId = videoId || (videoUrl ? extractYouTubeVideoId(videoUrl) : '');
   const cleanId = rawId ? extractYouTubeVideoId(rawId) || rawId : '';
-  const [hasNotifiedWatched, setHasNotifiedWatched] = useState(false);
 
+  const title = videoTitle || (isEn ? 'Daily Video Practice' : 'Prática Diária de Vídeo');
   const embedUrl = cleanId ? getYouTubeEmbedUrl(cleanId) : '';
   const watchUrl = cleanId ? getYouTubeWatchUrl(cleanId) : videoUrl || '';
-  const title = videoTitle || (isEn ? 'Daily Video Practice' : 'Prática Diária de Vídeo');
 
-  const handleVideoPlayOrComplete = () => {
-    if (cleanId && onMarkWatched && !hasNotifiedWatched) {
-      setHasNotifiedWatched(true);
-      onMarkWatched(cleanId);
-    }
-  };
+  const {
+    iframeRef,
+    hasCompleted,
+    handleIframeLoad,
+    handlePlayerInteraction,
+    handleExternalWatchClick,
+  } = useBehavioralVideoTracker({
+    videoId: cleanId,
+    videoTitle: title,
+    retentionSeconds: 35,
+    onCompleted: (vid, tit) => {
+      if (onMarkWatched) {
+        onMarkWatched(vid, tit);
+      }
+    },
+    isAlreadyCompleted: isCompleted,
+  });
 
   // State: No video selected yet -> Show "Choose a Topic to Start"
   if (!cleanId) {
@@ -72,6 +85,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
     <div
       id="youtube-player-container"
       className={`bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden ${className}`}
+      onClick={handlePlayerInteraction}
     >
       {/* Top Bar: Badges + Direct Link */}
       <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap bg-slate-50/60">
@@ -94,6 +108,13 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
               {isEn ? 'Your Suggestion' : 'Sua Sugestão'}
             </span>
           )}
+
+          {hasCompleted && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-800 border border-emerald-500/30">
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+              {isEn ? 'Watched' : 'Assistido'}
+            </span>
+          )}
         </div>
 
         {watchUrl && (
@@ -101,7 +122,7 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
             href={watchUrl}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={handleVideoPlayOrComplete}
+            onClick={handleExternalWatchClick}
             className="inline-flex items-center gap-1 text-xs font-semibold text-[#1C4C96] hover:text-[#062863] hover:underline"
           >
             <span>{isEn ? 'Watch on YouTube' : 'Assistir no YouTube'}</span>
@@ -113,12 +134,13 @@ export const YouTubePlayer: React.FC<YouTubePlayerProps> = ({
       {/* Responsive 16:9 Video Embed */}
       <div className="relative w-full aspect-video bg-black">
         <iframe
+          ref={iframeRef}
           src={embedUrl}
           title={title}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           allowFullScreen
           className="absolute top-0 left-0 w-full h-full border-0"
-          onLoad={handleVideoPlayOrComplete}
+          onLoad={handleIframeLoad}
         />
       </div>
 

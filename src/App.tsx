@@ -35,8 +35,9 @@ import { getTodayDayOfWeek } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
 import { normalizeStudentLevel, fetchTracksForStudentLevel } from './utils/spotify';
 import { executeStartNewWeek } from './utils/StartNewWeekHandler';
-import { addVideoToWatchedHistoryInFirestore } from './hooks/useRoutine';
-import { extractYouTubeVideoId } from './utils/youtube';
+import { addVideoToWatchedHistoryInFirestore, addTrackToListenedHistoryInFirestore } from './hooks/useRoutine';
+import { recordConsumedVideo, recordConsumedTrack } from './hooks/useStudentHistory';
+import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -1314,6 +1315,226 @@ export default function App() {
     }
   };
 
+  // Unified single source of truth for 100% automatic behavioral activity completion
+  const handleBehavioralActivityComplete = useCallback(
+    async (params: {
+      type: 'video' | 'audio' | 'memorization' | 'live_lesson';
+      dayOfWeek?: DayOfWeek;
+      activityId?: string;
+      video?: {
+        videoId: string;
+        videoTitle?: string;
+        url?: string;
+        duration?: string;
+      };
+      track?: {
+        id: string;
+        trackId?: string;
+        title: string;
+        artist?: string;
+        coverUrl?: string;
+        url?: string;
+      };
+      targetStudentUid?: string;
+      targetStudentEmail?: string;
+    }) => {
+      const targetDay = params.dayOfWeek || selectedDay;
+      const uid = params.targetStudentUid || currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+      const email = params.targetStudentEmail || currentAccount?.email || userProfile?.email || '';
+
+      const stepMapping: Record<string, 'video_day' | 'audio_day' | 'memorization' | 'tutor_live'> = {
+        video: 'video_day',
+        audio: 'audio_day',
+        memorization: 'memorization',
+        live_lesson: 'tutor_live',
+      };
+      const stepId = stepMapping[params.type] || 'video_day';
+      const checkKey = `${stepId}_${targetDay}`;
+      const isAlreadyChecked = Boolean(weeklyChecks[checkKey]);
+
+      // 1. Update S-Path (Gráfico S) in React state & direct Firestore users/{studentUID} persistence
+      setWeeklyChecks((prev) => {
+        if (prev[checkKey]) return prev;
+        const nextChecks = { ...prev, [checkKey]: true };
+        saveStudentWeeklyChecksToFirestore(
+          uid,
+          nextChecks,
+          email,
+          userProfile?.weeklyNativeLessonsTarget,
+          userProfile?.weeklyStudyDaysTarget
+        );
+        return nextChecks;
+      });
+
+      // 2. Update routine item state to completedToday = true
+      setRoutinesByDay((prev) => {
+        const dayList = prev[targetDay] || [];
+        let matched = false;
+        const updated = dayList.map((item) => {
+          const actName = (item.activityName || '').toLowerCase();
+          const isTarget =
+            params.activityId === item.id ||
+            (params.type === 'video' &&
+              ((item.teacherVideos && item.teacherVideos.length > 0) ||
+                actName.includes('video') ||
+                actName.includes('vídeo') ||
+                item.id.endsWith('1'))) ||
+            (params.type === 'audio' &&
+              (Boolean(item.teacherSpotify) ||
+                actName.includes('audio') ||
+                actName.includes('áudio') ||
+                actName.includes('som') ||
+                actName.includes('ouvir') ||
+                item.id.endsWith('2')));
+
+          if (isTarget && !matched) {
+            matched = true;
+            return { ...item, completedToday: true, completed: true };
+          }
+          return item;
+        });
+        return { ...prev, [targetDay]: updated };
+      });
+
+      // 3. Activity History, Exclusivity & Native Friend Database Feeding
+      const currentWeekId = `week-${userProfile?.weeklyCycle || 1}`;
+      const teacherUid = userProfile?.assignedNativeFriendUID || userProfile?.nativeFriendUID || '';
+
+      if (params.type === 'video') {
+        const rawVid = params.video?.videoId || params.video?.url || '';
+        const cleanVid = extractYouTubeVideoId(rawVid) || rawVid.trim();
+        const cleanTitle = (params.video?.videoTitle || 'Daily Video Practice').trim();
+
+        if (cleanVid && uid) {
+          // A. Persist to users/{studentUID}/watchedVideosHistory
+          await addVideoToWatchedHistoryInFirestore(uid, cleanVid, cleanTitle);
+
+          // B. Persist to weekly consumed videos users/{studentUID}/weeklyHistory/{weekId}
+          await recordConsumedVideo(
+            uid,
+            currentWeekId,
+            {
+              id: cleanVid,
+              videoId: cleanVid,
+              videoTitle: cleanTitle,
+              title: cleanTitle,
+              watchedAt: new Date().toISOString(),
+              dayOfWeek: targetDay,
+              url: params.video?.url || getYouTubeWatchUrl(cleanVid),
+              duration: params.video?.duration || '5-10 min',
+            },
+            teacherUid
+          );
+
+          // C. Update in-memory userProfile for 100% exclusivity rule
+          setUserProfile((prev) => {
+            if (!prev) return prev;
+            const currentWatched = prev.watchedVideosHistory || [];
+            if (currentWatched.includes(cleanVid)) return prev;
+            return {
+              ...prev,
+              watchedVideosHistory: [...currentWatched, cleanVid],
+            };
+          });
+        }
+      } else if (params.type === 'audio') {
+        const rawTrackId = params.track?.id || params.track?.trackId || '';
+        const cleanTrackId = rawTrackId.trim();
+        const cleanTitle = (params.track?.title || 'Daily Spotify Listening').trim();
+        const cleanArtist = (params.track?.artist || 'Spotify Artist').trim();
+
+        if (cleanTrackId && uid) {
+          // A. Persist to users/{studentUID}/listenedTracksHistory
+          await addTrackToListenedHistoryInFirestore(uid, cleanTrackId, cleanTitle, cleanArtist);
+
+          // B. Persist to weekly consumed tracks users/{studentUID}/weeklyHistory/{weekId}
+          await recordConsumedTrack(
+            uid,
+            currentWeekId,
+            {
+              id: cleanTrackId,
+              trackId: cleanTrackId,
+              title: cleanTitle,
+              artist: cleanArtist,
+              coverUrl: params.track?.coverUrl || '',
+              dayOfWeek: targetDay,
+              listenedAt: new Date().toISOString(),
+              url: params.track?.url || '',
+            },
+            teacherUid
+          );
+
+          // C. Update in-memory userProfile for listened tracks history
+          setUserProfile((prev) => {
+            if (!prev) return prev;
+            const currentListened = prev.listenedTracksHistory || [];
+            const exists = currentListened.some((t: any) =>
+              typeof t === 'string' ? t === cleanTrackId : t?.trackId === cleanTrackId || t?.id === cleanTrackId
+            );
+            if (exists) return prev;
+            return {
+              ...prev,
+              listenedTracksHistory: [
+                ...currentListened,
+                { trackId: cleanTrackId, id: cleanTrackId, title: cleanTitle, artist: cleanArtist },
+              ],
+            };
+          });
+        }
+      }
+
+      // 4. Backend synchronization mirror
+      try {
+        fetch('/api/routines/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            day: targetDay,
+            activityId: params.activityId || (params.type === 'video' ? 'act-1' : 'act-2'),
+            studentEmail: email,
+            studentUid: uid,
+            videoId: params.video?.videoId || null,
+          }),
+        }).catch(() => {});
+      } catch {}
+
+      // 5. Success notification (only if newly completed)
+      if (!isAlreadyChecked) {
+        const stepLabels: Record<string, { en: string; pt: string }> = {
+          video_day: { en: 'Daily Video', pt: 'Vídeo do Dia' },
+          audio_day: { en: 'Daily Audio', pt: 'Áudio do Dia' },
+          memorization: { en: 'Daily Memorization Activity', pt: 'Atividade de Memorização do Dia' },
+          tutor_live: { en: 'Live Lesson with Native Friend', pt: 'Aula com Amigo Nativo' },
+        };
+        const dayLabels: Record<DayOfWeek, { en: string; pt: string }> = {
+          monday: { en: 'Monday', pt: 'Segunda-feira' },
+          tuesday: { en: 'Tuesday', pt: 'Terça-feira' },
+          wednesday: { en: 'Wednesday', pt: 'Quarta-feira' },
+          thursday: { en: 'Thursday', pt: 'Quinta-feira' },
+          friday: { en: 'Friday', pt: 'Sexta-feira' },
+          saturday: { en: 'Saturday', pt: 'Sábado' },
+          sunday: { en: 'Sunday', pt: 'Domingo' },
+        };
+
+        setNotifications((prev) => [
+          {
+            id: `behavioral-comp-${Date.now()}`,
+            title: currentLanguage === 'en' ? '✨ Activity Completed!' : '✨ Atividade Concluída!',
+            message:
+              currentLanguage === 'en'
+                ? `${stepLabels[stepId]?.en || stepId} registered automatically for ${dayLabels[targetDay]?.en || targetDay} on your S-Path and Activity History.`
+                : `${stepLabels[stepId]?.pt || stepId} registrado automaticamente para ${dayLabels[targetDay]?.pt || targetDay} no seu Gráfico S e Histórico de Atividades.`,
+            type: 'success',
+            timestamp: new Date().toISOString(),
+            read: false,
+          },
+          ...prev,
+        ]);
+      }
+    },
+    [selectedDay, currentAccount?.uid, currentAccount?.email, userProfile, weeklyChecks, currentLanguage]
+  );
+
   // Handler: Update S-Path (Gráfico S) check for a pillar with instant UI reflection & Firestore users/{studentUID} persistence
   const handleUpdateSPathCheck = useCallback(
     (
@@ -1323,9 +1544,20 @@ export default function App() {
       targetUid?: string,
       targetEmail?: string
     ) => {
-      const checkKey = `${stepId}_${dayKey}`;
       const uid = targetUid || currentAccount?.uid || userProfile?.id || '';
       const email = targetEmail || currentAccount?.email || userProfile?.email || '';
+
+      if (isCompleted && (stepId === 'video_day' || stepId === 'audio_day')) {
+        handleBehavioralActivityComplete({
+          type: stepId === 'video_day' ? 'video' : 'audio',
+          dayOfWeek: dayKey,
+          targetStudentUid: uid,
+          targetStudentEmail: email,
+        });
+        return;
+      }
+
+      const checkKey = `${stepId}_${dayKey}`;
 
       setWeeklyChecks((prev) => {
         if (prev[checkKey] === isCompleted) return prev;
@@ -1377,7 +1609,7 @@ export default function App() {
         ]);
       }
     },
-    [currentAccount?.uid, currentAccount?.email, userProfile?.id, userProfile?.email, userProfile?.weeklyNativeLessonsTarget, userProfile?.weeklyStudyDaysTarget, currentLanguage]
+    [currentAccount?.uid, currentAccount?.email, userProfile?.id, userProfile?.email, userProfile?.weeklyNativeLessonsTarget, userProfile?.weeklyStudyDaysTarget, currentLanguage, handleBehavioralActivityComplete]
   );
 
   // Handler: Toggle activity completed status
@@ -3752,6 +3984,7 @@ export default function App() {
                   isStarting={isStartingNewWeek}
                   weeklyChecks={weeklyChecks}
                   onUpdateSPathCheck={handleUpdateSPathCheck}
+                  onBehavioralComplete={handleBehavioralActivityComplete}
                 />
 
                 {/* Section 3: Weekly Activity (Image 3) */}

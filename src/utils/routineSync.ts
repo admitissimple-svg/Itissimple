@@ -596,8 +596,9 @@ export {
   fetchAllRoutineVideosFromFirestore,
   fetchWatchedVideosHistoryFromFirestore,
   addVideoToWatchedHistoryInFirestore,
+  addTrackToListenedHistoryInFirestore,
   resetRepeatFlagsInFirestore,
   selectNextUnwatchedVideo,
 } from '../hooks/useRoutine';
-export type { SavedRoutineVideo } from '../hooks/useRoutine';
+export type { SavedRoutineVideo, ListenedTrackEntry } from '../hooks/useRoutine';
 

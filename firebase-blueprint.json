@@ -14,6 +14,7 @@
         "assignedNativeFriendUID": { "type": "string", "description": "Strictly assigned Native Friend tutor UID" },
         "nativeFriendUID": { "type": "string", "description": "Strictly assigned Native Friend tutor UID" },
         "watchedVideosHistory": { "type": "array", "description": "Global history of unique watched YouTube video IDs" },
+        "listenedTracksHistory": { "type": "array", "description": "Global history of unique listened Spotify tracks" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
       },
       "required": ["uid", "email", "role"]

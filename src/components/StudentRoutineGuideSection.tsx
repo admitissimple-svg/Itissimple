@@ -58,6 +58,7 @@ import {
 } from '../utils/spotify';
 import { useStudentSpotifySync } from '../hooks/useStudentSpotifySync';
 import { useRoutine } from '../hooks/useRoutine';
+import { useBehavioralVideoTracker, useBehavioralAudioTracker } from '../hooks/useBehavioralMediaTracker';
 import { CurrentSpotifyTrack } from '../utils/routineSync';
 import { speakText } from '../utils/audio';
 import { checkStudentWritingApi } from '../utils/writingChecker';
@@ -111,6 +112,25 @@ interface StudentRoutineGuideSectionProps {
     dayKey: DayOfWeek,
     isCompleted?: boolean
   ) => void;
+  onBehavioralComplete?: (params: {
+    type: 'video' | 'audio';
+    dayOfWeek: DayOfWeek;
+    activityId?: string;
+    video?: {
+      videoId: string;
+      videoTitle?: string;
+      url?: string;
+      duration?: string;
+    };
+    track?: {
+      id: string;
+      trackId?: string;
+      title: string;
+      artist?: string;
+      coverUrl?: string;
+      url?: string;
+    };
+  }) => void;
 }
 
 export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProps> = ({
@@ -138,6 +158,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   isStarting = false,
   weeklyChecks,
   onUpdateSPathCheck,
+  onBehavioralComplete,
 }) => {
   const isEn = currentLanguage === 'en';
   const todayDay = getTodayDayOfWeek();
@@ -737,6 +758,65 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   });
 
   const activeNativeFriendFeedback = teacherFeedback?.[selectedDay];
+
+  // Automatic behavioral trackers for Daily Video and Spotify Audio
+  const isVideoWatchedToday = Boolean(weeklyChecks?.[`video_day_${selectedDay}`]);
+  const isAudioListenedToday = Boolean(weeklyChecks?.[`audio_day_${selectedDay}`]);
+
+  const {
+    iframeRef: videoIframeRef,
+    handleIframeLoad: handleVideoIframeLoad,
+    handlePlayerInteraction: handleVideoPlayerInteraction,
+  } = useBehavioralVideoTracker({
+    videoId: validVidId,
+    videoTitle: defaultVideoTitle,
+    retentionSeconds: 35,
+    onCompleted: (vid, tit) => {
+      if (onBehavioralComplete) {
+        onBehavioralComplete({
+          type: 'video',
+          dayOfWeek: selectedDay,
+          activityId: activeActivity?.id || 'act-1',
+          video: {
+            videoId: vid,
+            videoTitle: tit || defaultVideoTitle,
+            url: embedUrl,
+          },
+        });
+      } else {
+        onUpdateSPathCheck?.('video_day', selectedDay, true);
+      }
+    },
+    isAlreadyCompleted: isVideoWatchedToday,
+  });
+
+  const {
+    triggerCompletion: triggerAudioCompletion,
+  } = useBehavioralAudioTracker({
+    trackId: currentSpotifyTrackForSync?.id || 'sp-track',
+    trackTitle: effectiveTrackTitle,
+    artist: effectiveArtist,
+    onCompleted: (trkId, tit, art) => {
+      if (onBehavioralComplete) {
+        onBehavioralComplete({
+          type: 'audio',
+          dayOfWeek: selectedDay,
+          activityId: 'act-2',
+          track: {
+            id: trkId,
+            trackId: trkId,
+            title: tit || effectiveTrackTitle,
+            artist: art || effectiveArtist,
+            coverUrl: effectiveCoverUrl,
+            url: effectiveDirectUrl,
+          },
+        });
+      } else {
+        onUpdateSPathCheck?.('audio_day', selectedDay, true);
+      }
+    },
+    isAlreadyCompleted: isAudioListenedToday,
+  });
 
   // End of day reminder calculation
   const lastActivity = getLastActivityOfTheDay(sortedActivities);
@@ -1965,27 +2045,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
               </h3>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => onUpdateSPathCheck?.('video_day', selectedDay, !weeklyChecks?.[`video_day_${selectedDay}`])}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition cursor-pointer shadow-xs ${
-                  weeklyChecks?.[`video_day_${selectedDay}`]
-                    ? 'bg-emerald-500/20 border border-emerald-500/50 text-emerald-900 hover:bg-emerald-500/30'
-                    : 'bg-[#1C4C96] hover:bg-[#062863] text-white active:scale-95'
-                }`}
-                title={
-                  weeklyChecks?.[`video_day_${selectedDay}`]
-                    ? (isEn ? 'Video marked as watched on S-Path. Click to toggle.' : 'Vídeo marcado como assistido no Gráfico S. Clique para alternar.')
-                    : (isEn ? 'Mark video as watched on your S-Path' : 'Marcar vídeo como assistido no seu Gráfico S')
-                }
-              >
-                <CheckCircle2 className={`w-3.5 h-3.5 ${weeklyChecks?.[`video_day_${selectedDay}`] ? 'text-emerald-700' : 'text-white'}`} />
-                <span>
-                  {weeklyChecks?.[`video_day_${selectedDay}`]
-                    ? (isEn ? 'Watched ✓' : 'Assistido ✓')
-                    : (isEn ? 'Mark Watched' : 'Marcar Assistido')}
+              {isVideoWatchedToday && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-extrabold bg-emerald-500/15 border border-emerald-500/40 text-emerald-800 shadow-2xs">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{isEn ? 'Watched' : 'Assistido'}</span>
                 </span>
-              </button>
+              )}
               <span className="text-[10px] font-mono text-[#607EC9] font-bold">
                 {formatToAmPm(activeActivity?.time || '07:30')}
               </span>
@@ -1993,14 +2058,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           </div>
 
           {/* Video Iframe Container */}
-          <div className="relative aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-inner border border-slate-200">
+          <div
+            className="relative aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-inner border border-slate-200"
+            onClick={handleVideoPlayerInteraction}
+          >
             {embedUrl ? (
               <iframe
+                ref={videoIframeRef}
                 src={embedUrl}
                 title={defaultVideoTitle}
                 className="w-full h-full border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
+                onLoad={handleVideoIframeLoad}
               />
             ) : isCustomWithoutVideo ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-2 p-6 text-center">
@@ -2052,27 +2122,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30">
                     {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSPathCheck?.('audio_day', selectedDay, !weeklyChecks?.[`audio_day_${selectedDay}`])}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold transition cursor-pointer shadow-2xs ${
-                      weeklyChecks?.[`audio_day_${selectedDay}`]
-                        ? 'bg-emerald-500/20 border border-emerald-500/50 text-emerald-900 hover:bg-emerald-500/30'
-                        : 'bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] active:scale-95'
-                    }`}
-                    title={
-                      weeklyChecks?.[`audio_day_${selectedDay}`]
-                        ? (isEn ? 'Audio listened on S-Path. Click to toggle.' : 'Áudio ouvido no Gráfico S. Clique para alternar.')
-                        : (isEn ? 'Mark audio as listened on your S-Path' : 'Marcar áudio como ouvido no Gráfico S')
-                    }
-                  >
-                    <CheckCircle2 className={`w-3 h-3 ${weeklyChecks?.[`audio_day_${selectedDay}`] ? 'text-emerald-700' : 'text-[#000035]'}`} />
-                    <span>
-                      {weeklyChecks?.[`audio_day_${selectedDay}`]
-                        ? (isEn ? 'Listened ✓' : 'Ouvido ✓')
-                        : (isEn ? 'Mark Listened' : 'Marcar Ouvido')}
+                  {isAudioListenedToday && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-emerald-500/15 border border-emerald-500/40 text-emerald-800 shadow-2xs">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      <span>{isEn ? 'Listened' : 'Ouvido'}</span>
                     </span>
-                  </button>
+                  )}
                 </div>
                 <p className="text-[10px] text-slate-500 font-medium">
                   {isRestDay || !currentDayTrack
@@ -2181,7 +2236,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
               </div>
             </div>
           ) : spotifyPlayerMode === 'app' ? (
-            <div className="space-y-1.5">
+            <div className="space-y-1.5" onClick={() => triggerAudioCompletion()}>
               <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[152px] bg-black">
                 <iframe
                   src={sanitizedEmbedUrl}
@@ -2280,9 +2335,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   href={effectiveDirectUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={() => onUpdateSPathCheck?.('audio_day', selectedDay, true)}
+                  onClick={() => triggerAudioCompletion()}
                   className="px-3 py-1.5 bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] rounded-xl text-[11px] font-extrabold flex items-center gap-1 transition shadow-xs cursor-pointer active:scale-95"
-                  title={isEn ? 'Play on Spotify & automatically mark as listened on S-Path' : 'Ouvir no Spotify e marcar automaticamente como ouvido no Gráfico S'}
+                  title={isEn ? 'Play on Spotify & automatically register completion' : 'Ouvir no Spotify e registrar conclusão automaticamente'}
                 >
                   <span>{isEn ? 'Play Track' : 'Tocar Faixa'}</span>
                   <ExternalLink className="w-3 h-3" />

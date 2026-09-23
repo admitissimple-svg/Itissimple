@@ -416,23 +416,24 @@ export const CleanActivitySidebar: React.FC<CleanActivitySidebarProps> = ({
                     : 'bg-white border-[#9AB4FF]/30 hover:border-[#607EC9] hover:bg-[#9AB4FF]/5'
                 }`}
               >
-                {/* Left: Checkbox + Time + Title */}
+                {/* Left: Indicator + Time + Title */}
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleComplete(item.id);
-                    }}
-                    className="text-[#607EC9] hover:text-[#1C4C96] transition shrink-0 cursor-pointer"
-                    title={item.completedToday ? t.practicedToday : t.markCompleted}
+                  <div
+                    className="text-[#607EC9] shrink-0"
+                    title={
+                      item.completedToday
+                        ? t.practicedToday
+                        : currentLanguage === 'en'
+                        ? 'Completed automatically when you watch or listen'
+                        : 'Concluído automaticamente ao praticar a atividade'
+                    }
                   >
                     {item.completedToday ? (
-                      <CheckCircle2 className="w-5 h-5 text-[#1C4C96]" />
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                     ) : (
-                      <Circle className="w-5 h-5" />
+                      <Circle className="w-5 h-5 text-slate-300" />
                     )}
-                  </button>
+                  </div>
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">

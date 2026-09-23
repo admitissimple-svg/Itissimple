@@ -19,6 +19,7 @@ import {
 } from '../types';
 import {
   addVideoToWatchedHistoryInFirestore,
+  addTrackToListenedHistoryInFirestore,
   extractVideoIdFromHistoryItem,
   extractVideoTitleFromHistoryItem,
 } from './useRoutine';
@@ -425,7 +426,17 @@ export async function recordConsumedTrack(
       payload.nativeFriendUID = nativeFriendUid;
     }
 
-    return await saveWeeklyHistory(cleanStudent, cleanWeek, payload);
+    const saved = await saveWeeklyHistory(cleanStudent, cleanWeek, payload);
+
+    // Also persist strictly to users/{cleanStudent}/listenedTracksHistory
+    const trackIdToSave = track.trackId || track.id;
+    if (trackIdToSave) {
+      addTrackToListenedHistoryInFirestore(cleanStudent, trackIdToSave, track.title, track.artist).catch((err) =>
+        console.warn('Notice saving to users listenedTracksHistory:', err)
+      );
+    }
+
+    return saved;
   } catch (err) {
     console.error('Failed to record consumed track:', err);
     return false;

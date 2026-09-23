@@ -418,6 +418,97 @@ export async function addMultipleVideosToWatchedHistoryInFirestore(
   }
 }
 
+export interface ListenedTrackEntry {
+  trackId: string;
+  trackTitle: string;
+  artist?: string;
+  listenedAt: string;
+}
+
+/**
+ * Appends a Spotify track record to the student's listenedTracksHistory array in Firestore.
+ * Path: users/{studentUID} -> field: listenedTracksHistory
+ */
+export async function addTrackToListenedHistoryInFirestore(
+  studentUid: string,
+  trackId: string,
+  trackTitle?: string,
+  artist?: string
+): Promise<boolean> {
+  const cleanUid = normalizeStudentIdForPath(studentUid);
+  const cleanTrackId = (trackId || '').trim();
+  if (!cleanUid || !cleanTrackId) return false;
+  const cleanTitle = (trackTitle || 'Daily Spotify Listening').trim();
+  const cleanArtist = (artist || 'Spotify Artist').trim();
+
+  const path = `users/${cleanUid}`;
+  try {
+    const db = getDb();
+    const userRef = doc(db, 'users', cleanUid);
+    const snap = await getDoc(userRef);
+    const existing = snap.exists() ? (snap.data().listenedTracksHistory || snap.data().listenedTracks || []) : [];
+    const list = Array.isArray(existing) ? [...existing] : [];
+
+    const alreadyExists = list.some((item) => {
+      if (typeof item === 'string') return item.toLowerCase() === cleanTrackId.toLowerCase();
+      if (item && typeof item === 'object') {
+        const id = item.trackId || item.id || '';
+        return id.toLowerCase() === cleanTrackId.toLowerCase();
+      }
+      return false;
+    });
+
+    const entry: ListenedTrackEntry = {
+      trackId: cleanTrackId,
+      trackTitle: cleanTitle,
+      artist: cleanArtist,
+      listenedAt: new Date().toISOString(),
+    };
+
+    if (!alreadyExists) {
+      list.push(entry);
+    } else {
+      const idx = list.findIndex((item) => {
+        const id = typeof item === 'string' ? item : item?.trackId || item?.id || '';
+        return id.toLowerCase() === cleanTrackId.toLowerCase();
+      });
+      if (idx >= 0 && typeof list[idx] === 'object') {
+        list[idx] = {
+          ...list[idx],
+          trackTitle: cleanTitle,
+          artist: cleanArtist,
+        };
+      }
+    }
+
+    await setDoc(
+      userRef,
+      {
+        listenedTracksHistory: list,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    // Mirror to backend
+    fetch('/api/student-track-assignments/listen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentUid: cleanUid,
+        trackId: cleanTrackId,
+        title: cleanTitle,
+        artist: cleanArtist,
+      }),
+    }).catch(() => {});
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+    return false;
+  }
+}
+
 /**
  * Resets "Repeat Previous Video" (isRepeatVideo: false) for all days in Firestore:
  * Path: users/{studentUID}/routines/{dayOfWeek}

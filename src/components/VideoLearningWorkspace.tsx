@@ -49,6 +49,7 @@ import {
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { checkStudentWritingApi } from '../utils/writingChecker';
 import { getInstantOrCachedWord } from '../utils/dictionaryService';
+import { useBehavioralVideoTracker, useBehavioralAudioTracker } from '../hooks/useBehavioralMediaTracker';
 
 
 interface VideoLearningWorkspaceProps {
@@ -70,6 +71,25 @@ interface VideoLearningWorkspaceProps {
   ) => void;
   onOpenEndOfDayModal: () => void;
   onOpenEmailNotificationModal?: () => void;
+  onBehavioralComplete?: (params: {
+    type: 'video' | 'audio';
+    dayOfWeek: DayOfWeek;
+    activityId?: string;
+    video?: {
+      videoId: string;
+      videoTitle?: string;
+      url?: string;
+      duration?: string;
+    };
+    track?: {
+      id: string;
+      trackId?: string;
+      title: string;
+      artist?: string;
+      coverUrl?: string;
+      url?: string;
+    };
+  }) => void;
 }
 
 const DAYS_BUTTONS: { id: DayOfWeek; labelEn: string; labelPt: string }[] = [
@@ -94,6 +114,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
   onTeacherSaveVideos,
   onOpenEndOfDayModal,
   onOpenEmailNotificationModal,
+  onBehavioralComplete,
 }) => {
   if (!activity) {
     return (
@@ -116,6 +137,63 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
   // Single video assigned by teacher for this activity
   const videos = activity.teacherVideos || [];
   const assignedVideo: TeacherAssignedVideo | null = videos.length > 0 ? videos[0] : null;
+  const assignedVideoId = assignedVideo ? (extractYouTubeVideoId(assignedVideo.videoId || assignedVideo.url || '') || assignedVideo.videoId || '') : '';
+
+  // Automatic behavioral tracking hooks
+  const {
+    iframeRef: videoIframeRef,
+    handleIframeLoad: handleVideoIframeLoad,
+    handlePlayerInteraction: handleVideoPlayerInteraction,
+    handleExternalWatchClick: handleVideoExternalClick,
+  } = useBehavioralVideoTracker({
+    videoId: assignedVideoId,
+    videoTitle: assignedVideo?.title,
+    retentionSeconds: 35,
+    onCompleted: (vid, tit) => {
+      if (onBehavioralComplete && activity) {
+        onBehavioralComplete({
+          type: 'video',
+          dayOfWeek: activity.dayOfWeek || 'monday',
+          activityId: activity.id,
+          video: {
+            videoId: vid,
+            videoTitle: tit || assignedVideo?.title || 'Daily Video Practice',
+            url: assignedVideo?.url,
+          },
+        });
+      } else if (activity && !activity.completedToday) {
+        onToggleComplete(activity.id);
+      }
+    },
+    isAlreadyCompleted: Boolean(activity?.completedToday),
+  });
+
+  const {
+    triggerCompletion: triggerAudioCompletion,
+  } = useBehavioralAudioTracker({
+    trackId: activity?.teacherSpotify?.id || activity?.teacherSpotify?.url,
+    trackTitle: activity?.teacherSpotify?.title,
+    artist: activity?.teacherSpotify?.artistOrHost,
+    onCompleted: (trkId, tit, art) => {
+      if (onBehavioralComplete && activity) {
+        onBehavioralComplete({
+          type: 'audio',
+          dayOfWeek: activity.dayOfWeek || 'monday',
+          activityId: activity.id,
+          track: {
+            id: trkId,
+            trackId: trkId,
+            title: tit || activity?.teacherSpotify?.title || 'Daily Track',
+            artist: art || activity?.teacherSpotify?.artistOrHost || 'Spotify Artist',
+            url: activity?.teacherSpotify?.url,
+          },
+        });
+      } else if (activity && !activity.completedToday) {
+        onToggleComplete(activity.id);
+      }
+    },
+    isAlreadyCompleted: Boolean(activity?.completedToday),
+  });
 
   // 5 Words State
   const [words, setWords] = useState<string[]>(['', '', '', '', '']);
@@ -465,19 +543,12 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
               <Edit3 className="w-4 h-4" />
               <span>Manage Video Assignment</span>
             </button>
-          ) : (
-            <button
-              onClick={() => onToggleComplete(activity.id)}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs ${
-                activity.completedToday
-                  ? 'bg-[#9AB4FF]/20 text-[#062863] border border-[#9AB4FF]/50 hover:bg-[#9AB4FF]/30'
-                  : 'bg-[#1C4C96] hover:bg-[#062863] text-white'
-              }`}
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>{activity.completedToday ? t.practicedToday : t.markCompleted}</span>
-            </button>
-          )}
+          ) : activity.completedToday ? (
+            <div className="px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-800 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>{t.practicedToday}</span>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -837,13 +908,18 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
         {assignedVideo ? (
           <div className="space-y-4">
             {/* Embedded Player */}
-            <div className="relative aspect-video rounded-3xl overflow-hidden bg-[#000035] shadow-md border border-[#1C4C96]">
+            <div
+              className="relative aspect-video rounded-3xl overflow-hidden bg-[#000035] shadow-md border border-[#1C4C96]"
+              onClick={handleVideoPlayerInteraction}
+            >
               <iframe
+                ref={videoIframeRef}
                 src={getYouTubeEmbedUrl(assignedVideo.videoId || assignedVideo.url)}
                 title={assignedVideo.title || 'YouTube Video'}
                 className="w-full h-full border-0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
+                onLoad={handleVideoIframeLoad}
               />
             </div>
 
@@ -863,6 +939,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
                   href={getYouTubeWatchUrl(assignedVideo.videoId || assignedVideo.url)}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={handleVideoExternalClick}
                   className="text-xs font-bold text-[#1C4C96] hover:text-[#062863] flex items-center gap-1 shrink-0"
                 >
                   <span>{t.openInYouTube}</span>
@@ -883,49 +960,6 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
                   </div>
                 </div>
               )}
-
-              {/* Action: Clear video link after student watched it */}
-              <div className="p-3.5 bg-white rounded-xl border border-[#9AB4FF]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-[#9AB4FF]/20 text-[#062863] flex items-center justify-center shrink-0">
-                    <CheckCircle2 className="w-4 h-4 text-[#1C4C96]" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-[#000035] block">
-                      {currentLanguage === 'en' ? 'Finished watching this video?' : 'Já assistiu ao vídeo indicado?'}
-                    </span>
-                    <span className="text-[11px] text-[#607EC9] block">
-                      {currentLanguage === 'en'
-                        ? 'Clear the video link field so it stays blank until your teacher assigns another video.'
-                        : 'Limpe o link para o campo voltar a ficar em branco até o professor indicar o próximo vídeo.'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => handleClearVideoLink(true)}
-                    className="px-3 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>
-                      {currentLanguage === 'en'
-                        ? 'Watched! Clear Video Link'
-                        : 'Assistido! Limpar Link do Vídeo'}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleClearVideoLink(false)}
-                    className="px-2.5 py-1.5 bg-[#9AB4FF]/10 hover:bg-[#9AB4FF]/20 text-[#062863] border border-[#9AB4FF]/40 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                    title={currentLanguage === 'en' ? 'Reset link field to blank' : 'Deixar campo em branco'}
-                  >
-                    <RefreshCw className="w-3 h-3 text-[#607EC9]" />
-                    <span>{currentLanguage === 'en' ? 'Set to Blank' : 'Deixar em Branco'}</span>
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
         ) : (
@@ -1291,6 +1325,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
                 href={getSpotifyDirectUrl(activity.teacherSpotify.url)}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={() => triggerAudioCompletion()}
                 className="self-start md:self-center px-4 py-2 bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] text-xs font-extrabold rounded-xl transition flex items-center gap-2 shrink-0 shadow-sm"
               >
                 <Play className="w-4 h-4 fill-current" />
@@ -1300,7 +1335,10 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
 
             {/* Optional Embedded Spotify Player */}
             {showSpotifyEmbed && (
-              <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 bg-[#000035] shadow-inner p-1">
+              <div
+                className="rounded-2xl overflow-hidden border border-[#1DB954]/40 bg-[#000035] shadow-inner p-1"
+                onClick={() => triggerAudioCompletion()}
+              >
                 <iframe
                   src={getSpotifyEmbedUrl(activity.teacherSpotify.url)}
                   width="100%"
