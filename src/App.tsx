@@ -1355,16 +1355,18 @@ export default function App() {
       // 1. Update S-Path (Gráfico S) in React state & direct Firestore users/{studentUID} persistence
       setWeeklyChecks((prev) => {
         if (prev[checkKey]) return prev;
-        const nextChecks = { ...prev, [checkKey]: true };
+        return { ...prev, [checkKey]: true };
+      });
+
+      if (!isAlreadyChecked && uid) {
         saveStudentWeeklyChecksToFirestore(
           uid,
-          nextChecks,
+          { ...weeklyChecks, [checkKey]: true },
           email,
           userProfile?.weeklyNativeLessonsTarget,
           userProfile?.weeklyStudyDaysTarget
         );
-        return nextChecks;
-      });
+      }
 
       // 2. Update routine item state to completedToday = true
       setRoutinesByDay((prev) => {
@@ -1561,19 +1563,18 @@ export default function App() {
 
       setWeeklyChecks((prev) => {
         if (prev[checkKey] === isCompleted) return prev;
-        const nextChecks = { ...prev, [checkKey]: isCompleted };
+        return { ...prev, [checkKey]: isCompleted };
+      });
 
-        // 1. Direct write to Firestore users/{studentUID} + server API mirror
+      if (uid) {
         saveStudentWeeklyChecksToFirestore(
           uid,
-          nextChecks,
+          { ...weeklyChecks, [checkKey]: isCompleted },
           email,
           userProfile?.weeklyNativeLessonsTarget,
           userProfile?.weeklyStudyDaysTarget
         );
-
-        return nextChecks;
-      });
+      }
 
       // Feedback toast/notification for student
       if (isCompleted) {

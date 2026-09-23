@@ -42,7 +42,10 @@ export function useBehavioralVideoTracker({
       timerRef.current = null;
     }
     if (videoId && onCompleted) {
-      onCompleted(videoId, videoTitle);
+      // Defer execution using setTimeout to guarantee it never fires during React render / commit / state-update phase
+      setTimeout(() => {
+        onCompleted(videoId, videoTitle);
+      }, 0);
     }
   }, [videoId, videoTitle, onCompleted]);
 
@@ -76,7 +79,7 @@ export function useBehavioralVideoTracker({
           if (state === 0) {
             // YT.PlayerState.ENDED -> Immediate completion!
             setIsPlaying(false);
-            triggerCompletion();
+            setTimeout(() => triggerCompletion(), 0);
           } else if (state === 1) {
             // YT.PlayerState.PLAYING
             setIsPlaying(true);
@@ -103,7 +106,7 @@ export function useBehavioralVideoTracker({
         setPlaybackSeconds((prev) => {
           const next = prev + 1;
           if (next >= retentionSeconds) {
-            triggerCompletion();
+            setTimeout(() => triggerCompletion(), 0);
           }
           return next;
         });
@@ -202,7 +205,9 @@ export function useBehavioralAudioTracker({
     completedRef.current = true;
     setHasCompleted(true);
     if (trackId && onCompleted) {
-      onCompleted(trackId, trackTitle, artist);
+      setTimeout(() => {
+        onCompleted(trackId, trackTitle, artist);
+      }, 0);
     }
   }, [trackId, trackTitle, artist, onCompleted]);
 

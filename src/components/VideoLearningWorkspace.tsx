@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Play,
   Clock,
@@ -139,17 +139,8 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
   const assignedVideo: TeacherAssignedVideo | null = videos.length > 0 ? videos[0] : null;
   const assignedVideoId = assignedVideo ? (extractYouTubeVideoId(assignedVideo.videoId || assignedVideo.url || '') || assignedVideo.videoId || '') : '';
 
-  // Automatic behavioral tracking hooks
-  const {
-    iframeRef: videoIframeRef,
-    handleIframeLoad: handleVideoIframeLoad,
-    handlePlayerInteraction: handleVideoPlayerInteraction,
-    handleExternalWatchClick: handleVideoExternalClick,
-  } = useBehavioralVideoTracker({
-    videoId: assignedVideoId,
-    videoTitle: assignedVideo?.title,
-    retentionSeconds: 35,
-    onCompleted: (vid, tit) => {
+  const handleVideoCompleted = useCallback((vid: string, tit?: string) => {
+    setTimeout(() => {
       if (onBehavioralComplete && activity) {
         onBehavioralComplete({
           type: 'video',
@@ -164,17 +155,25 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
       } else if (activity && !activity.completedToday) {
         onToggleComplete(activity.id);
       }
-    },
+    }, 0);
+  }, [onBehavioralComplete, activity, assignedVideo?.title, assignedVideo?.url, onToggleComplete]);
+
+  // Automatic behavioral tracking hooks
+  const {
+    iframeRef: videoIframeRef,
+    handleIframeLoad: handleVideoIframeLoad,
+    handlePlayerInteraction: handleVideoPlayerInteraction,
+    handleExternalWatchClick: handleVideoExternalClick,
+  } = useBehavioralVideoTracker({
+    videoId: assignedVideoId,
+    videoTitle: assignedVideo?.title,
+    retentionSeconds: 35,
+    onCompleted: handleVideoCompleted,
     isAlreadyCompleted: Boolean(activity?.completedToday),
   });
 
-  const {
-    triggerCompletion: triggerAudioCompletion,
-  } = useBehavioralAudioTracker({
-    trackId: activity?.teacherSpotify?.id || activity?.teacherSpotify?.url,
-    trackTitle: activity?.teacherSpotify?.title,
-    artist: activity?.teacherSpotify?.artistOrHost,
-    onCompleted: (trkId, tit, art) => {
+  const handleAudioCompleted = useCallback((trkId: string, tit?: string, art?: string) => {
+    setTimeout(() => {
       if (onBehavioralComplete && activity) {
         onBehavioralComplete({
           type: 'audio',
@@ -191,7 +190,16 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
       } else if (activity && !activity.completedToday) {
         onToggleComplete(activity.id);
       }
-    },
+    }, 0);
+  }, [onBehavioralComplete, activity, onToggleComplete]);
+
+  const {
+    triggerCompletion: triggerAudioCompletion,
+  } = useBehavioralAudioTracker({
+    trackId: activity?.teacherSpotify?.id || activity?.teacherSpotify?.url,
+    trackTitle: activity?.teacherSpotify?.title,
+    artist: activity?.teacherSpotify?.artistOrHost,
+    onCompleted: handleAudioCompleted,
     isAlreadyCompleted: Boolean(activity?.completedToday),
   });
 

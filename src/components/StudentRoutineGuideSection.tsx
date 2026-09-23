@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Sparkles,
   Calendar,
@@ -370,7 +370,11 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         const fallback = activeStudyDays.includes(todayDay)
           ? todayDay
           : activeStudyDays[0];
-        if (fallback) onSelectDay(fallback);
+        if (fallback) {
+          setTimeout(() => {
+            onSelectDay(fallback);
+          }, 0);
+        }
       }
     }
   }, [activeStudyDays, selectedDay, todayDay, onSelectDay]);
@@ -763,15 +767,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const isVideoWatchedToday = Boolean(weeklyChecks?.[`video_day_${selectedDay}`]);
   const isAudioListenedToday = Boolean(weeklyChecks?.[`audio_day_${selectedDay}`]);
 
-  const {
-    iframeRef: videoIframeRef,
-    handleIframeLoad: handleVideoIframeLoad,
-    handlePlayerInteraction: handleVideoPlayerInteraction,
-  } = useBehavioralVideoTracker({
-    videoId: validVidId,
-    videoTitle: defaultVideoTitle,
-    retentionSeconds: 35,
-    onCompleted: (vid, tit) => {
+  const handleVideoCompleted = useCallback((vid: string, tit?: string) => {
+    setTimeout(() => {
       if (onBehavioralComplete) {
         onBehavioralComplete({
           type: 'video',
@@ -786,17 +783,23 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       } else {
         onUpdateSPathCheck?.('video_day', selectedDay, true);
       }
-    },
+    }, 0);
+  }, [onBehavioralComplete, selectedDay, activeActivity?.id, defaultVideoTitle, embedUrl, onUpdateSPathCheck]);
+
+  const {
+    iframeRef: videoIframeRef,
+    handleIframeLoad: handleVideoIframeLoad,
+    handlePlayerInteraction: handleVideoPlayerInteraction,
+  } = useBehavioralVideoTracker({
+    videoId: validVidId,
+    videoTitle: defaultVideoTitle,
+    retentionSeconds: 35,
+    onCompleted: handleVideoCompleted,
     isAlreadyCompleted: isVideoWatchedToday,
   });
 
-  const {
-    triggerCompletion: triggerAudioCompletion,
-  } = useBehavioralAudioTracker({
-    trackId: currentSpotifyTrackForSync?.id || 'sp-track',
-    trackTitle: effectiveTrackTitle,
-    artist: effectiveArtist,
-    onCompleted: (trkId, tit, art) => {
+  const handleAudioCompleted = useCallback((trkId: string, tit?: string, art?: string) => {
+    setTimeout(() => {
       if (onBehavioralComplete) {
         onBehavioralComplete({
           type: 'audio',
@@ -814,7 +817,16 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       } else {
         onUpdateSPathCheck?.('audio_day', selectedDay, true);
       }
-    },
+    }, 0);
+  }, [onBehavioralComplete, selectedDay, effectiveTrackTitle, effectiveArtist, effectiveCoverUrl, effectiveDirectUrl, onUpdateSPathCheck]);
+
+  const {
+    triggerCompletion: triggerAudioCompletion,
+  } = useBehavioralAudioTracker({
+    trackId: currentSpotifyTrackForSync?.id || 'sp-track',
+    trackTitle: effectiveTrackTitle,
+    artist: effectiveArtist,
+    onCompleted: handleAudioCompleted,
     isAlreadyCompleted: isAudioListenedToday,
   });
 
