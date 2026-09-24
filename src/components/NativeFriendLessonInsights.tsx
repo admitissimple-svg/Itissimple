@@ -11,6 +11,10 @@ import {
   RefreshCw,
   AlertCircle,
   ExternalLink,
+  Calendar,
+  Clock,
+  PenTool,
+  CheckCircle2,
 } from 'lucide-react';
 import { useStudentHistory } from '../hooks/useStudentHistory';
 import { DayOfWeek, StudentJournalEntry } from '../types';
@@ -164,6 +168,11 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
   const weeklyVocabulary = useMemo(() => {
     return weeklyHistory?.weeklyVocabulary || [];
   }, [weeklyHistory?.weeklyVocabulary]);
+
+  // Compiled timeline of recent events from studentJournal (Single Source of Truth)
+  const recentJournalSummary = useMemo(() => {
+    return [...journalEntries].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 8);
+  }, [journalEntries]);
 
   // Generate 3 to 4 relaxed, non-invasive conversational questions based on student's actual weekly consumption & vocabulary
   const icebreakers = useMemo(() => {
@@ -491,7 +500,84 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
           </div>
         </div>
 
-        {/* Section 2: Conversational Icebreakers & Engagement Prompts */}
+        {/* Section 2: Recent Student Activity Log (Direct from Student Journal) */}
+        <div className="border-t border-slate-100 pt-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Recent Activity Log (Student Journal)</span>
+            </h3>
+            <span className="text-[11px] text-slate-400 font-medium">
+              Synchronized from profile (users/{studentUid || 'student'})
+            </span>
+          </div>
+
+          {recentJournalSummary.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {recentJournalSummary.map((entry, idx) => {
+                const isVideo = entry.type === 'video';
+                const isAudio = entry.type === 'audio';
+                const isSentence = entry.type === 'sentence';
+                const isMemo = entry.type === 'memorization';
+                const isLive = entry.type === 'tutor_live' || entry.type === 'lesson';
+
+                const badgeBg = isVideo
+                  ? 'bg-rose-50 border-rose-200 text-rose-700'
+                  : isAudio
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                  : isSentence
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : isMemo
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  : 'bg-blue-50 border-blue-200 text-blue-700';
+
+                const typeLabel = isVideo
+                  ? 'YouTube Video'
+                  : isAudio
+                  ? 'Spotify Track'
+                  : isSentence
+                  ? 'Sentence of the Day'
+                  : isMemo
+                  ? 'Memorization Part'
+                  : 'Native Friend Lesson';
+
+                return (
+                  <div
+                    key={entry.id || idx}
+                    className="p-3 bg-slate-50/80 hover:bg-slate-50 border border-slate-200/80 rounded-xl transition flex flex-col justify-between space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${badgeBg}`}>
+                        {typeLabel}
+                      </span>
+                      <div className="flex items-center gap-1 text-[10px] text-slate-400 font-medium">
+                        <Clock className="w-3 h-3" />
+                        <span>{entry.date || (entry.timestamp ? new Date(entry.timestamp).toLocaleDateString() : '')}</span>
+                        {entry.dayOfWeek && <span className="uppercase font-bold">({entry.dayOfWeek.slice(0, 3)})</span>}
+                      </div>
+                    </div>
+
+                    <p className="text-xs font-semibold text-slate-800 line-clamp-2">
+                      {entry.title || entry.details || (isVideo ? 'Daily Routine Video' : isAudio ? 'Daily Track' : 'Routine Activity Completed')}
+                    </p>
+
+                    {entry.details && entry.type === 'sentence' && (
+                      <p className="text-[11px] text-slate-600 italic bg-white p-2 rounded-lg border border-slate-200/60 line-clamp-2">
+                        "{entry.details}"
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400 italic py-3 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              No journal activities recorded yet for this student.
+            </p>
+          )}
+        </div>
+
+        {/* Section 3: Conversational Icebreakers & Engagement Prompts */}
         <div className="border-t border-slate-100 pt-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>

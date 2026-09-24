@@ -351,15 +351,15 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     );
   };
 
-  // Check if an activity is completed strictly from studentJournal as Single Source of Truth
+  // Check if an activity is completed strictly and uniquely from studentJournal as Single Source of Truth
   const isActivityCompleted = useCallback(
     (rowId: string, dayKey: DayOfWeek): boolean => {
       const targetType = mapStepIdToJournalType(rowId);
       const currentWeek = userProfile?.weeklyCycle || 1;
       const dayCalendarDate = getDateForDayInCurrentWeek(dayKey);
 
-      // 1. Strict studentJournal check (Single Source of Truth)
-      const foundInJournal = activeJournal.some((entry) => {
+      // Rendered solely based on events registered in studentJournal for flawless cross-device sync
+      return activeJournal.some((entry) => {
         if (!entry || entry.type !== targetType) return false;
         // Match exact calendar date in this current week
         if (entry.date && entry.date === dayCalendarDate) return true;
@@ -369,13 +369,8 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         }
         return false;
       });
-
-      if (foundInJournal) return true;
-
-      // 2. Fallback to weeklyChecks for legacy compatibility
-      return Boolean(weeklyChecks[`${rowId}_${dayKey}`]);
     },
-    [activeJournal, userProfile?.weeklyCycle, weeklyChecks]
+    [activeJournal, userProfile?.weeklyCycle]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {

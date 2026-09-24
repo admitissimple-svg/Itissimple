@@ -645,12 +645,13 @@ export async function resetDailyRoutinesForNewWeekInFirestore(
 }
 
 /**
- * Filter candidates against watched videos history to enforce 100% exclusivity.
- * Returns the first video that has NOT yet been watched.
+ * Filter candidates against watched videos history and studentJournal to enforce 100% exclusivity.
+ * Returns the first video that has NOT yet been watched or recorded in studentJournal.
  */
 export function selectNextUnwatchedVideo<T extends { videoId?: string; id?: string; url?: string }>(
   candidateVideos: T[],
-  watchedHistory: string[]
+  watchedHistory: string[],
+  studentJournal?: any[]
 ): T | null {
   if (!Array.isArray(candidateVideos) || candidateVideos.length === 0) {
     return null;
@@ -659,6 +660,19 @@ export function selectNextUnwatchedVideo<T extends { videoId?: string; id?: stri
   const watchedSet = new Set(
     (watchedHistory || []).map((id) => (extractYouTubeVideoId(id) || id || '').trim().toLowerCase())
   );
+
+  if (Array.isArray(studentJournal)) {
+    studentJournal.forEach((entry) => {
+      if (entry && entry.type === 'video' && entry.id) {
+        const vid = (extractYouTubeVideoId(entry.id) || entry.id || '').trim().toLowerCase();
+        if (vid) watchedSet.add(vid);
+        if (entry.url) {
+          const uVid = (extractYouTubeVideoId(entry.url) || '').trim().toLowerCase();
+          if (uVid) watchedSet.add(uVid);
+        }
+      }
+    });
+  }
 
   const unwatched = candidateVideos.find((vid) => {
     const rawId = vid.videoId || vid.id || vid.url || '';
@@ -900,7 +914,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
     markVideoAsWatched,
     resetRepeatFlags,
     resetRoutinesForNewWeek,
-    selectNextUnwatchedVideo: <T extends { videoId?: string; id?: string; url?: string }>(candidates: T[]) =>
-      selectNextUnwatchedVideo(candidates, watchedHistory),
+    selectNextUnwatchedVideo: <T extends { videoId?: string; id?: string; url?: string }>(candidates: T[], customJournal?: any[]) =>
+      selectNextUnwatchedVideo(candidates, watchedHistory, customJournal),
   };
 }

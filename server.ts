@@ -3572,13 +3572,28 @@ function distributeWeeklySpotifyForStudent(
   const targetDays = DAYS_SEQUENCE.filter((d) => studentConfiguredDays.includes(d));
   const daysToDistribute = targetDays.length > 0 ? targetDays : DAYS_SEQUENCE;
 
-  // Consumed tracks: already listened by this student
+  // Consumed tracks: already listened by this student OR in studentJournal (Single Source of Truth)
   const consumedTrackIds = new Set<string>();
   targetKeys.forEach((k) => {
     const listened = db.studentListenedTracks?.[k] || [];
     listened.forEach((id: string) => {
       const cid = extractSpotifyTrackId(id);
       if (cid) consumedTrackIds.add(cid);
+    });
+
+    const journalEntries = [
+      ...((db.studentActivityJournal?.[k]) || []),
+      ...((db.userProfiles?.[k]?.studentJournal) || []),
+    ];
+    journalEntries.forEach((entry: any) => {
+      if (entry && entry.type === 'audio' && entry.id) {
+        const cid = extractSpotifyTrackId(entry.id);
+        if (cid) consumedTrackIds.add(cid);
+        if (entry.url) {
+          const urlCid = extractSpotifyTrackId(entry.url);
+          if (urlCid) consumedTrackIds.add(urlCid);
+        }
+      }
     });
   });
 
@@ -5089,6 +5104,9 @@ app.post('/api/student-journal/activity', async (req, res) => {
   if (cleanEmail && db.userProfiles?.[cleanEmail]) {
     db.userProfiles[cleanEmail].studentJournal = updated;
   }
+  if (cleanUid && db.userProfiles?.[cleanUid]) {
+    db.userProfiles[cleanUid].studentJournal = updated;
+  }
 
   await writeDbSync(db);
   res.json({ success: true, entries: updated });
@@ -5109,6 +5127,9 @@ app.delete('/api/student-journal/activity', async (req, res) => {
 
   if (cleanEmail && db.userProfiles?.[cleanEmail]) {
     db.userProfiles[cleanEmail].studentJournal = updated;
+  }
+  if (cleanUid && db.userProfiles?.[cleanUid]) {
+    db.userProfiles[cleanUid].studentJournal = updated;
   }
 
   await writeDbSync(db);
@@ -6302,7 +6323,7 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
 
   const targetDay = day || 'monday';
 
-  // Consumed video IDs: already watched OR already assigned to other days of the week for this student
+  // Consumed video IDs: already watched OR already assigned to other days of the week for this student OR recorded in studentJournal
   const consumedVideoIds = new Set<string>();
   userWatched.forEach((id: string) => {
     const cid = extractServerYouTubeId(id);
@@ -6316,6 +6337,26 @@ app.post('/api/student-video-assignments/assign', (req, res) => {
     const cid = extractServerYouTubeId(id);
     if (cid) {
       consumedVideoIds.add(cid);
+    }
+  });
+
+  // Query studentJournal from request body, in-memory DB, and profile to enforce 100% video exclusivity
+  const reqJournal: any[] = Array.isArray(req.body.studentJournal) ? req.body.studentJournal : [];
+  const dbJournalEntries = [
+    ...reqJournal,
+    ...((cleanEmail && db.studentActivityJournal?.[cleanEmail]) || []),
+    ...((uid && db.studentActivityJournal?.[uid]) || []),
+    ...((cleanEmail && db.userProfiles?.[cleanEmail]?.studentJournal) || []),
+    ...((uid && db.userProfiles?.[uid]?.studentJournal) || []),
+  ];
+  dbJournalEntries.forEach((entry: any) => {
+    if (entry && entry.type === 'video' && entry.id) {
+      const cid = extractServerYouTubeId(entry.id);
+      if (cid) consumedVideoIds.add(cid);
+      if (entry.url) {
+        const uCid = extractServerYouTubeId(entry.url);
+        if (uCid) consumedVideoIds.add(uCid);
+      }
     }
   });
 
@@ -7606,7 +7647,7 @@ app.post('/api/email-logs', (req, res) => {
   res.json({ success: true });
 });
 
-// 12. Writing / Grammar Evaluation via Gemini API with Target Word & Trigger Challenge Evaluation
+// 12. Writing / Grammar Evaluation via Gemini API with Absolute Rigor & Subtle Error Detection
 app.post('/api/check-writing', async (req, res) => {
   const {
     words = [],
@@ -7622,25 +7663,149 @@ app.post('/api/check-writing', async (req, res) => {
   const allTargetWords = targetWord ? Array.from(new Set([targetWord, ...words])) : words;
   const mainTarget = targetWord || allTargetWords[0] || '';
 
+  const rawClean = (sentence || '').trim();
+  const programmaticErrorsPt: string[] = [];
+  const programmaticErrorsEn: string[] = [];
+  let programmaticFixed = rawClean;
+  let hasProgrammaticError = false;
+
+  // 1. Rigorous Check: Missing dummy subject "it" in impersonal clauses
+  if (/(^|[.?!;]\s*)(sometimes\s+is\s+better)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)sometimes\s+is\s+better\b/gi, '$1Sometimes it is better');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Omissão de sujeito: em inglês, orações impessoais exigem o pronome 'it' (use 'Sometimes it is better').");
+    programmaticErrorsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'Sometimes it is better').");
+  } else if (/(^|[.?!;]\s*)is\s+better\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)is\s+better\b/gi, '$1It is better');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Omissão de sujeito: orações impessoais exigem o pronome 'it' (use 'It is better').");
+    programmaticErrorsEn.push("Missing subject: English requires 'it' (use 'It is better').");
+  } else if (/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential|bad)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential|bad)\b/gi, '$1It is $2');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Omissão de sujeito: inicie com 'It is' para predicativos impessoais.");
+    programmaticErrorsEn.push("Missing subject: start with 'It is' for impersonal predicates.");
+  }
+
+  // 2. Rigorous Check: Missing infinitive marker "to" after better
+  if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/gi, (match, prefix, verb) => {
+      const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : 'It is better';
+      return `${cleanPrefix} to ${verb}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Falta de infinitivo: use 'to' após 'better' (ex: 'better to take').");
+    programmaticErrorsEn.push("Missing infinitive: use 'to' after 'better' (e.g., 'better to take').");
+  }
+
+  // 3. Rigorous Check: Regência / Prepositional complement (instead to -> instead of + gerund)
+  if (/\binstead\s+to\s+([a-z]+)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\binstead\s+to\s+([a-z]+)\b/gi, (match, verb) => {
+      const lowerVerb = verb.toLowerCase();
+      let gerund = lowerVerb + 'ing';
+      if (lowerVerb.endsWith('e') && !lowerVerb.endsWith('ee')) {
+        gerund = lowerVerb.slice(0, -1) + 'ing';
+      }
+      return `instead of ${gerund}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Regência incorreta: após 'instead', usa-se 'instead of' seguido de verbo no gerúndio (ex: 'instead of facing', e não 'instead to face').");
+    programmaticErrorsEn.push("Incorrect preposition: use 'instead of' + gerund (e.g., 'instead of facing', not 'instead to face').");
+  }
+
+  // 4. Rigorous Check: Indefinite article vowel error (a awkward, a interview, etc.)
+  const VOWEL_ARTICLE_REGEX = /\ba\s+(awkward|interview|apple|orange|egg|incident|option|idea|opportunity|issue|event|action|afternoon|evening|example|experience|artist|album|activity|easy|honest|hour)\b/gi;
+  if (VOWEL_ARTICLE_REGEX.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(VOWEL_ARTICLE_REGEX, (match, word) => `an ${word}`);
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Erro de artigo indefinido: use 'an' antes de palavras iniciadas por som vocálico (ex: 'an awkward', 'an interview').");
+    programmaticErrorsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an awkward', 'an interview').");
+  }
+
+  // 5. Rigorous Check: Homophone/confusable word (loose vs lose)
+  if (/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace)\b/gi, 'lose $1');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Confusão ortográfica: use 'lose' (verbo perder) e não 'loose' (adjetivo frouxo/solto).");
+    programmaticErrorsEn.push("Word confusion: use 'lose' (verb to lose) instead of 'loose' (adjective loose).");
+  }
+
+  // 6. Rigorous Check: Verb agreement
+  if (/\byou has\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\byou has\b/gi, 'you have');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Concordância: use 'you have' em vez de 'you has'.");
+    programmaticErrorsEn.push("Verb agreement: use 'you have' instead of 'you has'.");
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
-    const prompt = `You are an encouraging, expert English teacher at "It's Simple".
-Evaluate the student's written sentence for Part 3: Sentence Writing (Weekly Memorization Activity), calibrated to their proficiency level:
+    const prompt = `YOU ARE A METICULOUS, STRICT SENIOR PROFESSOR OF ENGLISH AND GRAMMAR SPECIALIST AT "IT'S SIMPLE".
+YOUR TASK: Perform an EXTREMELY RIGOROUS, ZERO-TOLERANCE grammatical and linguistic evaluation of an English sentence written by a student.
 
-STUDENT PROFICIENCY LEVEL: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
-Target Vocabulary to use: ${JSON.stringify(allTargetWords)}
-Situation / Prompt Instruction: "${instruction || 'Write an authentic sentence in a daily situation'}"
-Specific Challenge / Trigger required: "${levelInstruction || 'Form a natural, complete sentence'}"
-Student's sentence: "${sentence}"
+CRITICAL MANDATE - RIGOR ABSOLUTO:
+Under NO circumstances may you approve a sentence as correct or "hasAnyError: false" if it contains ANY linguistic inaccuracy, grammatical error, spelling mistake, awkward non-native phrasing, or omission—no matter how subtle!
+Even if the student's message is understandable or communicative, ANY error MUST be flagged and rejected with "hasAnyError: true" and "isCorrect: false". DO NOT APPROVE AS OUTSTANDING!
 
-EVALUATION OBJECTIVES:
-1. Target Word Check: Did the student use "${mainTarget}" (or an acceptable inflected form)?
-2. Challenge / Trigger Check: Did the student follow the required challenge/trigger "${levelInstruction}"? (e.g. if asked to use 'because' or 'since' to explain reason, did they? If modal like 'might'/'should', did they? If 'whenever', did they?)
-3. Context & Coherence: Does the sentence make sense and fit the requested situation?
-4. Grammar, Spelling & Natural Phrasing: Are capitalization, punctuation, verb tense, and syntax correct?
+MANDATORY ERROR CHECKLIST TO DETECT AND REJECT:
+1. DUMMY SUBJECT OMISSIONS:
+   - English requires explicit subjects in non-imperative clauses.
+   - REJECT: "Sometimes is better...", "Is raining", "Is important to...", "Is necessary...", "Was good to see you".
+   - MUST BE: "Sometimes IT is better...", "It is raining", "It is important to...", "It was good to see you".
 
-Provide constructive, warm pedagogical feedback in both Portuguese and English.
-If the sentence is good, celebrate it! If there are improvements or missing triggers, give gentle feedback and provide an enhanced version in "correctedSentence".
+2. PREPOSITION COMPLEMENTS & REGÊNCIA (PREPOSITIONAL GOVERNANCE):
+   - REJECT incorrect prepositions or infinitives after prepositions:
+   - REJECT: "instead to face", "instead to do", "instead face".
+   - MUST BE: "instead OF facing", "instead of doing".
+   - REJECT: "look forward to see", "capable to do", "interested to buy", "in spite to".
+   - MUST BE: "look forward to seeing", "capable of doing", "interested in buying", "in spite of".
+
+3. ARTICLE ERRORS (A vs. AN):
+   - REJECT: "a awkward", "a interview", "a apple", "a hour", "an university", "an European".
+   - MUST BE: "an awkward", "an interview", "an apple", "an hour", "a university", "a European".
+
+4. COMMONLY CONFUSED WORDS, HOMOPHONES & SPELLING:
+   - REJECT: "loose" used for "lose" (e.g., "loose your mental state" -> MUST BE "lose your mental state").
+   - REJECT: "affect" vs "effect", "their" vs "there" vs "they're", "its" vs "it's", "than" vs "then", "choose" vs "chose", "breathe" vs "breath", "advice" vs "advise".
+   - REJECT any spelling mistake, even 1 letter (e.g. "comute", "breackfast", "restorant").
+
+5. INFINITIVE vs. GERUND vs. BARE INFINITIVE:
+   - REJECT: "is better take" -> MUST BE: "is better TO take" or "taking".
+   - REJECT: "stop to smoke" (when meaning quit smoking) vs "stop smoking".
+
+6. SUBJECT-VERB AGREEMENT & TENSE CONSISTENCY:
+   - REJECT: "he do", "she have", "you has", "everyone are", "neither of them are".
+   - REJECT inconsistent mixing of tenses without reason.
+
+7. PUNCTUATION & CAPITALIZATION:
+   - First letter must be capitalized.
+   - Sentence must end with valid punctuation (. ! ?).
+
+8. TARGET VOCABULARY & TRIGGER USAGE:
+   - If target words were provided (${JSON.stringify(allTargetWords)}), verify that the student used the target word ("${mainTarget}").
+   - If a specific trigger was requested ("${levelInstruction}"), verify strict compliance.
+
+EVALUATION PARAMETERS:
+- Student Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+- Target Word: "${mainTarget}"
+- Required Trigger/Instruction: "${levelInstruction || 'Form a natural, grammatically flawless sentence'}"
+- Student Input: "${sentence}"
+
+STRICT DECISION RULES:
+- If ANY error from the checklist above (or any other grammar/syntax/collocation flaw) is present:
+  * "hasAnyError": true
+  * "isCorrect": false
+  * "sentenceFeedback.hasError": true
+  * "explanationPt": Point out EXACTLY what is wrong in clear Portuguese (e.g., "Identificamos erros gramaticais: 1) Omissão do sujeito 'it' em 'it is better'; 2) Falta da partícula de infinitivo 'to take'; 3) Regência incorreta: use 'instead of facing' (com gerúndio) e não 'instead to face'; 4) Artigo indefinido incorreto: use 'an awkward' antes de som vocálico; 5) Confusão ortográfica: use 'lose' (perder) em vez de 'loose' (frouxo).")
+  * "explanationEn": Point out EXACTLY what is wrong in clear English.
+  * "correctedSentence": The fully polished, 100% grammatically correct, native-sounding English sentence.
+  * "overallSummaryPt": "Atenção: sua frase contém incorreções gramaticais que precisam ser corrigidas antes da aprovação."
+  * "overallSummaryEn": "Needs revision: please review the grammar corrections below to perfect your sentence."
+- ONLY IF the sentence is 100% FLAWLESS with NO errors:
+  * "hasAnyError": false
+  * "isCorrect": true
+  * "overallSummaryPt": "Excelente! Sua frase está 100% correta gramaticalmente, fluente e natural."
+  * "overallSummaryEn": "Outstanding! Your sentence is grammatically correct and natural."
 
 Output STRICT JSON matching this schema:
 {
@@ -7675,7 +7840,31 @@ Output STRICT JSON matching this schema:
 
     const parsed = await callGeminiSafeJson(prompt, 10000);
     if (parsed && typeof parsed === 'object') {
-      parsed.isCorrect = typeof parsed.isCorrect === 'boolean' ? parsed.isCorrect : !parsed.hasAnyError;
+      // Programmatic safety enforcement: if programmatic check detected an error, guarantee failure!
+      if (hasProgrammaticError) {
+        parsed.hasAnyError = true;
+        parsed.isCorrect = false;
+        if (!parsed.sentenceFeedback) {
+          parsed.sentenceFeedback = { original: rawClean, hasError: true, corrected: programmaticFixed, explanationPt: '', explanationEn: '' };
+        }
+        parsed.sentenceFeedback.hasError = true;
+        const extraPt = programmaticErrorsPt.join(' ');
+        const extraEn = programmaticErrorsEn.join(' ');
+        parsed.sentenceFeedback.explanationPt = parsed.sentenceFeedback.explanationPt
+          ? `${extraPt} ${parsed.sentenceFeedback.explanationPt}`
+          : extraPt;
+        parsed.sentenceFeedback.explanationEn = parsed.sentenceFeedback.explanationEn
+          ? `${extraEn} ${parsed.sentenceFeedback.explanationEn}`
+          : extraEn;
+        parsed.explanation = parsed.sentenceFeedback.explanationPt;
+        parsed.overallSummaryPt = "Atenção: sua frase contém incorreções gramaticais que precisam ser corrigidas antes da aprovação.";
+        parsed.overallSummaryEn = "Needs revision: please review the grammar corrections below to perfect your sentence.";
+        if (!parsed.correctedSentence || parsed.correctedSentence === rawClean) {
+          parsed.correctedSentence = programmaticFixed;
+        }
+      }
+
+      parsed.isCorrect = parsed.hasAnyError === false;
       parsed.explanation =
         parsed.explanation ||
         parsed.sentenceFeedback?.explanationPt ||
@@ -7685,13 +7874,14 @@ Output STRICT JSON matching this schema:
     }
   }
 
-  // Fallback heuristic with level tips and trigger detection
+  // Fallback heuristic with level tips, trigger detection, and absolute rigor
   const cleanTarget = mainTarget.trim().toLowerCase();
   const lowerSentence = (sentence || '').toLowerCase().trim();
   const targetRoot = cleanTarget.replace(/(ing|ed|s|es|d)$/i, '');
   const usedTargetWord = Boolean(
-    cleanTarget &&
-    (lowerSentence.includes(cleanTarget) || (targetRoot.length >= 4 && lowerSentence.includes(targetRoot)))
+    !cleanTarget ||
+    lowerSentence.includes(cleanTarget) ||
+    (targetRoot.length >= 4 && lowerSentence.includes(targetRoot))
   );
 
   let usedTrigger = true;
@@ -7732,25 +7922,30 @@ Output STRICT JSON matching this schema:
   const isBeg = levelMeta.key === 'beginner';
   const isAdv = levelMeta.key === 'advanced';
 
-  let hasSentenceError = false;
-  let correctedSentence = sentence;
-  let explanationPt = 'Frase correta e bem estruturada.';
-  let explanationEn = 'Correct and well-structured sentence.';
+  let hasSentenceError = hasProgrammaticError;
+  let correctedSentence = programmaticFixed;
 
-  if (sentence && sentence.trim()) {
-    if (/\byou has\b/i.test(correctedSentence)) {
-      hasSentenceError = true;
-      correctedSentence = correctedSentence.replace(/\byou has\b/gi, 'you have');
-      explanationPt = "Com o sujeito 'you', a concordância correta é 'have' (you have).";
-      explanationEn = "With the subject 'you', the correct verb agreement is 'have' (you have).";
-    }
-    if (/\bin the end of the day\b/i.test(correctedSentence)) {
-      hasSentenceError = true;
-      correctedSentence = correctedSentence.replace(/\bin the end of the day\b/gi, 'At the end of the day');
-      explanationPt = "A expressão idiomática natural em inglês é 'At the end of the day'.";
-      explanationEn = "The natural English idiom is 'At the end of the day'.";
-    }
+  if (correctedSentence && !/[.!?]$/.test(correctedSentence)) {
+    correctedSentence += '.';
   }
+  if (correctedSentence && /^[a-z]/.test(correctedSentence)) {
+    correctedSentence = correctedSentence.charAt(0).toUpperCase() + correctedSentence.slice(1);
+    hasSentenceError = true;
+    programmaticErrorsPt.push("Inicie a frase com letra maiúscula.");
+    programmaticErrorsEn.push("Start the sentence with a capital letter.");
+  }
+
+  const explanationPt = hasSentenceError
+    ? programmaticErrorsPt.join(' ')
+    : !usedTargetWord && mainTarget
+    ? `Por favor, inclua a palavra-alvo "${mainTarget}".`
+    : 'Frase correta e bem estruturada.';
+
+  const explanationEn = hasSentenceError
+    ? programmaticErrorsEn.join(' ')
+    : !usedTargetWord && mainTarget
+    ? `Please include the target word "${mainTarget}".`
+    : 'Correct and well-structured sentence.';
 
   const hasAnyError = hasSentenceError || !usedTargetWord || !usedTrigger;
 
@@ -7760,14 +7955,14 @@ Output STRICT JSON matching this schema:
     usedTargetWord,
     usedTrigger,
     targetWordFeedback: usedTargetWord
-      ? `Palavra-alvo "${mainTarget}" aplicada corretamente.`
+      ? `Palavra-alvo "${mainTarget}" aplicada com sucesso.`
       : `Inclua a palavra "${mainTarget}" na sua frase.`,
     triggerFeedback,
     wordFeedbacks,
     sentenceFeedback: sentence
       ? {
           original: sentence,
-          hasError: hasSentenceError,
+          hasError: hasAnyError,
           corrected: correctedSentence,
           explanationPt,
           explanationEn,
@@ -7776,19 +7971,19 @@ Output STRICT JSON matching this schema:
     correctedSentence,
     explanation: explanationPt,
     overallSummaryPt: !hasAnyError
-      ? `Muito bom! Frase natural, com a palavra "${mainTarget}" e o gatilho cumprido.`
+      ? `Excelente! Frase natural, com a palavra "${mainTarget}" e o gatilho cumprido.`
       : !usedTargetWord
       ? `Por favor, inclua a palavra "${mainTarget}" na sua frase.`
       : !usedTrigger
       ? triggerFeedback || 'Ajuste o gatilho solicitado na instrução.'
-      : 'Revisamos a pontuação e gramática da sua frase.',
+      : 'Atenção: sua frase contém incorreções gramaticais que precisam ser corrigidas antes da aprovação.',
     overallSummaryEn: !hasAnyError
-      ? `Great job! Natural sentence using "${mainTarget}" and fulfilling the challenge trigger.`
+      ? `Outstanding! Your sentence is grammatically correct and natural.`
       : !usedTargetWord
       ? `Please incorporate the target word "${mainTarget}" into your sentence.`
       : !usedTrigger
       ? 'Review the challenge trigger specified in the prompt.'
-      : 'Reviewed punctuation and sentence grammar.',
+      : 'Needs revision: please review the grammar corrections below to perfect your sentence.',
     levelTipsPt: isBeg
       ? 'Dica Iniciante: Lembre-se sempre de manter Sujeito + Verbo + Complemento.'
       : isAdv

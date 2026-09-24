@@ -107,6 +107,7 @@ interface StudentRoutineGuideSectionProps {
   weeklyCycle?: number;
   isStarting?: boolean;
   weeklyChecks?: Record<string, boolean>;
+  studentJournal?: StudentJournalEntry[];
   onUpdateSPathCheck?: (
     stepId: 'video_day' | 'audio_day' | 'memorization' | 'tutor_live',
     dayKey: DayOfWeek,
@@ -157,6 +158,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   weeklyCycle = 1,
   isStarting = false,
   weeklyChecks,
+  studentJournal,
   onUpdateSPathCheck,
   onBehavioralComplete,
 }) => {
@@ -520,6 +522,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     return activeDaysInOrder.indexOf(selectedDay);
   }, [activeDaysInOrder, selectedDay]);
 
+  const effectiveJournal = useMemo(() => {
+    if (Array.isArray(studentJournal) && studentJournal.length > 0) return studentJournal;
+    if (Array.isArray(userProfile?.studentJournal) && userProfile.studentJournal.length > 0) return userProfile.studentJournal;
+    return [];
+  }, [studentJournal, userProfile?.studentJournal]);
+
   const currentDayTrack = useMemo(() => {
     return selectCurrentDaySpotifyTrack({
       level: normalizedLevel,
@@ -527,16 +535,17 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       activeStudyDays: activeDaysInOrder,
       weeklyCycle,
       liveTracks: liveSpotifyTracks,
+      studentJournal: effectiveJournal,
     });
-  }, [normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, liveSpotifyTracks]);
+  }, [normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, liveSpotifyTracks, effectiveJournal]);
 
   const dailySpotifyTrack = useMemo(() => {
     return (
       currentDayTrack ||
-      getDailySpotifyTrackForStudent(normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle) ||
+      getDailySpotifyTrackForStudent(normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, effectiveJournal) ||
       levelPlaylistConfig.tracks.monday
     );
-  }, [currentDayTrack, normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, levelPlaylistConfig]);
+  }, [currentDayTrack, normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, levelPlaylistConfig, effectiveJournal]);
 
   const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
 
@@ -1064,6 +1073,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           activityId,
           day: selectedDay,
           watchedVideosHistory: watchedHistory,
+          studentJournal: effectiveJournal,
         }),
       });
 

@@ -229,6 +229,8 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
   let sentenceFeedback: SentenceFeedback | undefined = undefined;
   let correctedSentence = sentence;
   let hasSentenceError = false;
+  const errorDetailsPt: string[] = [];
+  const errorDetailsEn: string[] = [];
 
   const sClean = sentence.trim();
   const lowerSentence = sClean.toLowerCase();
@@ -238,8 +240,9 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
   const cleanTarget = mainTarget.trim().toLowerCase();
   const targetRoot = cleanTarget.replace(/(ing|ed|s|es|d)$/i, '');
   const usedTargetWord = Boolean(
-    cleanTarget &&
-    (lowerSentence.includes(cleanTarget) || (targetRoot.length >= 4 && lowerSentence.includes(targetRoot)))
+    !cleanTarget ||
+    lowerSentence.includes(cleanTarget) ||
+    (targetRoot.length >= 4 && lowerSentence.includes(targetRoot))
   );
 
   // Trigger check based on levelInstruction
@@ -277,53 +280,116 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     }
   }
 
-  if (sClean.length >= 4) {
+  if (sClean.length >= 3) {
     let sFixed = sClean;
 
-    // Check basic capitalization and punctuation
+    // 1. Rigorous Check: Missing dummy subject "it" (e.g., "Sometimes is better", "is better", "is important")
+    if (/(^|[.?!;]\s*)(sometimes\s+is\s+better)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/(^|[.?!;]\s*)sometimes\s+is\s+better\b/gi, '$1Sometimes it is better');
+      hasSentenceError = true;
+      errorDetailsPt.push("Omissão de sujeito: em inglês, orações impessoais exigem o pronome 'it' (use 'Sometimes it is better').");
+      errorDetailsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'Sometimes it is better').");
+    } else if (/(^|[.?!;]\s*)is\s+better\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/(^|[.?!;]\s*)is\s+better\b/gi, '$1It is better');
+      hasSentenceError = true;
+      errorDetailsPt.push("Omissão de sujeito: orações impessoais exigem 'it' (use 'It is better').");
+      errorDetailsEn.push("Missing subject: English requires 'it' (use 'It is better').");
+    } else if (/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential)\b/gi, '$1It is $2');
+      hasSentenceError = true;
+      errorDetailsPt.push("Omissão de sujeito: inicie com 'It is' para adjetivos predicativos.");
+      errorDetailsEn.push("Missing subject: start with 'It is' for predicate adjectives.");
+    }
+
+    // 2. Rigorous Check: Missing infinitive particle "to" after "better" (e.g., "better take", "better face")
+    if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/gi, (match, prefix, verb) => {
+        const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : 'It is better';
+        return `${cleanPrefix} to ${verb}`;
+      });
+      hasSentenceError = true;
+      errorDetailsPt.push("Falta do marcador de infinitivo: use 'to' após 'better' (ex: 'better to take').");
+      errorDetailsEn.push("Missing infinitive particle: use 'to' after 'better' (e.g., 'better to take').");
+    }
+
+    // 3. Rigorous Check: Incorrect prepositional governance / regência (e.g., "instead to face", "instead face")
+    if (/\binstead\s+to\s+([a-z]+)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\binstead\s+to\s+([a-z]+)\b/gi, (match, verb) => {
+        const lowerVerb = verb.toLowerCase();
+        let gerund = lowerVerb + 'ing';
+        if (lowerVerb.endsWith('e') && !lowerVerb.endsWith('ee')) {
+          gerund = lowerVerb.slice(0, -1) + 'ing';
+        }
+        return `instead of ${gerund}`;
+      });
+      hasSentenceError = true;
+      errorDetailsPt.push("Regência incorreta: após 'instead', usa-se a preposição 'of' seguida de gerúndio (ex: 'instead of facing', e não 'instead to face').");
+      errorDetailsEn.push("Incorrect preposition complement: use 'instead of' + gerund (e.g., 'instead of facing', not 'instead to face').");
+    }
+
+    // 4. Rigorous Check: Indefinite article vowel error (a awkward, a interview, a apple, etc.)
+    const VOWEL_ARTICLE_REGEX = /\ba\s+(awkward|interview|apple|orange|egg|incident|option|idea|opportunity|issue|event|action|afternoon|evening|example|experience|artist|album|activity|easy|honest|hour)\b/gi;
+    if (VOWEL_ARTICLE_REGEX.test(sFixed)) {
+      sFixed = sFixed.replace(VOWEL_ARTICLE_REGEX, (match, word) => `an ${word}`);
+      hasSentenceError = true;
+      errorDetailsPt.push("Erro de artigo indefinido: utilize 'an' antes de palavras iniciadas por som vocálico (ex: 'an awkward', 'an interview').");
+      errorDetailsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an awkward', 'an interview').");
+    }
+
+    // 5. Rigorous Check: Confusable word homophone "loose" vs "lose"
+    if (/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace)\b/gi, 'lose $1');
+      hasSentenceError = true;
+      errorDetailsPt.push("Confusão ortográfica: use 'lose' (verbo perder) e não 'loose' (adjetivo frouxo/solto).");
+      errorDetailsEn.push("Word confusion: use 'lose' (verb to lose) instead of 'loose' (adjective loose).");
+    }
+
+    // 6. Check capitalization and punctuation
     if (/^[a-z]/.test(sFixed)) {
       sFixed = sFixed.charAt(0).toUpperCase() + sFixed.slice(1);
       hasSentenceError = true;
+      errorDetailsPt.push("Inicie a frase com letra maiúscula.");
+      errorDetailsEn.push("Start the sentence with a capital letter.");
     }
     if (!/[.!?]$/.test(sFixed)) {
       sFixed = sFixed + '.';
     }
 
-    // Replace known misspellings inside the sentence
+    // 7. Replace known misspellings inside the sentence
     Object.entries(COMMON_SPELLING_FIXES).forEach(([wrong, data]) => {
       const regex = new RegExp(`\\b${wrong}\\b`, 'gi');
       if (regex.test(sFixed)) {
         sFixed = sFixed.replace(regex, data.correct);
         hasSentenceError = true;
+        errorDetailsPt.push(data.explPt);
+        errorDetailsEn.push(data.explEn);
       }
     });
 
-    // Check common verb tense / grammatical slip-ups
+    // 8. Subject-verb agreement & common grammar errors
     if (/\byou has\b/i.test(sFixed)) {
       sFixed = sFixed.replace(/\byou has\b/gi, 'you have');
       hasSentenceError = true;
+      errorDetailsPt.push("Concordância: use 'you have' (e não 'you has').");
+      errorDetailsEn.push("Verb agreement: use 'you have' instead of 'you has'.");
     }
     if (/\bin the end of the day\b/i.test(sFixed)) {
       sFixed = sFixed.replace(/\bin the end of the day\b/gi, 'At the end of the day');
       hasSentenceError = true;
-    }
-    if (/\bi have (\w+) today\b/i.test(sFixed) && !/\bi have had\b/i.test(sFixed)) {
-      if (/\bi have breakfast today\b/i.test(sFixed)) {
-        sFixed = sFixed.replace(/\bI have breakfast today\b/i, 'I had breakfast today');
-        hasSentenceError = true;
-      }
+      errorDetailsPt.push("Expressão idiomática: o padrão natural em inglês é 'At the end of the day'.");
+      errorDetailsEn.push("Idiomatic phrasing: standard natural usage is 'At the end of the day'.");
     }
 
     correctedSentence = sFixed;
 
     const explanationPt = hasSentenceError
-      ? 'Ajustamos a pontuação, maiúscula inicial ou concordância dos termos.'
+      ? errorDetailsPt.join(' ')
       : !usedTargetWord && mainTarget
       ? `A frase está bem escrita, mas certifique-se de incluir a palavra-alvo "${mainTarget}".`
       : 'Sua frase está gramaticalmente correta, fluente e natural em inglês.';
 
     const explanationEn = hasSentenceError
-      ? 'Adjusted punctuation, initial capitalization, or natural word phrasing.'
+      ? errorDetailsEn.join(' ')
       : !usedTargetWord && mainTarget
       ? `Good sentence, but remember to explicitly use the target word "${mainTarget}".`
       : 'Your sentence is grammatically sound, natural, and fluent.';

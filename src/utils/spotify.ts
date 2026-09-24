@@ -1,4 +1,4 @@
-import { DayOfWeek, EnglishLevel } from '../types';
+import { DayOfWeek, EnglishLevel, StudentJournalEntry } from '../types';
 import { CURATED_SPOTIFY_TRACKS, CuratedTrackItem } from './spotifyCuratedTracks';
 
 /**
@@ -508,8 +508,9 @@ export function getSpotifyPlaylistForLevel(rawLevel?: string | EnglishLevel | nu
  * Selects exactly one Spotify track for a student's study day, respecting:
  * 1. Daily exclusivity: 1 song per active study day in sequential playlist order (Index 0 = 1st study day, Index 1 = 2nd study day...)
  * 2. Weekly frequency (2x, 3x, 5x, 7x) with Rest Days returning null.
- * 3. Looping: (cycle - 1) * studyDaysCount + studyDayIndex % totalPlaylistTracks.
- * 4. Weekly rotation on new week or level change.
+ * 3. Strict Student Journal Exclusivity: Queries studentJournal to filter and skip tracks already consumed, guaranteeing songs never repeat.
+ * 4. Looping: (cycle - 1) * studyDaysCount + studyDayIndex % totalUnconsumedTracks.
+ * 5. Weekly rotation on new week or level change.
  */
 export function selectCurrentDaySpotifyTrack(params: {
   level?: string | EnglishLevel | null;
@@ -517,8 +518,10 @@ export function selectCurrentDaySpotifyTrack(params: {
   activeStudyDays?: DayOfWeek[];
   weeklyCycle?: number;
   liveTracks?: SpotifyDailyTrack[] | null;
+  studentJournal?: StudentJournalEntry[];
+  consumedTrackIds?: string[];
 }): SpotifyDailyTrack | null {
-  const { level, selectedDay, activeStudyDays, weeklyCycle = 1, liveTracks } = params;
+  const { level, selectedDay, activeStudyDays, weeklyCycle = 1, liveTracks, studentJournal, consumedTrackIds } = params;
   const norm = normalizeStudentLevel(level);
 
   // 1. Determine active study days in calendar order
@@ -550,13 +553,45 @@ export function selectCurrentDaySpotifyTrack(params: {
   const totalPlaylistTracks = effectivePool.length;
   if (totalPlaylistTracks === 0) return null;
 
-  // 4. Sequential distribution + Looping (trackIndex % totalPlaylistTracks)
+  // 4. Strict Exclusivity Filter: Consult studentJournal to skip already consumed tracks
+  const consumedSet = new Set<string>();
+  if (Array.isArray(consumedTrackIds)) {
+    consumedTrackIds.forEach((id) => {
+      const cid = extractSpotifyTrackId(id);
+      if (cid) consumedSet.add(cid.toLowerCase());
+    });
+  }
+  if (Array.isArray(studentJournal)) {
+    studentJournal.forEach((entry) => {
+      if (entry && entry.type === 'audio' && entry.id) {
+        const cid = extractSpotifyTrackId(entry.id);
+        if (cid) consumedSet.add(cid.toLowerCase());
+        if (entry.url) {
+          const urlCid = extractSpotifyTrackId(entry.url);
+          if (urlCid) consumedSet.add(urlCid.toLowerCase());
+        }
+      }
+    });
+  }
+
+  // Filter pool to unconsumed candidates
+  const unconsumedPool = effectivePool.filter((track) => {
+    const rawId = track.trackId || (track.url ? extractSpotifyTrackId(track.url) : null);
+    if (!rawId) return true;
+    return !consumedSet.has(rawId.toLowerCase());
+  });
+
+  // If all tracks in playlist have been consumed over time, loop back through effectivePool
+  const candidatePool = unconsumedPool.length > 0 ? unconsumedPool : effectivePool;
+  const totalCandidates = candidatePool.length;
+
+  // 5. Sequential distribution + Looping (trackIndex % totalCandidates)
   const cycle = Math.max(1, weeklyCycle);
   const studyDaysCount = Math.max(1, effectiveStudyDays.length);
   const rawTrackIndex = (cycle - 1) * studyDaysCount + studyDayIndex;
-  const trackIndex = rawTrackIndex % totalPlaylistTracks;
+  const trackIndex = rawTrackIndex % totalCandidates;
 
-  const baseTrack = effectivePool[trackIndex];
+  const baseTrack = candidatePool[trackIndex];
   if (!baseTrack) return null;
 
   // Strictly ensure single-track embed URL (never playlist embed)
@@ -578,19 +613,22 @@ export function selectCurrentDaySpotifyTrack(params: {
 }
 
 /**
- * Retrieves the daily track sequentially mapped from the level's playlist for the selected day
+ * Retrieves the daily track sequentially mapped from the level's playlist for the selected day,
+ * consulting studentJournal to avoid repetitions.
  */
 export function getDailySpotifyTrackForStudent(
   rawLevel: string | EnglishLevel | null | undefined,
   dayOfWeek: DayOfWeek,
   activeStudyDays?: DayOfWeek[],
-  weeklyCycle: number = 1
+  weeklyCycle: number = 1,
+  studentJournal?: StudentJournalEntry[]
 ): SpotifyDailyTrack {
   const exclusive = selectCurrentDaySpotifyTrack({
     level: rawLevel,
     selectedDay: dayOfWeek,
     activeStudyDays,
     weeklyCycle,
+    studentJournal,
   });
   if (exclusive) return exclusive;
 

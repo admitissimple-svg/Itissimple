@@ -3235,6 +3235,24 @@ export default function App() {
 
     if (studentUid || studentEmail) {
       saveStudentJournalEntryToFirestore(studentUid, newJournalEntry, studentEmail);
+      recordActivityInStudentJournal(
+        studentUid,
+        {
+          id: `sentence_${newJournalEntry.date}_${Date.now()}`,
+          type: 'sentence',
+          date: newJournalEntry.date,
+          dayOfWeek: selectedDay,
+          week: Number(userProfile?.weeklyCycle) || 1,
+          timestamp: Date.now(),
+          title: sentence.length > 50 ? `${sentence.slice(0, 50)}...` : sentence,
+          details: sentence,
+        },
+        studentEmail
+      ).then((res) => {
+        if (res.updatedJournal) {
+          setStudentJournal(res.updatedJournal);
+        }
+      }).catch(() => {});
     }
 
     setNotifications((prev) => [
@@ -4092,6 +4110,7 @@ export default function App() {
                   onStartNewWeek={handleStartNewWeek}
                   isStarting={isStartingNewWeek}
                   weeklyChecks={weeklyChecks}
+                  studentJournal={studentJournal}
                   onUpdateSPathCheck={handleUpdateSPathCheck}
                   onBehavioralComplete={handleBehavioralActivityComplete}
                 />
