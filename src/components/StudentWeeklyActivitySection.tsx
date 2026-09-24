@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   BookOpen,
   Sparkles,
@@ -22,6 +22,7 @@ import {
   WeeklyHomeworkData,
   UserProfile,
   StudentDictionaryEntry,
+  StudentJournalEntry,
 } from '../types';
 import { Translations, getTranslations } from '../utils/i18n';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from '../utils/notifications';
@@ -29,12 +30,20 @@ import { getDailyMemorizationSchedule } from '../utils/homeworkGenerator';
 import {
   saveStudentWeeklyChecksToFirestore,
   fetchStudentWeeklyChecksFromFirestore,
+  recordActivityInStudentJournal,
+  removeActivityFromStudentJournal,
+  subscribeToStudentJournal,
+  getDateForDayInCurrentWeek,
+  getTodayIsoDate,
+  mapStepIdToJournalType,
+  deriveWeeklyChecksFromJournal,
 } from '../utils/studentPersistence';
 
 interface StudentWeeklyActivitySectionProps {
   homework: WeeklyHomeworkData | null;
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
   userProfile?: UserProfile;
+  studentJournal?: StudentJournalEntry[];
   onOpenHomeworkModal: (targetDay?: DayOfWeek) => void;
   onOpenDictionaryModal: () => void;
   onOpenJournalModal?: () => void;
@@ -44,7 +53,7 @@ interface StudentWeeklyActivitySectionProps {
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   onUpdateUserProfile?: (updated: Partial<UserProfile>) => void;
   weeklyChecks?: Record<string, boolean>;
-  onToggleWeeklyCheck?: (stepId: string, dayKey: DayOfWeek) => void;
+  onToggleWeeklyCheck?: (stepId: string, dayKey: DayOfWeek, newChecked?: boolean) => void;
 }
 
 const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
@@ -100,6 +109,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   homework,
   routinesByDay,
   userProfile,
+  studentJournal: propStudentJournal,
   onOpenHomeworkModal,
   onOpenDictionaryModal,
   onOpenJournalModal,
@@ -132,6 +142,51 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
       userProfile?.weeklyCycle || 1
     );
   }, [todayDay, activeStudyDays, userProfile?.weeklyCycle]);
+
+  // Real-time studentJournal state for multi-device sync
+  const [localJournal, setLocalJournal] = useState<StudentJournalEntry[]>(userProfile?.studentJournal || []);
+
+  useEffect(() => {
+    if (propStudentJournal && Array.isArray(propStudentJournal)) {
+      setLocalJournal(propStudentJournal);
+    } else if (userProfile?.studentJournal && Array.isArray(userProfile.studentJournal)) {
+      setLocalJournal(userProfile.studentJournal);
+    }
+  }, [propStudentJournal, userProfile?.studentJournal]);
+
+  // Real-time listener for cross-device synchronization (e.g. mobile to desktop)
+  useEffect(() => {
+    if (!studentUid && !studentEmail) return;
+    const unsub = subscribeToStudentJournal(studentUid, studentEmail, (journal) => {
+      if (Array.isArray(journal)) {
+        setLocalJournal(journal);
+      }
+    });
+    return () => unsub();
+  }, [studentUid, studentEmail]);
+
+  // Single Source of Truth: Merge prop, real-time listener, and profile journal by entry id
+  const activeJournal = useMemo(() => {
+    const map = new Map<string, StudentJournalEntry>();
+    if (Array.isArray(propStudentJournal)) {
+      propStudentJournal.forEach((e) => {
+        if (e && e.id) map.set(e.id, e);
+      });
+    }
+    if (Array.isArray(localJournal)) {
+      localJournal.forEach((e) => {
+        if (e && e.id) map.set(e.id, e);
+      });
+    }
+    if (Array.isArray(userProfile?.studentJournal)) {
+      userProfile.studentJournal.forEach((e) => {
+        if (e && e.id && !map.has(e.id)) map.set(e.id, e);
+      });
+    }
+    const list = Array.from(map.values());
+    list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return list;
+  }, [propStudentJournal, localJournal, userProfile?.studentJournal]);
 
   // Local state for dictionary entries loaded directly from server database
   const [loadedDictEntries, setLoadedDictEntries] = useState<StudentDictionaryEntry[]>([]);
@@ -296,12 +351,78 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     );
   };
 
+  // Check if an activity is completed strictly from studentJournal as Single Source of Truth
+  const isActivityCompleted = useCallback(
+    (rowId: string, dayKey: DayOfWeek): boolean => {
+      const targetType = mapStepIdToJournalType(rowId);
+      const currentWeek = userProfile?.weeklyCycle || 1;
+      const dayCalendarDate = getDateForDayInCurrentWeek(dayKey);
+
+      // 1. Strict studentJournal check (Single Source of Truth)
+      const foundInJournal = activeJournal.some((entry) => {
+        if (!entry || entry.type !== targetType) return false;
+        // Match exact calendar date in this current week
+        if (entry.date && entry.date === dayCalendarDate) return true;
+        // Match day of week in this cycle
+        if (entry.dayOfWeek && entry.dayOfWeek === dayKey) {
+          if (entry.week === undefined || entry.week === currentWeek) return true;
+        }
+        return false;
+      });
+
+      if (foundInJournal) return true;
+
+      // 2. Fallback to weeklyChecks for legacy compatibility
+      return Boolean(weeklyChecks[`${rowId}_${dayKey}`]);
+    },
+    [activeJournal, userProfile?.weeklyCycle, weeklyChecks]
+  );
+
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
     // Only allow marking days configured in the student's study plan (tutor_live remains independent)
     if (stepId !== 'tutor_live' && !activeStudyDays.includes(dayKey)) return;
 
+    const isCurrentlyChecked = isActivityCompleted(stepId, dayKey);
+    const newChecked = !isCurrentlyChecked;
+    const targetType = mapStepIdToJournalType(stepId);
+    const currentWeek = userProfile?.weeklyCycle || 1;
+    const dayDate = getDateForDayInCurrentWeek(dayKey);
+
+    // 1. Persist directly to studentJournal in Firestore users/{studentUID}
+    if (newChecked) {
+      recordActivityInStudentJournal(
+        studentUid,
+        {
+          id: `${stepId}_${dayKey}_${currentWeek}_${Date.now()}`,
+          type: targetType,
+          date: dayDate,
+          dayOfWeek: dayKey,
+          week: currentWeek,
+          timestamp: Date.now(),
+          title: stepId === 'tutor_live' ? 'Live Session with Native Friend' : undefined,
+        },
+        studentEmail
+      ).then((res) => {
+        if (res.updatedJournal) {
+          setLocalJournal(res.updatedJournal);
+        }
+      });
+    } else {
+      removeActivityFromStudentJournal(
+        studentUid,
+        targetType,
+        dayKey,
+        currentWeek,
+        studentEmail
+      ).then((res) => {
+        if (res.updatedJournal) {
+          setLocalJournal(res.updatedJournal);
+        }
+      });
+    }
+
     if (onToggleWeeklyCheck) {
-      onToggleWeeklyCheck(stepId, dayKey);
+      onToggleWeeklyCheck(stepId, dayKey, newChecked);
       return;
     }
 
@@ -309,7 +430,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     setLocalWeeklyChecks((prev) => {
       const updated = {
         ...prev,
-        [key]: !prev[key],
+        [key]: newChecked,
       };
       // Persist directly to Firestore users/{studentUID} and backend database
       saveStudentWeeklyChecksToFirestore(
@@ -323,7 +444,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     });
   };
 
-  // Count completed days per routine row
+  // Count completed days per routine row strictly based on isActivityCompleted
   const checkedCounts = useMemo(() => {
     const counts: Record<string, number> = {
       video_day: 0,
@@ -333,13 +454,13 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     };
     WEEK_DAYS.forEach((d) => {
       ROUTINE_ROWS.forEach((row) => {
-        if (weeklyChecks[`${row.id}_${d.key}`]) {
+        if (isActivityCompleted(row.id, d.key)) {
           counts[row.id] = (counts[row.id] || 0) + 1;
         }
       });
     });
     return counts;
-  }, [weeklyChecks]);
+  }, [isActivityCompleted]);
 
   const weeklyStudyDaysTarget =
     userProfile?.weeklyStudyDaysTarget && userProfile.weeklyStudyDaysTarget >= 1 && userProfile.weeklyStudyDaysTarget <= 7
@@ -826,7 +947,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                       {WEEK_DAYS.map((d) => {
                         const isDayInPlan = activeStudyDays.includes(d.key);
                         const isInteractive = row.id === 'tutor_live' || isDayInPlan;
-                        const isChecked = Boolean(weeklyChecks[`${row.id}_${d.key}`]);
+                        const isChecked = isActivityCompleted(row.id, d.key);
                         const memPart = row.id === 'memorization'
                           ? getDailyMemorizationSchedule(d.key, activeStudyDays, userProfile?.weeklyCycle || 1)
                           : null;

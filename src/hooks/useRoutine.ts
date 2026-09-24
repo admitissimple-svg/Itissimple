@@ -219,15 +219,18 @@ export async function fetchWatchedVideosHistoryFromFirestore(
     if (snap && snap.exists()) {
       const data = snap.data();
       const history = data.watchedVideosHistory || data.watchedVideos || [];
-      if (Array.isArray(history)) {
-        return Array.from(
-          new Set(
-            history
-              .map((item) => extractVideoIdFromHistoryItem(item))
-              .filter((id) => Boolean(id && id.trim().length > 0))
-          )
-        );
-      }
+      const journal = Array.isArray(data.studentJournal) ? data.studentJournal : [];
+      const idsFromHistory = Array.isArray(history)
+        ? history
+            .map((item) => extractVideoIdFromHistoryItem(item))
+            .filter((id) => Boolean(id && id.trim().length > 0))
+        : [];
+      const idsFromJournal = journal
+        .filter((entry: any) => entry && entry.type === 'video' && entry.id)
+        .map((entry: any) => extractVideoIdFromHistoryItem(entry.id) || entry.id.trim())
+        .filter(Boolean);
+
+      return Array.from(new Set([...idsFromHistory, ...idsFromJournal]));
     }
     return [];
   } catch (error) {
@@ -238,7 +241,7 @@ export async function fetchWatchedVideosHistoryFromFirestore(
 
 /**
  * Reads the global watched videos history array from Firestore with full metadata objects:
- * Path: users/{studentUID} -> field: watchedVideosHistory
+ * Path: users/{studentUID} -> field: watchedVideosHistory & studentJournal
  */
 export async function fetchWatchedVideoObjectsFromFirestore(
   studentUid: string
@@ -256,9 +259,27 @@ export async function fetchWatchedVideoObjectsFromFirestore(
     if (snap && snap.exists()) {
       const data = snap.data();
       const history = data.watchedVideosHistory || data.watchedVideos || [];
+      const journal = Array.isArray(data.studentJournal) ? data.studentJournal : [];
+      const result: WatchedVideoEntry[] = [];
+      const seen = new Set<string>();
+
+      // 1. From studentJournal
+      journal.forEach((entry: any) => {
+        if (entry && entry.type === 'video' && entry.id) {
+          const vidId = extractVideoIdFromHistoryItem(entry.id) || entry.id.trim();
+          if (vidId && !seen.has(vidId.toLowerCase())) {
+            seen.add(vidId.toLowerCase());
+            result.push({
+              videoId: vidId,
+              videoTitle: entry.title || 'Daily Video Practice',
+              watchedAt: (entry.timestamp ? new Date(entry.timestamp).toISOString() : entry.date) || new Date().toISOString(),
+            });
+          }
+        }
+      });
+
+      // 2. From watchedVideosHistory
       if (Array.isArray(history)) {
-        const result: WatchedVideoEntry[] = [];
-        const seen = new Set<string>();
         history.forEach((item) => {
           const vidId = extractVideoIdFromHistoryItem(item);
           if (vidId && !seen.has(vidId.toLowerCase())) {
@@ -270,8 +291,8 @@ export async function fetchWatchedVideoObjectsFromFirestore(
             });
           }
         });
-        return result;
       }
+      return result;
     }
     return [];
   } catch {
@@ -326,10 +347,26 @@ export async function addVideoToWatchedHistoryInFirestore(
       }
     }
 
+    // Also update studentJournal array for unified multi-device journal
+    const existingJournal: any[] = snap.exists() && Array.isArray(snap.data().studentJournal)
+      ? snap.data().studentJournal
+      : [];
+    const journalFiltered = existingJournal.filter((e: any) => !(e && e.type === 'video' && (e.id === cleanVidId || extractVideoIdFromHistoryItem(e.id) === cleanVidId)));
+    const journalEntry = {
+      id: cleanVidId,
+      type: 'video',
+      date: new Date().toISOString().split('T')[0],
+      week: Number(snap.data()?.weeklyCycle) || 1,
+      timestamp: Date.now(),
+      title: cleanTitle,
+    };
+    const updatedJournal = [journalEntry, ...journalFiltered];
+
     await setDoc(
       userRef,
       {
         watchedVideosHistory: list,
+        studentJournal: updatedJournal,
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -481,10 +518,27 @@ export async function addTrackToListenedHistoryInFirestore(
       }
     }
 
+    // Also update studentJournal array for unified multi-device journal
+    const existingJournal: any[] = snap.exists() && Array.isArray(snap.data().studentJournal)
+      ? snap.data().studentJournal
+      : [];
+    const journalFiltered = existingJournal.filter((e: any) => !(e && e.type === 'audio' && (e.id === cleanTrackId || e.trackId === cleanTrackId)));
+    const journalEntry = {
+      id: cleanTrackId,
+      type: 'audio',
+      date: new Date().toISOString().split('T')[0],
+      week: Number(snap.data()?.weeklyCycle) || 1,
+      timestamp: Date.now(),
+      title: cleanTitle,
+      artist: cleanArtist,
+    };
+    const updatedJournal = [journalEntry, ...journalFiltered];
+
     await setDoc(
       userRef,
       {
         listenedTracksHistory: list,
+        studentJournal: updatedJournal,
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -669,16 +723,19 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
           if (snap.exists() && isMounted) {
             const data = snap.data();
             const history = data.watchedVideosHistory || data.watchedVideos || [];
-            if (Array.isArray(history)) {
-              const ids = Array.from(
-                new Set(
-                  history
-                    .map((item) => extractVideoIdFromHistoryItem(item))
-                    .filter((id) => Boolean(id && id.trim().length > 0))
-                )
-              );
-              setWatchedHistory(ids);
-            }
+            const journal = Array.isArray(data.studentJournal) ? data.studentJournal : [];
+            const idsFromHistory = Array.isArray(history)
+              ? history
+                  .map((item) => extractVideoIdFromHistoryItem(item))
+                  .filter((id) => Boolean(id && id.trim().length > 0))
+              : [];
+            const idsFromJournal = journal
+              .filter((entry: any) => entry && entry.type === 'video' && entry.id)
+              .map((entry: any) => extractVideoIdFromHistoryItem(entry.id) || entry.id.trim())
+              .filter(Boolean);
+
+            const ids = Array.from(new Set([...idsFromHistory, ...idsFromJournal]));
+            setWatchedHistory(ids);
           }
         },
         () => {}

@@ -87,6 +87,7 @@ interface AppDb {
   weeklyStudyDays?: Record<string, string[]>;
   studentDictionaryMap?: Record<string, any[]>;
   studentJournalMap?: Record<string, any[]>;
+  studentActivityJournal?: Record<string, any[]>;
   authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
   transactions?: any[];
   youtubePlaylists?: any[];
@@ -3172,6 +3173,12 @@ app.get('/api/user-profile', (req, res) => {
     if (studyTarget !== undefined) {
       profile.weeklyStudyDaysTarget = studyTarget;
     }
+    const journalEntries =
+      (email && db.studentActivityJournal?.[email]) ||
+      (uid && db.studentActivityJournal?.[uid]) ||
+      profile.studentJournal ||
+      [];
+    profile.studentJournal = journalEntries;
   }
 
   res.json({ success: true, profile });
@@ -3237,6 +3244,7 @@ app.post('/api/user-profile', async (req, res) => {
     teacherEmail: updatedTeacherEmail,
     teacherName: updatedTeacherName,
     enrollmentStatus: rawProfile.enrollmentStatus || existing.enrollmentStatus || (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+    studentJournal: rawProfile.studentJournal || existing.studentJournal || db.studentActivityJournal?.[email] || [],
   };
 
   const studentIdx = (db.students || []).findIndex(
@@ -5029,6 +5037,82 @@ app.post('/api/student-journal', async (req, res) => {
 
   await writeDbSync(db);
   res.json({ success: true, journal: updated });
+});
+
+// Endpoint: Student Journal Activity Log (Multi-device cloud synchronization for video, audio, memorization, lesson)
+app.get('/api/student-journal/activity', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.studentUid as string) || (req.query.uid as string) || '').trim();
+
+  if (!db.studentActivityJournal) db.studentActivityJournal = {};
+  const fromEmail = (studentEmail && db.studentActivityJournal[studentEmail]) || [];
+  const fromUid = (uid && db.studentActivityJournal[uid]) || [];
+  const map = new Map<string, any>();
+  [...fromEmail, ...fromUid].forEach((e: any) => {
+    if (e?.id) map.set(e.id, e);
+  });
+  const list = Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  res.json({ success: true, entries: list });
+});
+
+app.post('/api/student-journal/activity', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, entry } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = (studentUid || '').trim();
+
+  if (!entry || (!cleanEmail && !cleanUid)) {
+    return res.status(400).json({ error: 'entry and studentEmail or studentUid are required' });
+  }
+
+  if (!db.studentActivityJournal) db.studentActivityJournal = {};
+  const current = (cleanEmail && db.studentActivityJournal[cleanEmail]) || (cleanUid && db.studentActivityJournal[cleanUid]) || [];
+  const filtered = current.filter((e: any) => {
+    if (e.id === entry.id) return false;
+    if (
+      e.type === entry.type &&
+      e.week === entry.week &&
+      e.dayOfWeek &&
+      entry.dayOfWeek &&
+      e.dayOfWeek === entry.dayOfWeek
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const updated = [entry, ...filtered];
+  if (cleanEmail) db.studentActivityJournal[cleanEmail] = updated;
+  if (cleanUid) db.studentActivityJournal[cleanUid] = updated;
+
+  if (cleanEmail && db.userProfiles?.[cleanEmail]) {
+    db.userProfiles[cleanEmail].studentJournal = updated;
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, entries: updated });
+});
+
+app.delete('/api/student-journal/activity', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, type, dayOfWeek, week } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = (studentUid || '').trim();
+
+  if (!db.studentActivityJournal) db.studentActivityJournal = {};
+  const current = (cleanEmail && db.studentActivityJournal[cleanEmail]) || (cleanUid && db.studentActivityJournal[cleanUid]) || [];
+  const updated = current.filter((e: any) => !(e.type === type && e.dayOfWeek === dayOfWeek && e.week === week));
+
+  if (cleanEmail) db.studentActivityJournal[cleanEmail] = updated;
+  if (cleanUid) db.studentActivityJournal[cleanUid] = updated;
+
+  if (cleanEmail && db.userProfiles?.[cleanEmail]) {
+    db.userProfiles[cleanEmail].studentJournal = updated;
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, entries: updated });
 });
 
 // Endpoint: Strict UID correlation verification between Student and Native Friend

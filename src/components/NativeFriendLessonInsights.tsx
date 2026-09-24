@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Sparkles,
   MessageSquareQuote,
@@ -13,7 +13,11 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { useStudentHistory } from '../hooks/useStudentHistory';
-import { DayOfWeek } from '../types';
+import { DayOfWeek, StudentJournalEntry } from '../types';
+import {
+  subscribeToStudentJournal,
+  fetchStudentJournalActivitiesFromFirestore,
+} from '../utils/studentPersistence';
 
 interface NativeFriendLessonInsightsProps {
   studentUid: string;
@@ -59,14 +63,103 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
   const displayName = studentName || studentEmail.split('@')[0] || 'Student';
   const cleanLevel = (studentLevel || 'iniciante').toLowerCase();
 
-  // Extract consumed media and vocabulary
+  // Real-time subscription to studentJournal directly from student profile
+  const [journalEntries, setJournalEntries] = useState<StudentJournalEntry[]>([]);
+
+  useEffect(() => {
+    if (!studentUid && !studentEmail) return;
+    fetchStudentJournalActivitiesFromFirestore(studentUid, studentEmail).then((items) => {
+      if (Array.isArray(items) && items.length > 0) {
+        setJournalEntries(items);
+      }
+    });
+    const unsub = subscribeToStudentJournal(studentUid, studentEmail, (items) => {
+      if (Array.isArray(items)) {
+        setJournalEntries(items);
+      }
+    });
+    return () => unsub();
+  }, [studentUid, studentEmail]);
+
+  // Extract consumed media from studentJournal (Single Source of Truth) + weeklyHistory
   const consumedVideos = useMemo(() => {
-    return weeklyHistory?.consumedVideoIds || [];
-  }, [weeklyHistory?.consumedVideoIds]);
+    const list: Array<{ id: string; title: string; dayOfWeek?: string; watchedAt?: string }> = [];
+    const seen = new Set<string>();
+
+    // 1. From studentJournal
+    journalEntries.forEach((entry) => {
+      if (entry && entry.type === 'video' && entry.id) {
+        if (!entry.week || entry.week === weeklyCycle) {
+          const id = entry.id.toLowerCase();
+          if (!seen.has(id)) {
+            seen.add(id);
+            list.push({
+              id: entry.id,
+              title: entry.title || 'Daily Routine Video',
+              dayOfWeek: entry.dayOfWeek,
+              watchedAt: entry.timestamp ? new Date(entry.timestamp).toISOString() : entry.date,
+            });
+          }
+        }
+      }
+    });
+
+    // 2. From weeklyHistory
+    (weeklyHistory?.consumedVideoIds || []).forEach((v) => {
+      const vid = v.id || v.videoId;
+      if (vid && !seen.has(vid.toLowerCase())) {
+        seen.add(vid.toLowerCase());
+        list.push({
+          id: vid,
+          title: v.title || v.videoTitle || 'Daily Routine Video',
+          dayOfWeek: v.dayOfWeek,
+          watchedAt: v.watchedAt,
+        });
+      }
+    });
+
+    return list;
+  }, [journalEntries, weeklyHistory?.consumedVideoIds, weeklyCycle]);
 
   const consumedTracks = useMemo(() => {
-    return weeklyHistory?.consumedTrackIds || [];
-  }, [weeklyHistory?.consumedTrackIds]);
+    const list: Array<{ id: string; title: string; artist?: string; coverUrl?: string; dayOfWeek?: string }> = [];
+    const seen = new Set<string>();
+
+    // 1. From studentJournal
+    journalEntries.forEach((entry) => {
+      if (entry && entry.type === 'audio' && entry.id) {
+        if (!entry.week || entry.week === weeklyCycle) {
+          const id = entry.id.toLowerCase();
+          if (!seen.has(id)) {
+            seen.add(id);
+            list.push({
+              id: entry.id,
+              title: entry.title || 'Daily Spotify Track',
+              artist: entry.artist || 'Spotify Artist',
+              dayOfWeek: entry.dayOfWeek,
+            });
+          }
+        }
+      }
+    });
+
+    // 2. From weeklyHistory
+    (weeklyHistory?.consumedTrackIds || []).forEach((t) => {
+      const trkId = t.id || t.trackId;
+      if (trkId && !seen.has(trkId.toLowerCase())) {
+        seen.add(trkId.toLowerCase());
+        list.push({
+          id: trkId,
+          title: t.title || 'Daily Track',
+          artist: t.artist || 'Artist',
+          coverUrl: t.coverUrl,
+          dayOfWeek: t.dayOfWeek,
+        });
+      }
+    });
+
+    return list;
+  }, [journalEntries, weeklyHistory?.consumedTrackIds, weeklyCycle]);
 
   const weeklyVocabulary = useMemo(() => {
     return weeklyHistory?.weeklyVocabulary || [];

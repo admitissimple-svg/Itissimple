@@ -265,18 +265,54 @@ export async function fetchAccumulatedConsumedIds(studentUid: string): Promise<{
     }
   }
 
-  // Also inspect student's main user profile watchedVideosHistory for backwards compatibility
+  // Also inspect student's main user profile watchedVideosHistory & studentJournal for unified source of truth
   try {
     const db = getDb();
     const cleanStudent = cleanDocId(studentUid);
     const userSnap = await getDoc(doc(db, 'users', cleanStudent));
     if (userSnap.exists()) {
       const data = userSnap.data();
+
+      // 1. From studentJournal (Single Source of Truth)
+      if (Array.isArray(data.studentJournal)) {
+        data.studentJournal.forEach((entry: any) => {
+          if (entry && entry.type === 'video' && entry.id) {
+            const vid = extractVideoIdFromHistoryItem(entry.id) || entry.id;
+            if (vid) {
+              videoIds.add(vid);
+              allVideos.push({
+                id: vid,
+                videoId: vid,
+                videoTitle: entry.title || 'Daily Routine Video',
+                title: entry.title || 'Daily Routine Video',
+                watchedAt: (entry.timestamp ? new Date(entry.timestamp).toISOString() : entry.date) || '',
+                dayOfWeek: entry.dayOfWeek,
+              });
+            }
+          } else if (entry && entry.type === 'audio' && entry.id) {
+            const trkId = entry.id;
+            if (trkId) {
+              trackIds.add(trkId);
+              allTracks.push({
+                id: trkId,
+                trackId: trkId,
+                title: entry.title || 'Daily Track',
+                artist: entry.artist || 'Spotify Artist',
+                listenedAt: (entry.timestamp ? new Date(entry.timestamp).toISOString() : entry.date) || '',
+                dayOfWeek: entry.dayOfWeek,
+                url: entry.url,
+              });
+            }
+          }
+        });
+      }
+
+      // 2. From watchedVideosHistory
       const history = data.watchedVideosHistory || data.watchedVideos || [];
       if (Array.isArray(history)) {
         history.forEach((item: any) => {
           const vid = extractVideoIdFromHistoryItem(item);
-          if (vid) {
+          if (vid && !videoIds.has(vid)) {
             videoIds.add(vid);
             const title = extractVideoTitleFromHistoryItem(item);
             allVideos.push({
@@ -597,6 +633,56 @@ export function useStudentHistory({
               weeklyVocabulary: [],
               updatedAt: new Date().toISOString(),
             };
+
+        // Complement with studentJournal from user doc for real-time mobile sync
+        getDoc(doc(db, 'users', effectiveUid))
+          .then((uSnap) => {
+            if (uSnap.exists() && isMountedRef.current) {
+              const uData = uSnap.data();
+              if (Array.isArray(uData.studentJournal)) {
+                const targetCycle = weeklyCycle || 1;
+                const journalVideos = uData.studentJournal.filter(
+                  (e: any) => e && e.type === 'video' && (!e.week || e.week === targetCycle)
+                );
+                const journalTracks = uData.studentJournal.filter(
+                  (e: any) => e && e.type === 'audio' && (!e.week || e.week === targetCycle)
+                );
+
+                const existingVids = new Set((historyData.consumedVideoIds || []).map((v) => v.id || v.videoId));
+                journalVideos.forEach((jv: any) => {
+                  if (jv.id && !existingVids.has(jv.id)) {
+                    historyData.consumedVideoIds.push({
+                      id: jv.id,
+                      videoId: jv.id,
+                      videoTitle: jv.title || 'Daily Routine Video',
+                      title: jv.title || 'Daily Routine Video',
+                      watchedAt: (jv.timestamp ? new Date(jv.timestamp).toISOString() : jv.date) || '',
+                      dayOfWeek: jv.dayOfWeek,
+                    });
+                  }
+                });
+
+                const existingTrks = new Set((historyData.consumedTrackIds || []).map((t) => t.id || t.trackId));
+                journalTracks.forEach((jt: any) => {
+                  if (jt.id && !existingTrks.has(jt.id)) {
+                    historyData.consumedTrackIds.push({
+                      id: jt.id,
+                      trackId: jt.id,
+                      title: jt.title || 'Daily Track',
+                      artist: jt.artist || 'Spotify Artist',
+                      coverUrl: jt.coverUrl || '',
+                      listenedAt: (jt.timestamp ? new Date(jt.timestamp).toISOString() : jt.date) || '',
+                      dayOfWeek: jt.dayOfWeek,
+                      url: jt.url || '',
+                    });
+                  }
+                });
+
+                setWeeklyHistory({ ...historyData });
+              }
+            }
+          })
+          .catch(() => {});
 
         // If tracks are empty, complement with currentRoutine
         if (!historyData.consumedTrackIds || historyData.consumedTrackIds.length === 0) {

@@ -65,6 +65,12 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isOwner(userId) || isAdmin() || request.auth == null || isAuthenticated();
       }
+
+      // Student activity log & journal subcollection (video, audio, memorization, lesson)
+      match /studentJournal/{entryId} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin() || request.auth == null || isAuthenticated();
+      }
     }
 
     // App state synchronization document for persistent backend storage across restarts

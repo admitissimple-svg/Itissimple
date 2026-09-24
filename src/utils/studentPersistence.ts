@@ -7,12 +7,16 @@ import {
   query,
   where,
   deleteDoc,
+  onSnapshot,
 } from 'firebase/firestore';
 import { getDb } from '../firebase';
 import {
   StudentDictionaryEntry,
   DailyJournalEntry,
   LiveLesson,
+  StudentJournalEntry,
+  StudentJournalActivityType,
+  DayOfWeek,
 } from '../types';
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
 
@@ -634,3 +638,438 @@ export async function fetchStudentWeeklyChecksFromFirestore(
 
   return { checks: {} };
 }
+
+/**
+ * Helper to get the current date in YYYY-MM-DD format
+ */
+export function getTodayIsoDate(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+/**
+ * Calculates the calendar date (YYYY-MM-DD) for a specific day of the week in the current week.
+ * Reference week starts Monday (index 0) and ends Sunday (index 6).
+ */
+export function getDateForDayInCurrentWeek(targetDay: DayOfWeek, refDate: Date = new Date()): string {
+  const dayIndexMap: Record<DayOfWeek, number> = {
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+    sunday: 0,
+  };
+  const currentDayIndex = refDate.getDay(); // 0 is Sunday, 1 is Monday...
+  const targetDayIndex = dayIndexMap[targetDay];
+
+  // In Monday-first week: Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+  const currentMonFirst = (currentDayIndex + 6) % 7;
+  const targetMonFirst = (targetDayIndex + 6) % 7;
+  const diffDays = targetMonFirst - currentMonFirst;
+
+  const targetDate = new Date(refDate);
+  targetDate.setDate(refDate.getDate() + diffDays);
+  return targetDate.toISOString().split('T')[0];
+}
+
+/**
+ * Maps a routine row stepId to its corresponding StudentJournalActivityType
+ */
+export function mapStepIdToJournalType(
+  stepId: 'video_day' | 'audio_day' | 'tutor_live' | 'memorization' | string
+): StudentJournalActivityType {
+  switch (stepId) {
+    case 'video_day':
+    case 'video':
+      return 'video';
+    case 'audio_day':
+    case 'audio':
+      return 'audio';
+    case 'tutor_live':
+    case 'lesson':
+    case 'live_lesson':
+      return 'lesson';
+    case 'memorization':
+      return 'memorization';
+    default:
+      return 'video';
+  }
+}
+
+/**
+ * Maps StudentJournalActivityType to routine stepId
+ */
+export function mapJournalTypeToStepId(
+  type: StudentJournalActivityType
+): 'video_day' | 'audio_day' | 'tutor_live' | 'memorization' {
+  switch (type) {
+    case 'video':
+      return 'video_day';
+    case 'audio':
+      return 'audio_day';
+    case 'lesson':
+      return 'tutor_live';
+    case 'memorization':
+      return 'memorization';
+  }
+}
+
+/**
+ * Derives the weeklyChecks map (e.g. video_day_thursday: true) from studentJournal records for the given week.
+ */
+export function deriveWeeklyChecksFromJournal(
+  journal: StudentJournalEntry[],
+  targetWeek?: number
+): Record<string, boolean> {
+  const checks: Record<string, boolean> = {};
+  if (!Array.isArray(journal)) return checks;
+
+  journal.forEach((entry) => {
+    if (!entry || !entry.type) return;
+    if (targetWeek !== undefined && entry.week !== undefined && entry.week !== targetWeek) {
+      return;
+    }
+    const stepId = mapJournalTypeToStepId(entry.type);
+    if (entry.dayOfWeek) {
+      checks[`${stepId}_${entry.dayOfWeek}`] = true;
+    }
+  });
+
+  return checks;
+}
+
+/**
+ * Persist an activity record directly to the student profile document: users/{studentUID}
+ * Maintains an array and subcollection `studentJournal`.
+ * Each completed activity record saves: { id, type, date, week, timestamp, dayOfWeek, ... }
+ */
+export async function recordActivityInStudentJournal(
+  studentUid: string,
+  entry: StudentJournalEntry,
+  studentEmail?: string
+): Promise<{ success: boolean; updatedJournal: StudentJournalEntry[] }> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  const sanitizedEntry: StudentJournalEntry = {
+    id: String(entry.id || `${entry.type}_${entry.dayOfWeek || 'any'}_${Date.now()}`).trim(),
+    type: entry.type,
+    date: entry.date || getTodayIsoDate(),
+    week: Number(entry.week) || 1,
+    timestamp: Number(entry.timestamp) || Date.now(),
+    dayOfWeek: entry.dayOfWeek,
+    title: entry.title ? String(entry.title).trim() : undefined,
+    artist: entry.artist ? String(entry.artist).trim() : undefined,
+    partNumber: entry.partNumber !== undefined ? Number(entry.partNumber) : undefined,
+    url: entry.url ? String(entry.url).trim() : undefined,
+    details: entry.details ? String(entry.details).trim() : undefined,
+    studentUid: cleanUid,
+    studentEmail: cleanEmail,
+  };
+
+  try {
+    let existingJournal: StudentJournalEntry[] = [];
+
+    // 1. Fetch current user document
+    if (db && cleanUid) {
+      const userRef = doc(db, 'users', cleanUid);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+      if (userSnap && userSnap.exists()) {
+        const data = userSnap.data();
+        if (Array.isArray(data?.studentJournal)) {
+          existingJournal = data.studentJournal;
+        }
+      }
+
+      // Check if entry for same type + dayOfWeek + week already exists, or same id
+      const filtered = existingJournal.filter((e) => {
+        if (!e) return false;
+        if (e.id && e.id === sanitizedEntry.id) return false;
+        if (
+          e.type === sanitizedEntry.type &&
+          e.week === sanitizedEntry.week &&
+          e.dayOfWeek &&
+          sanitizedEntry.dayOfWeek &&
+          e.dayOfWeek === sanitizedEntry.dayOfWeek
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      const updatedJournal = [sanitizedEntry, ...filtered];
+
+      // Prepare updated weeklyChecks and watched/listened arrays for complete cross-compatibility
+      const stepId = mapJournalTypeToStepId(sanitizedEntry.type);
+      const checkKey = sanitizedEntry.dayOfWeek ? `${stepId}_${sanitizedEntry.dayOfWeek}` : null;
+      const currentChecks = userSnap?.exists() ? (userSnap.data()?.weeklyChecks || {}) : {};
+      const updatedChecks = checkKey ? { ...currentChecks, [checkKey]: true } : currentChecks;
+
+      const payload: Record<string, any> = {
+        studentJournal: updatedJournal,
+        weeklyChecks: updatedChecks,
+        sPathChecks: updatedChecks,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (sanitizedEntry.type === 'video' && sanitizedEntry.id) {
+        const curWatched = userSnap?.exists() ? (userSnap.data()?.watchedVideosHistory || []) : [];
+        if (!curWatched.includes(sanitizedEntry.id)) {
+          payload.watchedVideosHistory = [...curWatched, sanitizedEntry.id];
+        }
+      } else if (sanitizedEntry.type === 'audio' && sanitizedEntry.id) {
+        const curListened = userSnap?.exists() ? (userSnap.data()?.listenedTracksHistory || []) : [];
+        const exists = curListened.some((t: any) =>
+          typeof t === 'string' ? t === sanitizedEntry.id : t?.id === sanitizedEntry.id || t?.trackId === sanitizedEntry.id
+        );
+        if (!exists) {
+          payload.listenedTracksHistory = [
+            ...curListened,
+            { id: sanitizedEntry.id, trackId: sanitizedEntry.id, title: sanitizedEntry.title || '', artist: sanitizedEntry.artist || '' },
+          ];
+        }
+      }
+
+      // Direct write to users/{cleanUid}
+      await withFirestoreTimeout(setDoc(userRef, payload, { merge: true }), 3500, null);
+
+      // Write discrete entry to subcollection users/{cleanUid}/studentJournal/{entryId}
+      const entryRef = doc(db, 'users', cleanUid, 'studentJournal', sanitizedEntry.id);
+      await withFirestoreTimeout(setDoc(entryRef, sanitizedEntry, { merge: true }), 2000, null);
+
+      // Also mirror to emailDocId if different for dual-device lookup resilience
+      if (cleanEmail) {
+        const emailDocId = normalizeUid(null, cleanEmail);
+        if (emailDocId && emailDocId !== cleanUid) {
+          const altRef = doc(db, 'users', emailDocId);
+          await withFirestoreTimeout(setDoc(altRef, payload, { merge: true }), 2000, null);
+        }
+      }
+
+      // Mirror to server backend API
+      fetch('/api/student-journal/activity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentUid: cleanUid,
+          studentEmail: cleanEmail,
+          entry: sanitizedEntry,
+        }),
+      }).catch(() => {});
+
+      return { success: true, updatedJournal };
+    }
+
+    return { success: false, updatedJournal: [sanitizedEntry] };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/studentJournal`);
+    return { success: false, updatedJournal: [sanitizedEntry] };
+  }
+}
+
+/**
+ * Remove an activity record from studentJournal (e.g. when unchecking an activity circle)
+ */
+export async function removeActivityFromStudentJournal(
+  studentUid: string,
+  type: StudentJournalActivityType,
+  dayOfWeek: DayOfWeek,
+  week: number,
+  studentEmail?: string
+): Promise<{ success: boolean; updatedJournal: StudentJournalEntry[] }> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  try {
+    let updatedJournal: StudentJournalEntry[] = [];
+    if (db && cleanUid) {
+      const userRef = doc(db, 'users', cleanUid);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+      if (userSnap && userSnap.exists()) {
+        const data = userSnap.data();
+        const curJournal: StudentJournalEntry[] = Array.isArray(data?.studentJournal) ? data.studentJournal : [];
+        const toDelete: StudentJournalEntry[] = [];
+
+        updatedJournal = curJournal.filter((e) => {
+          if (e.type === type && e.week === week && e.dayOfWeek === dayOfWeek) {
+            toDelete.push(e);
+            return false;
+          }
+          return true;
+        });
+
+        const stepId = mapJournalTypeToStepId(type);
+        const checkKey = `${stepId}_${dayOfWeek}`;
+        const curChecks = data.weeklyChecks || {};
+        const updatedChecks = { ...curChecks, [checkKey]: false };
+
+        const payload: Record<string, any> = {
+          studentJournal: updatedJournal,
+          weeklyChecks: updatedChecks,
+          sPathChecks: updatedChecks,
+          updatedAt: new Date().toISOString(),
+        };
+
+        await withFirestoreTimeout(setDoc(userRef, payload, { merge: true }), 3000, null);
+
+        // Delete from subcollection
+        for (const item of toDelete) {
+          if (item?.id) {
+            const subRef = doc(db, 'users', cleanUid, 'studentJournal', item.id);
+            await withFirestoreTimeout(deleteDoc(subRef), 1500, null);
+          }
+        }
+
+        // Email doc mirror
+        if (cleanEmail) {
+          const emailDocId = normalizeUid(null, cleanEmail);
+          if (emailDocId && emailDocId !== cleanUid) {
+            const altRef = doc(db, 'users', emailDocId);
+            await withFirestoreTimeout(setDoc(altRef, payload, { merge: true }), 2000, null);
+          }
+        }
+
+        // Mirror delete to server
+        fetch('/api/student-journal/activity', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentUid: cleanUid,
+            studentEmail: cleanEmail,
+            type,
+            dayOfWeek,
+            week,
+          }),
+        }).catch(() => {});
+
+        return { success: true, updatedJournal };
+      }
+    }
+    return { success: false, updatedJournal: [] };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/studentJournal/remove`);
+    return { success: false, updatedJournal: [] };
+  }
+}
+
+/**
+ * Fetch the complete studentJournal array from Firestore users/{studentUID}
+ */
+export async function fetchStudentJournalActivitiesFromFirestore(
+  studentUid: string,
+  studentEmail?: string
+): Promise<StudentJournalEntry[]> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  if (!db || !cleanUid) return [];
+
+  try {
+    const journalMap = new Map<string, StudentJournalEntry>();
+
+    // 1. Direct fetch from users/{cleanUid} document
+    const userRef = doc(db, 'users', cleanUid);
+    const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
+    if (userSnap && userSnap.exists()) {
+      const data = userSnap.data();
+      if (Array.isArray(data?.studentJournal)) {
+        data.studentJournal.forEach((entry: StudentJournalEntry) => {
+          if (entry && entry.id) journalMap.set(entry.id, entry);
+        });
+      }
+    }
+
+    // 2. Fetch from subcollection users/{cleanUid}/studentJournal
+    const subColRef = collection(db, 'users', cleanUid, 'studentJournal');
+    const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2000, null);
+    if (subSnap && !subSnap.empty) {
+      subSnap.forEach((d) => {
+        const entry = d.data() as StudentJournalEntry;
+        if (entry && entry.id && !journalMap.has(entry.id)) {
+          journalMap.set(entry.id, entry);
+        }
+      });
+    }
+
+    // 3. Fallback: check email doc if different
+    if (journalMap.size === 0 && cleanEmail) {
+      const emailDocId = normalizeUid(null, cleanEmail);
+      if (emailDocId !== cleanUid) {
+        const altRef = doc(db, 'users', emailDocId);
+        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
+        if (altSnap && altSnap.exists()) {
+          const altData = altSnap.data();
+          if (Array.isArray(altData?.studentJournal)) {
+            altData.studentJournal.forEach((entry: StudentJournalEntry) => {
+              if (entry && entry.id) journalMap.set(entry.id, entry);
+            });
+          }
+        }
+      }
+    }
+
+    // 4. Server API fallback if still empty
+    if (journalMap.size === 0 && (cleanEmail || cleanUid)) {
+      try {
+        const res = await fetch(
+          `/api/student-journal/activity?studentEmail=${encodeURIComponent(cleanEmail)}&studentUid=${encodeURIComponent(cleanUid)}`
+        );
+        if (res.ok) {
+          const apiData = await res.json();
+          if (Array.isArray(apiData?.entries)) {
+            apiData.entries.forEach((e: StudentJournalEntry) => {
+              if (e && e.id) journalMap.set(e.id, e);
+            });
+          }
+        }
+      } catch {}
+    }
+
+    const list = Array.from(journalMap.values());
+    list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${cleanUid}/studentJournal`);
+    return [];
+  }
+}
+
+/**
+ * Real-time subscription to studentJournal on users/{studentUID}
+ * Ensures instantaneous cross-device synchronization between mobile and desktop!
+ */
+export function subscribeToStudentJournal(
+  studentUid: string,
+  studentEmail: string | undefined,
+  callback: (journal: StudentJournalEntry[]) => void
+): () => void {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  if (!db || !cleanUid) {
+    return () => {};
+  }
+
+  const userRef = doc(db, 'users', cleanUid);
+  const unsubscribe = onSnapshot(
+    userRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data?.studentJournal)) {
+          const entries = [...data.studentJournal];
+          entries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          callback(entries);
+        }
+      }
+    },
+    (err) => {
+      console.warn('Real-time notice for studentJournal listener:', err);
+    }
+  );
+
+  return unsubscribe;
+}
+

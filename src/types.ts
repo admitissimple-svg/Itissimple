@@ -196,6 +196,24 @@ export interface DailyJournalEntry {
   studentEmail?: string;
 }
 
+export type StudentJournalActivityType = 'video' | 'audio' | 'memorization' | 'lesson';
+
+export interface StudentJournalEntry {
+  id: string;
+  type: StudentJournalActivityType;
+  date: string; // YYYY-MM-DD
+  week: number;
+  timestamp: number;
+  dayOfWeek?: DayOfWeek;
+  title?: string;
+  artist?: string;
+  partNumber?: number;
+  url?: string;
+  details?: string;
+  studentUid?: string;
+  studentEmail?: string;
+}
+
 export interface UserProfile {
   id?: string;
   name: string;
@@ -242,6 +260,7 @@ export interface UserProfile {
   hasCompletedTrialLesson?: boolean;
   dailyJournalEntries?: DailyJournalEntry[];
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
+  studentJournal?: StudentJournalEntry[];
 }
 
 export interface StudentProfile {

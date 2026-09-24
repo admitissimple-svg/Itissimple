@@ -15,6 +15,7 @@
         "nativeFriendUID": { "type": "string", "description": "Strictly assigned Native Friend tutor UID" },
         "watchedVideosHistory": { "type": "array", "description": "Global history of unique watched YouTube video IDs" },
         "listenedTracksHistory": { "type": "array", "description": "Global history of unique listened Spotify tracks" },
+        "studentJournal": { "type": "array", "description": "Unified student activity log & journal (video, audio, memorization, lesson) for cross-device S-Path sync" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
       },
       "required": ["uid", "email", "role"]

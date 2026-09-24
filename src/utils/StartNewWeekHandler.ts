@@ -10,6 +10,7 @@ import { normalizeStudentIdForPath, withFirestoreTimeout } from '../utils/routin
 import { extractYouTubeVideoId } from '../utils/youtube';
 import { normalizeStudentLevel } from '../utils/spotify';
 import { fetchAllWeeklyHistories, saveWeeklyHistory } from '../hooks/useStudentHistory';
+import { fetchStudentJournalActivitiesFromFirestore } from '../utils/studentPersistence';
 
 export interface StartNewWeekParams {
   studentEmail: string;
@@ -186,6 +187,27 @@ export async function executeStartNewWeek(
         });
       } catch (err) {
         console.warn('Notice reading past weeklyHistories for exclusivity check:', err);
+      }
+
+      // Also consult studentJournal (Single Source of Truth) for video and audio exclusivity
+      try {
+        const journalEntries = await withFirestoreTimeout(
+          fetchStudentJournalActivitiesFromFirestore(cleanUid, !isPlaceholder ? params.studentEmail : undefined),
+          2000,
+          []
+        );
+        journalEntries.forEach((entry) => {
+          if (!entry || !entry.id) return;
+          if (entry.type === 'video') {
+            const vidId = extractYouTubeVideoId(entry.id) || entry.id.trim();
+            if (vidId) accumulatedWatchedSet.add(vidId.toLowerCase());
+          } else if (entry.type === 'audio') {
+            const trackId = entry.id.trim();
+            if (trackId) accumulatedTrackSet.add(trackId);
+          }
+        });
+      } catch (err) {
+        console.warn('Notice querying studentJournal for exclusivity check:', err);
       }
     }
 

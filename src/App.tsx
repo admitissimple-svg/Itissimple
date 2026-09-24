@@ -90,7 +90,16 @@ import {
   fetchStudentLessonsFromFirestore,
   saveStudentWeeklyChecksToFirestore,
   fetchStudentWeeklyChecksFromFirestore,
+  recordActivityInStudentJournal,
+  removeActivityFromStudentJournal,
+  subscribeToStudentJournal,
+  fetchStudentJournalActivitiesFromFirestore,
+  getDateForDayInCurrentWeek,
+  getTodayIsoDate,
+  mapStepIdToJournalType,
+  deriveWeeklyChecksFromJournal,
 } from './utils/studentPersistence';
+import { StudentJournalEntry } from './types';
 import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
 import { OnboardingWizardModal, OnboardingResultData } from './components/OnboardingWizardModal';
@@ -259,8 +268,9 @@ export default function App() {
   const [weeklyHomework, setWeeklyHomework] = useState<WeeklyHomeworkData | null>(null);
   const [homeworkTargetDay, setHomeworkTargetDay] = useState<DayOfWeek>(getTodayDayOfWeek());
 
-  // 7b. S-Path (Gráfico S) Weekly Checks State
+  // 7b. S-Path (Gráfico S) Weekly Checks & Student Journal State (Multi-device Single Source of Truth)
   const [weeklyChecks, setWeeklyChecks] = useState<Record<string, boolean>>({});
+  const [studentJournal, setStudentJournal] = useState<StudentJournalEntry[]>([]);
 
   // 8. Notifications State
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -645,11 +655,21 @@ export default function App() {
             setSelectedActivityId(todayItems[0].id);
           }
 
-          // Fetch student-isolated S-Path weekly checks directly from Firestore
+          // Fetch student-isolated studentJournal & S-Path weekly checks directly from Firestore (Multi-device Sync)
+          fetchStudentJournalActivitiesFromFirestore(uid, email)
+            .then((journalData) => {
+              if (Array.isArray(journalData) && journalData.length > 0) {
+                setStudentJournal(journalData);
+                const derivedChecks = deriveWeeklyChecksFromJournal(journalData, loadedProfile?.weeklyCycle || 1);
+                setWeeklyChecks((prev) => ({ ...prev, ...derivedChecks }));
+              }
+            })
+            .catch(() => {});
+
           fetchStudentWeeklyChecksFromFirestore(uid, email)
             .then((checksData) => {
               if (checksData && checksData.checks) {
-                setWeeklyChecks(checksData.checks);
+                setWeeklyChecks((prev) => ({ ...checksData.checks, ...prev }));
               }
             })
             .catch((err) => {
@@ -744,6 +764,23 @@ export default function App() {
         .catch(() => {});
     }
   }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter, userProfile?.email]);
+
+  // Real-time synchronization of studentJournal across all devices (Mobile <-> Desktop)
+  useEffect(() => {
+    const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const email = currentAccount?.email || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    const unsub = subscribeToStudentJournal(uid, email, (journal) => {
+      if (Array.isArray(journal)) {
+        setStudentJournal(journal);
+        const derivedChecks = deriveWeeklyChecksFromJournal(journal, userProfile?.weeklyCycle || 1);
+        setWeeklyChecks((prev) => ({ ...prev, ...derivedChecks }));
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email, userProfile?.id, userProfile?.weeklyCycle]);
 
   // Refresh student dictionary whenever the modal is opened
   useEffect(() => {
@@ -1365,14 +1402,46 @@ export default function App() {
         return { ...prev, [checkKey]: true };
       });
 
-      if (!isAlreadyChecked && uid) {
-        saveStudentWeeklyChecksToFirestore(
+      const currentWeekNumber = Number(userProfile?.weeklyCycle) || 1;
+      const targetDate = getDateForDayInCurrentWeek(targetDay);
+      const journalType = mapStepIdToJournalType(params.type);
+      const journalItemId =
+        params.type === 'video'
+          ? (params.video?.videoId || params.video?.url || `video_${targetDay}_${Date.now()}`)
+          : params.type === 'audio'
+          ? (params.track?.id || params.track?.trackId || `audio_${targetDay}_${Date.now()}`)
+          : `${params.type}_${targetDay}_${Date.now()}`;
+
+      if (uid) {
+        recordActivityInStudentJournal(
           uid,
-          { ...weeklyChecks, [checkKey]: true },
-          email,
-          userProfile?.weeklyNativeLessonsTarget,
-          userProfile?.weeklyStudyDaysTarget
-        );
+          {
+            id: journalItemId,
+            type: journalType,
+            date: targetDate,
+            dayOfWeek: targetDay,
+            week: currentWeekNumber,
+            timestamp: Date.now(),
+            title: params.type === 'video' ? params.video?.videoTitle : params.type === 'audio' ? params.track?.title : undefined,
+            artist: params.track?.artist,
+            url: params.video?.url || params.track?.url,
+          },
+          email
+        ).then((res) => {
+          if (res.updatedJournal) {
+            setStudentJournal(res.updatedJournal);
+          }
+        });
+
+        if (!isAlreadyChecked) {
+          saveStudentWeeklyChecksToFirestore(
+            uid,
+            { ...weeklyChecks, [checkKey]: true },
+            email,
+            userProfile?.weeklyNativeLessonsTarget,
+            userProfile?.weeklyStudyDaysTarget
+          );
+        }
       }
 
       // 2. Update routine item state to completedToday = true
@@ -1574,6 +1643,38 @@ export default function App() {
       });
 
       if (uid) {
+        const targetType = mapStepIdToJournalType(stepId);
+        const currentWeekNumber = Number(userProfile?.weeklyCycle) || 1;
+        const targetDate = getDateForDayInCurrentWeek(dayKey);
+
+        if (isCompleted) {
+          recordActivityInStudentJournal(
+            uid,
+            {
+              id: `${stepId}_${dayKey}_${currentWeekNumber}_${Date.now()}`,
+              type: targetType,
+              date: targetDate,
+              dayOfWeek: dayKey,
+              week: currentWeekNumber,
+              timestamp: Date.now(),
+              title: stepId === 'tutor_live' ? 'Live Session with Native Friend' : stepId === 'memorization' ? 'Weekly Memorization Activity' : undefined,
+            },
+            email
+          ).then((res) => {
+            if (res.updatedJournal) setStudentJournal(res.updatedJournal);
+          });
+        } else {
+          removeActivityFromStudentJournal(
+            uid,
+            targetType,
+            dayKey,
+            currentWeekNumber,
+            email
+          ).then((res) => {
+            if (res.updatedJournal) setStudentJournal(res.updatedJournal);
+          });
+        }
+
         saveStudentWeeklyChecksToFirestore(
           uid,
           { ...weeklyChecks, [checkKey]: isCompleted },
@@ -4001,6 +4102,7 @@ export default function App() {
                   homework={weeklyHomework}
                   routinesByDay={routinesByDay}
                   userProfile={userProfile}
+                  studentJournal={studentJournal}
                   onOpenHomeworkModal={handleOpenHomeworkModal}
                   onOpenDictionaryModal={() => setIsPersonalDictionaryOpen(true)}
                   onOpenJournalModal={() => setIsJournalModalOpen(true)}
@@ -4012,9 +4114,11 @@ export default function App() {
                     handleSaveStudentProfile({ ...userProfile, ...partial });
                   }}
                   weeklyChecks={weeklyChecks}
-                  onToggleWeeklyCheck={(stepId, dayKey) => {
-                    const isCurrentlyChecked = Boolean(weeklyChecks[`${stepId}_${dayKey}`]);
-                    handleUpdateSPathCheck(stepId as any, dayKey, !isCurrentlyChecked);
+                  onToggleWeeklyCheck={(stepId, dayKey, forcedChecked) => {
+                    const isCompleted = typeof forcedChecked === 'boolean'
+                      ? forcedChecked
+                      : !Boolean(weeklyChecks[`${stepId}_${dayKey}`]);
+                    handleUpdateSPathCheck(stepId as any, dayKey, isCompleted);
                   }}
                 />
               </div>
