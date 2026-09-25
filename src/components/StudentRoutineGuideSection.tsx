@@ -39,6 +39,7 @@ import {
   WritingEvaluationResult,
   TeacherAssignedVideo,
   TeacherAssignedSpotify,
+  StudentJournalEntry,
 } from '../types';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
 import { extractYouTubeVideoId, getYouTubeEmbedUrl, getDailyYouTubeVideoForStudent } from '../utils/youtube';

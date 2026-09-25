@@ -288,8 +288,19 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
 
     // 5. Weekly Homework / Memorization Activity
     const isHomeworkSubmitted = Boolean(weeklyHomework?.status === 'submitted' || weeklyHomework?.status === 'graded');
-    const homeworkAnswersCount = weeklyHomework?.answers ? Object.keys(weeklyHomework.answers).length : 0;
-    const hasHomeworkProgress = isHomeworkSubmitted || homeworkAnswersCount > 0;
+    const hasCompletedParts = Boolean(
+      weeklyHomework?.isCompleted ||
+      weeklyHomework?.isDayPartCompleted ||
+      (weeklyHomework?.completedPartsByDay && Object.values(weeklyHomework.completedPartsByDay).some(Boolean))
+    );
+    const hasAnyAnswers = Boolean(
+      (weeklyHomework?.studentAnswers?.matching && Object.keys(weeklyHomework.studentAnswers.matching).length > 0) ||
+      (weeklyHomework?.studentAnswers?.fillInBlanks && Object.keys(weeklyHomework.studentAnswers.fillInBlanks).length > 0) ||
+      (weeklyHomework?.studentAnswers?.sentences && Object.keys(weeklyHomework.studentAnswers.sentences).length > 0) ||
+      (weeklyHomework?.studentAnswers?.quizAnswers && Object.keys(weeklyHomework.studentAnswers.quizAnswers).length > 0) ||
+      (weeklyHomework?.answers && Object.keys(weeklyHomework.answers).length > 0)
+    );
+    const hasHomeworkProgress = isHomeworkSubmitted || hasCompletedParts || hasAnyAnswers;
 
     // Milestone Steps Definition for real student
     const steps = [

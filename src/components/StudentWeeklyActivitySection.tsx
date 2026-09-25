@@ -351,14 +351,30 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     );
   };
 
-  // Check if an activity is completed strictly and uniquely from studentJournal as Single Source of Truth
+  // Check if an activity is completed: checks weeklyChecks, homework state, and studentJournal
   const isActivityCompleted = useCallback(
     (rowId: string, dayKey: DayOfWeek): boolean => {
+      // 1. Instant reflection from weeklyChecks state
+      const checkKey = `${rowId}_${dayKey}`;
+      if (weeklyChecks && weeklyChecks[checkKey]) {
+        return true;
+      }
+
+      // 2. Instant reflection for memorization from weekly homework progress
+      if (rowId === 'memorization') {
+        if (homework?.completedPartsByDay && homework.completedPartsByDay[dayKey]) {
+          return true;
+        }
+        if (homework?.isDayPartCompleted && homework?.targetDay === dayKey) {
+          return true;
+        }
+      }
+
+      // 3. Rendered based on events registered in studentJournal for persistent cross-device sync
       const targetType = mapStepIdToJournalType(rowId);
       const currentWeek = userProfile?.weeklyCycle || 1;
       const dayCalendarDate = getDateForDayInCurrentWeek(dayKey);
 
-      // Rendered solely based on events registered in studentJournal for flawless cross-device sync
       return activeJournal.some((entry) => {
         if (!entry || entry.type !== targetType) return false;
         // Match exact calendar date in this current week
@@ -370,7 +386,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         return false;
       });
     },
-    [activeJournal, userProfile?.weeklyCycle]
+    [weeklyChecks, homework, activeJournal, userProfile?.weeklyCycle]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {

@@ -4,7 +4,6 @@ import {
   BookOpen,
   CheckCircle,
   HelpCircle,
-  Printer,
   Send,
   Sparkles,
   Volume2,
@@ -12,6 +11,8 @@ import {
   Clock,
   User,
   ArrowRight,
+  ArrowLeft,
+  Layers,
   RefreshCw,
   Check,
   AlertCircle,
@@ -293,6 +294,30 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     });
   };
 
+  const routineActivityNames = useMemo(() => {
+    const set = new Set<string>();
+    (homework?.vocabularyList || []).forEach((v) => {
+      if (v.sourceActivityName) set.add(v.sourceActivityName);
+    });
+    (homework?.allRoutineWords || []).forEach((v) => {
+      if (v.sourceActivityName) set.add(v.sourceActivityName);
+    });
+    return Array.from(set);
+  }, [homework?.vocabularyList, homework?.allRoutineWords]);
+
+  const wordToActivityMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    (homework?.allRoutineWords || []).forEach((item) => {
+      if (item.word) map[item.word.toLowerCase()] = item.sourceActivityName || '';
+    });
+    (homework?.vocabularyList || []).forEach((item) => {
+      if (item.word && !map[item.word.toLowerCase()]) {
+        map[item.word.toLowerCase()] = item.sourceActivityName || '';
+      }
+    });
+    return map;
+  }, [homework?.allRoutineWords, homework?.vocabularyList]);
+
   const [activeTab, setActiveTab] = useState<'matching' | 'fill' | 'writing' | 'reading' | 'results'>(
     homework?.isCompleted ? 'results' : dailySchedule.partKey
   );
@@ -323,82 +348,150 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     setAiEvaluation(homework?.aiEvaluation);
   }, [homework?.id]);
 
+  // Track initial tab selection when modal opens without locking user into results
+  const wasOpenRef = React.useRef(false);
   React.useEffect(() => {
-    if (isOpen) {
-      if (homework?.isCompleted) {
+    if (isOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      if (selectedDay) {
+        setActiveTab(dailySchedule.partKey);
+      } else if (homework?.isCompleted) {
         setActiveTab('results');
       } else {
         setActiveTab(dailySchedule.partKey);
       }
+    } else if (!isOpen) {
+      wasOpenRef.current = false;
     }
-  }, [isOpen, homework?.id, targetDay, dailySchedule.partKey, homework?.isCompleted]);
+  }, [isOpen, homework?.id, dailySchedule.partKey, selectedDay, homework?.isCompleted]);
 
   const [sentenceFeedbacks, setSentenceFeedbacks] = useState<Record<string, any>>({});
   const [isCheckingSentence, setIsCheckingSentence] = useState<Record<string, boolean>>({});
   const [submittedFeedbackToast, setSubmittedFeedbackToast] = useState<string | null>(null);
-  const [isRegeneratingPart4, setIsRegeneratingPart4] = useState<boolean>(false);
 
-  const handleRegeneratePart4Story = async () => {
-    if (isRegeneratingPart4) return;
-    const currentWords = homework?.vocabularyList?.map((v) => v.word) || [];
-    if (currentWords.length === 0) return;
-
-    setIsRegeneratingPart4(true);
-    try {
-      const newPassage = await generatePart4StoryWithAi({
-        words: currentWords,
-        studentLevel: homework.studentLevel,
-        studentName: homework.studentName,
-        wordDetails: homework.vocabularyList,
-      });
-      if (newPassage && newPassage.text) {
-        const updated: WeeklyHomeworkData = {
-          ...homework,
-          readingPassage: newPassage,
-          studentAnswers: {
-            ...(homework.studentAnswers || {}),
-            quizAnswers: {},
-          },
-        };
-        setQuizAnswers({});
-        onSaveProgress(updated);
-      }
-    } catch (err) {
-      console.error('Failed to regenerate Part 4 story:', err);
-    } finally {
-      setIsRegeneratingPart4(false);
-    }
-  };
-
-  const handleCompleteTodayPart = () => {
-    const updated: WeeklyHomeworkData = {
-      ...homework,
-      isDayPartCompleted: true,
-      completedPartsByDay: {
-        ...(homework?.completedPartsByDay || {}),
-        [targetDay]: true,
-      },
-      studentAnswers: {
-        matching: matchingAnswers,
-        fillInBlanks: fillAnswers,
-        sentences: sentenceAnswers,
-        quizAnswers: quizAnswers,
-      },
-    };
-    onSaveProgress(updated);
-    if (onCompleteTodayPart) {
-      onCompleteTodayPart(dailySchedule.partKey, targetDay);
-    }
-    const partTitle = isEn
-      ? dailySchedule.partTitleEn.split(':')[1]?.trim() || dailySchedule.partTitleEn
-      : dailySchedule.partTitlePt.split(':')[1]?.trim() || dailySchedule.partTitlePt;
-    setSubmittedFeedbackToast(
-      isEn
-        ? `🎉 Part ${dailySchedule.partNumber} (${partTitle}) completed! Recorded on your S-Path for today.`
-        : `🎉 Parte ${dailySchedule.partNumber} (${partTitle}) concluída! Registrada no seu Gráfico S de hoje.`
+  // Check if each individual part has all questions answered
+  const isMatchingComplete = useMemo(() => {
+    return (
+      homework.matchingPairs.length > 0 &&
+      homework.matchingPairs.every((pair) => Boolean(matchingAnswers[pair.id]))
     );
-    setTimeout(() => setSubmittedFeedbackToast(null), 4500);
-  };
+  }, [homework.matchingPairs, matchingAnswers]);
+
+  const isFillComplete = useMemo(() => {
+    return (
+      homework.fillInBlanks.length > 0 &&
+      homework.fillInBlanks.every((item) => Boolean(fillAnswers[item.id]))
+    );
+  }, [homework.fillInBlanks, fillAnswers]);
+
+  const isWritingComplete = useMemo(() => {
+    return (
+      homework.sentenceWritingPrompts.length > 0 &&
+      homework.sentenceWritingPrompts.every((p) => {
+        const val =
+          sentenceAnswers[p.word] ||
+          sentenceAnswers[p.word.trim()] ||
+          sentenceAnswers[p.word.toUpperCase()] ||
+          sentenceAnswers[p.word.toLowerCase()] ||
+          '';
+        return val.trim().length >= 4;
+      })
+    );
+  }, [homework.sentenceWritingPrompts, sentenceAnswers]);
+
+  const isReadingComplete = useMemo(() => {
+    return (
+      homework.readingPassage.questions.length > 0 &&
+      homework.readingPassage.questions.every((q) => quizAnswers[q.id] !== undefined)
+    );
+  }, [homework.readingPassage.questions, quizAnswers]);
+
+  // Check if today's scheduled part has been answered
+  const isPartAnswersComplete = useMemo(() => {
+    switch (dailySchedule.partKey) {
+      case 'matching':
+        return isMatchingComplete;
+      case 'fill':
+        return isFillComplete;
+      case 'writing':
+        return isWritingComplete;
+      case 'reading':
+        return isReadingComplete;
+      default:
+        return false;
+    }
+  }, [dailySchedule.partKey, isMatchingComplete, isFillComplete, isWritingComplete, isReadingComplete]);
+
+  // Check if the currently viewed active tab has been completed
+  const isCurrentActiveTabComplete = useMemo(() => {
+    switch (activeTab) {
+      case 'matching':
+        return isMatchingComplete;
+      case 'fill':
+        return isFillComplete;
+      case 'writing':
+        return isWritingComplete;
+      case 'reading':
+        return isReadingComplete;
+      default:
+        return false;
+    }
+  }, [activeTab, isMatchingComplete, isFillComplete, isWritingComplete, isReadingComplete]);
+
+  // Automatic S-Path Completion when questions for the day or current part are answered
+  const autoCompletedDayRef = React.useRef<string>('');
+  useEffect(() => {
+    if (!isOpen || !homework) return;
+    const isCompletedNow = isPartAnswersComplete || (activeTab !== 'results' && isCurrentActiveTabComplete);
+    const currentDayKey = `${targetDay}_${activeTab}_${homework.id}`;
+
+    if (isCompletedNow && !isTodayPartCompleted && autoCompletedDayRef.current !== currentDayKey) {
+      autoCompletedDayRef.current = currentDayKey;
+
+      const updated: WeeklyHomeworkData = {
+        ...homework,
+        isDayPartCompleted: true,
+        completedPartsByDay: {
+          ...(homework?.completedPartsByDay || {}),
+          [targetDay]: true,
+        },
+        studentAnswers: {
+          matching: matchingAnswers,
+          fillInBlanks: fillAnswers,
+          sentences: sentenceAnswers,
+          quizAnswers: quizAnswers,
+        },
+      };
+
+      onSaveProgress(updated);
+      if (onCompleteTodayPart) {
+        onCompleteTodayPart(dailySchedule.partKey, targetDay);
+      }
+
+      setSubmittedFeedbackToast(
+        isEn
+          ? `🎉 Questions answered! Marked as complete on your S-Path graph automatically.`
+          : `🎉 Questões respondidas! Marcada como concluída no seu Gráfico S-Path automaticamente.`
+      );
+      setTimeout(() => setSubmittedFeedbackToast(null), 5000);
+    }
+  }, [
+    isOpen,
+    isPartAnswersComplete,
+    isCurrentActiveTabComplete,
+    isTodayPartCompleted,
+    targetDay,
+    activeTab,
+    dailySchedule.partKey,
+    isEn,
+    homework,
+    matchingAnswers,
+    fillAnswers,
+    sentenceAnswers,
+    quizAnswers,
+    onSaveProgress,
+    onCompleteTodayPart,
+  ]);
 
   const handleCheckSentence = async (prompt: SentenceWritingPrompt, textOverride?: string) => {
     const wordKey = prompt.word;
@@ -605,14 +698,18 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
         quizAnswers: quizAnswers,
       },
       aiEvaluation: evalResult || aiEvaluation,
+      completedPartsByDay: {
+        ...(homework?.completedPartsByDay || {}),
+        [targetDay]: true,
+      },
+      isDayPartCompleted: true,
     };
 
     onSaveProgress(updated);
+    if (onCompleteTodayPart) {
+      onCompleteTodayPart(dailySchedule.partKey, targetDay);
+    }
     setActiveTab('results');
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   const handleSubmit = () => {
@@ -627,7 +724,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     <div className="fixed inset-0 z-50 bg-[#0F172A]/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto print:p-0 print:bg-white print:fixed-none">
       <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-[#CBD5E1] overflow-hidden my-auto max-h-[92vh] flex flex-col print:max-h-none print:shadow-none print:border-none">
         {/* Header */}
-        <div className="px-6 py-4 bg-[#000035] text-white flex items-center justify-between border-b border-[#1C4C96] print:bg-white print:text-black print:border-b-2 print:border-black">
+        <div className="px-6 py-4 bg-[#000035] text-white flex items-center justify-between border-b border-[#1C4C96] shrink-0 print:bg-white print:text-black print:border-b-2 print:border-black">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-[#062863] flex items-center justify-center text-white shadow-xs border border-[#607EC9] print:hidden">
               <BookOpen className="w-5 h-5 text-[#9AB4FF]" />
@@ -674,29 +771,6 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2 print:hidden">
-            {onRegenerateWithAi && (
-              <button
-                type="button"
-                onClick={handleRegenerateClick}
-                disabled={internalGenerating}
-                className="px-2.5 py-1.5 rounded-xl bg-[#1C4C96] text-[#BFDBFE] hover:text-white hover:bg-[#2563EB] transition flex items-center gap-1.5 text-xs font-bold cursor-pointer disabled:opacity-50"
-                title={memT.aiGenerateBtn}
-              >
-                <Sparkles className={`w-3.5 h-3.5 text-[#9AB4FF] ${internalGenerating ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">
-                  {internalGenerating ? memT.generatingAi : memT.aiGenerateBtn}
-                </span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="p-2 rounded-xl bg-[#1E3A8A] text-[#BFDBFE] hover:text-white hover:bg-[#2563EB] transition flex items-center gap-1.5 text-xs font-bold cursor-pointer"
-              title={memT.printBtn}
-            >
-              <Printer className="w-4 h-4 text-[#93C5FD]" />
-              <span className="hidden sm:inline">{memT.printBtn}</span>
-            </button>
             <button
               type="button"
               onClick={onClose}
@@ -710,7 +784,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
         {/* Live AI Generation Banner */}
         {internalGenerating && (
-          <div className="px-6 py-2.5 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white flex items-center justify-between gap-3 text-xs font-semibold shadow-inner print:hidden">
+          <div className="px-6 py-2.5 bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white flex items-center justify-between gap-3 text-xs font-semibold shadow-inner print:hidden shrink-0">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 animate-spin text-amber-300 shrink-0" />
               <span>
@@ -722,31 +796,6 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
             <span className="text-[10px] bg-white/20 px-2.5 py-0.5 rounded-full font-extrabold shrink-0">
               {isEn ? 'Live Native Generation' : 'Geração Didática Nativa'}
             </span>
-          </div>
-        )}
-
-        {/* Notice when viewing offline baseline */}
-        {!internalGenerating && !homework.isAiGenerated && !homework.isEmpty && (
-          <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-amber-900 flex items-center justify-between text-xs print:hidden">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>
-                {isEn
-                  ? 'Viewing offline baseline vocabulary. Click "AI Generate" to generate custom native story and smart blanks with Gemini!'
-                  : 'Visualizando base offline. Clique em "AI Generate" para gerar narrativa nativa e lacunas inteligentes com Gemini!'}
-              </span>
-            </div>
-            {onRegenerateWithAi && (
-              <button
-                type="button"
-                onClick={handleRegenerateClick}
-                disabled={internalGenerating}
-                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer transition shrink-0 ml-3 disabled:opacity-50"
-              >
-                <Sparkles className="w-3 h-3" />
-                {isEn ? 'Generate with AI' : 'Gerar com IA'}
-              </button>
-            )}
           </div>
         )}
 
@@ -1000,14 +1049,19 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
                   {/* Footer */}
                   <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
-                    <button
-                      type="button"
-                      onClick={handleCompleteTodayPart}
-                      className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
-                    >
-                      <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
-                      <span>{isEn ? '✓ Complete Part 1 & Record on S-Path' : '✓ Concluir Parte 1 & Gravar no S-Path'}</span>
-                    </button>
+                    {isTodayPartCompleted ? (
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        <span>{isEn ? 'Recorded on S-Path' : 'Gravado no S-Path automaticamente'}</span>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {memT.part1.answeredCount(
+                          Object.values(matchingAnswers).filter(Boolean).length,
+                          homework.matchingPairs.length
+                        )} • {isEn ? 'Answer all to record on S-Path' : 'Responda todas para gravar no S-Path'}
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => setActiveTab('fill')}
@@ -1105,24 +1159,20 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     >
                       {memT.part2.backBtn}
                     </button>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleCompleteTodayPart}
-                        className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
-                      >
-                        <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
-                        <span>{isEn ? '✓ Complete Part 2 & Record on S-Path' : '✓ Concluir Parte 2 & Gravar no S-Path'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('writing')}
-                        className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
-                      >
-                        <span>{memT.part2.nextBtn}</span>
-                        <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
-                      </button>
-                    </div>
+                    {isTodayPartCompleted && (
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        <span>{isEn ? 'Recorded on S-Path' : 'Gravado no S-Path automaticamente'}</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('writing')}
+                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition ml-auto"
+                    >
+                      <span>{memT.part2.nextBtn}</span>
+                      <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
+                    </button>
                   </div>
                 </div>
               )}
@@ -1359,24 +1409,20 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     >
                       {memT.part3.backBtn}
                     </button>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleCompleteTodayPart}
-                        className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
-                      >
-                        <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
-                        <span>{isEn ? '✓ Complete Part 3 & Record on S-Path' : '✓ Concluir Parte 3 & Gravar no S-Path'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('reading')}
-                        className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition"
-                      >
-                        <span>{memT.part3.nextBtn}</span>
-                        <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
-                      </button>
-                    </div>
+                    {isTodayPartCompleted && (
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        <span>{isEn ? 'Recorded on S-Path' : 'Gravado no S-Path automaticamente'}</span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('reading')}
+                      className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition ml-auto"
+                    >
+                      <span>{memT.part3.nextBtn}</span>
+                      <ArrowRight className="w-4 h-4 text-[#9AB4FF]" />
+                    </button>
                   </div>
                 </div>
               )}
@@ -1397,23 +1443,6 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                       <p className="text-xs text-slate-500 mt-0.5">
                         {memT.part4.instruction}
                       </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        disabled={isRegeneratingPart4 || !homework.vocabularyList?.length}
-                        onClick={handleRegeneratePart4Story}
-                        className="px-2.5 py-1 bg-white hover:bg-slate-100 text-[#000035] rounded-lg border border-slate-200 transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer disabled:opacity-50 shadow-2xs"
-                        title={isEn ? "Generate a 100% original, unprecedented story with Gemini AI" : "Gerar história 100% inédita com Gemini AI"}
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 text-[#1C4C96] ${isRegeneratingPart4 ? 'animate-spin' : ''}`} />
-                        <span>
-                          {isRegeneratingPart4
-                            ? (isEn ? 'Crafting new story...' : 'Criando história...')
-                            : (isEn ? 'New Original Story (AI)' : 'Nova História Inédita (IA)')}
-                        </span>
-                      </button>
                     </div>
                   </div>
 
@@ -1494,14 +1523,12 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                       {memT.part4.backBtn}
                     </button>
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleCompleteTodayPart}
-                        className="px-4 py-2 bg-[#607EC9] hover:bg-[#1C4C96] text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition active:scale-98"
-                      >
-                        <CheckCircle className="w-4 h-4 text-emerald-300 shrink-0" />
-                        <span>{isEn ? '✓ Complete Part 4 & Record on S-Path' : '✓ Concluir Parte 4 & Gravar no S-Path'}</span>
-                      </button>
+                      {isTodayPartCompleted && (
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+                          <CheckCircle className="w-4 h-4 text-emerald-600" />
+                          <span>{isEn ? 'Recorded on S-Path' : 'Gravado no S-Path automaticamente'}</span>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={handleCalculateScore}
@@ -1528,6 +1555,21 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
               {/* TAB 5: RESULTS & DETAILED FEEDBACK */}
               {activeTab === 'results' && (
                 <div className="space-y-5">
+                  {/* Top Navigation & Return to Part 4 Bar */}
+                  <div className="p-3.5 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl border border-blue-200/80 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('reading')}
+                      className="px-4 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl text-xs font-bold flex items-center gap-2 cursor-pointer shadow-xs transition"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-[#9AB4FF]" />
+                      <span>{isEn ? 'Return to Part 4: Story & Questions' : 'Voltar para a Parte 4: História e Perguntas'}</span>
+                    </button>
+                    <span className="text-xs font-bold text-[#1C4C96] bg-white px-3 py-1 rounded-lg border border-blue-200">
+                      {isEn ? 'Evaluation & Corrections' : 'Resultado da Correção da IA'}
+                    </span>
+                  </div>
+
                   {/* Top Score & Level Banner */}
                   <div className="p-6 bg-[#000035] text-white rounded-2xl text-center space-y-3 shadow-sm border border-[#1C4C96]">
                     <div className="w-12 h-12 bg-[#062863] text-[#9AB4FF] rounded-xl mx-auto flex items-center justify-center border border-[#607EC9]/40">
@@ -1550,25 +1592,40 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                       {memT.results.congrats}
                     </p>
 
-                    <div className="pt-2 flex flex-wrap justify-center gap-2.5">
+                    <div className="pt-2 flex justify-center">
                       <button
                         type="button"
-                        onClick={handleSubmit}
-                        className="px-4 py-2 bg-[#1C4C96] hover:bg-[#2563EB] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs cursor-pointer border border-[#9AB4FF]/40 transition"
+                        onClick={() => setActiveTab('reading')}
+                        className="px-5 py-2.5 bg-white text-[#000035] hover:bg-slate-100 rounded-xl text-xs font-black flex items-center gap-2 shadow-xs cursor-pointer transition"
                       >
-                        <Send className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                        <span>{memT.results.sendTutorBtn}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handlePrint}
-                        className="px-3.5 py-2 bg-[#062863] hover:bg-[#1C4C96] text-[#9AB4FF] hover:text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-[#607EC9]/40 cursor-pointer transition"
-                      >
-                        <Printer className="w-3.5 h-3.5" />
-                        <span>{memT.results.printBtn}</span>
+                        <ArrowLeft className="w-4 h-4 text-[#1C4C96]" />
+                        <span>{isEn ? 'Return to Part 4' : 'Voltar para a Parte 4'}</span>
                       </button>
                     </div>
                   </div>
+
+                  {/* Routine Activities Practiced Banner */}
+                  {routineActivityNames.length > 0 && (
+                    <div className="p-4 bg-blue-50/90 rounded-2xl border border-blue-200 space-y-2 shadow-xs">
+                      <div className="flex items-center gap-2 text-xs font-bold text-[#000035]">
+                        <Layers className="w-4 h-4 text-[#1C4C96]" />
+                        <span>
+                          {isEn ? 'Routine Activities Practiced This Week:' : 'Atividades da Rotina Praticadas Nesta Semana:'}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-0.5">
+                        {routineActivityNames.map((actName, idx) => (
+                          <span
+                            key={idx}
+                            className="px-3 py-1 rounded-xl bg-white border border-blue-200 text-xs font-bold text-[#000035] shadow-2xs flex items-center gap-1.5"
+                          >
+                            <span className="w-2 h-2 rounded-full bg-[#1C4C96]" />
+                            {actName}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* AI Tutor Pedagogical Feedback Summary */}
                   {aiEvaluation && (
@@ -1640,6 +1697,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                         {homework.matchingPairs.map((pair) => {
                           const userAns = matchingAnswers[pair.id] || '';
                           const isMatchCorrect = userAns.toLowerCase() === pair.word.toLowerCase();
+                          const actName = wordToActivityMap[pair.word.toLowerCase()];
                           return (
                             <div
                               key={pair.id}
@@ -1650,7 +1708,14 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                               }`}
                             >
                               <div className="space-y-0.5">
-                                <p className="font-bold text-slate-900 capitalize">{pair.word}</p>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="font-bold text-slate-900 capitalize">{pair.word}</p>
+                                  {actName && (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-[#000035] border border-blue-200">
+                                      {isEn ? 'Activity:' : 'Atividade:'} {actName}
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-[11px] text-slate-600">{pair.definition}</p>
                               </div>
                               <div className="text-right shrink-0">
@@ -1680,6 +1745,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                         {homework.fillInBlanks.map((fill) => {
                           const userAns = fillAnswers[fill.id] || '';
                           const isFillCorrect = userAns.toLowerCase() === fill.correctWord.toLowerCase();
+                          const actName = wordToActivityMap[fill.correctWord.toLowerCase()];
                           return (
                             <div
                               key={fill.id}
@@ -1690,7 +1756,14 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                               }`}
                             >
                               <div className="flex flex-wrap items-center justify-between gap-1">
-                                <span className="font-semibold text-slate-900">{fill.sentenceWithBlank}</span>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-semibold text-slate-900">{fill.sentenceWithBlank}</span>
+                                  {actName && (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-[#000035] border border-blue-200">
+                                      {isEn ? 'Activity:' : 'Atividade:'} {actName}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className={`text-[11px] font-bold ${isFillCorrect ? 'text-emerald-700' : 'text-amber-700'}`}>
                                   {isFillCorrect
                                     ? `✓ ${userAns}`
@@ -1723,6 +1796,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                           const userSentence = (sentenceAnswers[prompt.word] || '').trim();
                           const feedback = sentenceFeedbacks[prompt.word];
                           const evalItem = aiEvaluation?.sentenceFeedback?.find((s) => s.word.toLowerCase() === prompt.word.toLowerCase());
+                          const actName = wordToActivityMap[prompt.word.toLowerCase()];
 
                           const isSentenceOk = evalItem?.isCorrect ?? (userSentence.length >= 8 && (!feedback || !feedback.hasAnyError));
                           const corrected = evalItem?.correctedSentence || feedback?.correctedSentence;
@@ -1739,10 +1813,17 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                                   : 'bg-amber-50/50 border-amber-200'
                               }`}
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-bold text-[#000035] uppercase tracking-wide bg-[#9AB4FF]/20 px-2 py-0.5 rounded text-[10px]">
-                                  {prompt.word}
-                                </span>
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-[#000035] uppercase tracking-wide bg-[#9AB4FF]/20 px-2 py-0.5 rounded text-[10px]">
+                                    {prompt.word}
+                                  </span>
+                                  {actName && (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-[#000035] border border-blue-200">
+                                      {isEn ? 'Activity:' : 'Atividade:'} {actName}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className={`text-[11px] font-bold ${isSentenceOk ? 'text-emerald-700' : 'text-amber-700'}`}>
                                   {isSentenceOk ? (isEn ? '✓ Well Structured' : '✓ Bem Estruturada') : (isEn ? '⚠ Needs Review' : '⚠ Revisão Recomendada')}
                                 </span>
@@ -1780,7 +1861,7 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
                     {/* Part 4 Corrections */}
                     <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2.5">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
                         <span className="text-xs font-bold text-[#000035]">
                           {isEn ? 'Part 4: Mini-Story Reading' : 'Parte 4: Interpretação de Texto'}
                         </span>
@@ -1788,6 +1869,12 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                           {homework.readingPassage.questions.length} {isEn ? 'questions' : 'perguntas'}
                         </span>
                       </div>
+                      {routineActivityNames.length > 0 && (
+                        <div className="text-[11px] text-[#1C4C96] bg-blue-50/90 p-2.5 rounded-lg border border-blue-200 font-medium">
+                          <span className="font-bold text-[#000035] mr-1.5">{isEn ? 'Story Context:' : 'Contexto das Atividades:'}</span>
+                          {routineActivityNames.join(' • ')}
+                        </div>
+                      )}
                       <div className="space-y-2">
                         {homework.readingPassage.questions.map((q, idx) => {
                           const chosenIdx = quizAnswers[q.id];
@@ -1829,23 +1916,41 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                       {memT.results.vocabKeyLabel}
                     </span>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {homework.matchingPairs.map((item, idx) => (
-                        <div key={idx} className="flex items-center justify-between border-b border-slate-200 pb-1 text-xs">
-                          <span className="font-bold text-slate-800 capitalize">{item.word}</span>
-                          <span className="text-slate-500 italic text-[11px]">
-                            {currentLanguage === 'en'
-                              ? item.definition
-                              : item.translation
-                                ? `${item.translation} (${item.definition})`
-                                : item.definition}
-                          </span>
-                        </div>
-                      ))}
+                      {homework.matchingPairs.map((item, idx) => {
+                        const actName = wordToActivityMap[item.word.toLowerCase()];
+                        return (
+                          <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 pb-1.5 pt-1 text-xs gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-800 capitalize">{item.word}</span>
+                              {actName && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-100/90 text-[#000035] border border-blue-200">
+                                  {actName}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-slate-500 italic text-[11px]">
+                              {currentLanguage === 'en'
+                                ? item.definition
+                                : item.translation
+                                  ? `${item.translation} (${item.definition})`
+                                  : item.definition}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
                   {/* Footer */}
-                  <div className="pt-3 flex justify-end border-t border-slate-100">
+                  <div className="pt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('reading')}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-[#000035] font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5 text-[#1C4C96]" />
+                      <span>{isEn ? 'Return to Part 4' : 'Voltar para a Parte 4'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={onClose}

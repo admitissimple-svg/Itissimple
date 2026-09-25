@@ -196,7 +196,7 @@ export interface DailyJournalEntry {
   studentEmail?: string;
 }
 
-export type StudentJournalActivityType = 'video' | 'audio' | 'memorization' | 'lesson';
+export type StudentJournalActivityType = 'video' | 'audio' | 'memorization' | 'lesson' | 'sentence';
 
 export interface StudentJournalEntry {
   id: string;
