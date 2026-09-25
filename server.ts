@@ -51,7 +51,7 @@ import {
 
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
-const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.8-flash' : rawEnvModel;
+const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3-flash-preview' : rawEnvModel;
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
@@ -7136,11 +7136,9 @@ Return strict JSON only.`;
   });
 
   const candidateModels = [
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3.8-flash',
+    'gemini-3-flash-preview',
     'gemini-flash-latest',
+    'gemini-3.8-flash',
   ];
 
   for (const model of candidateModels) {
@@ -7320,11 +7318,9 @@ Required JSON Schema:
   });
 
   const candidateModels = [
-    'gemini-3.1-flash-lite',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3.8-flash',
+    'gemini-3-flash-preview',
     'gemini-flash-latest',
+    'gemini-3.8-flash',
   ];
 
   for (const model of candidateModels) {

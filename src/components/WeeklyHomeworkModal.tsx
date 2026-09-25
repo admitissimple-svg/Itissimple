@@ -227,26 +227,27 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   );
 
   // Safety timeout to prevent any stuck loading indicator if background network hangs
-  const [internalGenerating, setInternalGenerating] = useState<boolean>(isGeneratingAi);
+  const [internalGenerating, setInternalGenerating] = useState<boolean>(Boolean(isGeneratingAi));
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
 
   useEffect(() => {
-    setInternalGenerating(isGeneratingAi);
-    if (isGeneratingAi) {
-      const timer = setTimeout(() => {
-        setInternalGenerating(false);
-      }, 10000);
-      return () => clearTimeout(timer);
-    }
+    setInternalGenerating(Boolean(isGeneratingAi));
   }, [isGeneratingAi]);
 
   const handleRegenerateClick = async () => {
-    if (internalGenerating) return;
+    if (internalGenerating || isGeneratingAi) return;
     setInternalGenerating(true);
+    setRegenerateError(null);
     if (onRegenerateWithAi) {
       try {
         await onRegenerateWithAi();
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error generating homework with AI:', err);
+        setRegenerateError(
+          isEn
+            ? 'AI service is temporarily busy. Structured pedagogical exercises loaded.'
+            : 'A IA está temporariamente ocupada. Exercícios estruturados disponíveis.'
+        );
       } finally {
         setInternalGenerating(false);
       }
@@ -771,6 +772,52 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2 print:hidden">
+            {homework.totalWordsCollected > 0 && !homework.isEmpty && onRegenerateWithAi && (
+              <button
+                type="button"
+                onClick={handleRegenerateClick}
+                disabled={internalGenerating || isGeneratingAi}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm border ${
+                  internalGenerating || isGeneratingAi
+                    ? 'bg-indigo-900/60 text-indigo-200 border-indigo-500/40 cursor-wait'
+                    : homework.isAiGenerated
+                    ? 'bg-[#1C4C96] hover:bg-[#607EC9] text-white border-[#9AB4FF]/50'
+                    : 'bg-gradient-to-r from-amber-500 via-indigo-600 to-blue-600 hover:from-amber-400 hover:to-indigo-500 text-white border-amber-300/60 animate-pulse'
+                }`}
+                title={
+                  isEn
+                    ? 'Elaborate or regenerate memorization activities using Gemini AI'
+                    : 'Elaborar ou recriar atividades de memorização com a IA Gemini'
+                }
+              >
+                <Sparkles
+                  className={`w-3.5 h-3.5 ${
+                    internalGenerating || isGeneratingAi ? 'animate-spin text-amber-300' : 'text-amber-300'
+                  }`}
+                />
+                <span className="hidden sm:inline">
+                  {internalGenerating || isGeneratingAi
+                    ? isEn
+                      ? 'Elaborating with AI...'
+                      : 'Elaborando com IA...'
+                    : homework.isAiGenerated
+                    ? isEn
+                      ? 'Regenerate with AI'
+                      : 'Recriar com IA'
+                    : isEn
+                    ? 'Elaborate with Gemini AI'
+                    : 'Elaborar com IA (Gemini)'}
+                </span>
+                <span className="sm:hidden">
+                  {internalGenerating || isGeneratingAi
+                    ? 'IA...'
+                    : homework.isAiGenerated
+                    ? 'Recriar'
+                    : 'IA'}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onClose}
@@ -781,6 +828,20 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Dismissible Error / Notice Banner */}
+        {regenerateError && (
+          <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-amber-900 flex items-center justify-between text-xs print:hidden">
+            <span>{regenerateError}</span>
+            <button
+              type="button"
+              onClick={() => setRegenerateError(null)}
+              className="text-amber-700 hover:text-amber-900 font-bold ml-2 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Live AI Generation Banner */}
         {internalGenerating && (
@@ -953,6 +1014,29 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                 />
               ) : (
                 <>
+                  {/* AI Elaboration Banner if current version is offline baseline */}
+                  {!homework.isAiGenerated && onRegenerateWithAi && homework.totalWordsCollected > 0 && !homework.isEmpty && (
+                    <div className="p-3.5 bg-gradient-to-r from-amber-50 via-indigo-50/60 to-blue-50 border border-amber-200/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs">
+                      <div className="flex items-center gap-2.5 text-slate-800">
+                        <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+                        <span>
+                          {isEn
+                            ? 'Want a custom narrative and smart challenges? Elaborate this activity with Gemini AI.'
+                            : 'Quer uma história nativa inédita e desafios dinâmicos? Elabore esta atividade com a IA Gemini.'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateClick}
+                        disabled={internalGenerating || isGeneratingAi}
+                        className="px-3.5 py-1.5 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs shrink-0 cursor-pointer flex items-center justify-center gap-1.5 shadow-xs transition"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                        <span>{isEn ? 'Elaborate with AI' : 'Elaborar com IA'}</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* TAB 1: MATCHING */}
                   {activeTab === 'matching' && (
                 <div className="space-y-4">

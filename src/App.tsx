@@ -515,14 +515,34 @@ export default function App() {
       });
       if (generated) {
         setWeeklyHomework(generated);
+        if (generated.isAiGenerated) {
+          setNotifications((prev) => [
+            {
+              id: `hw-ai-${Date.now()}`,
+              title: currentLanguage === 'en' ? 'AI Memorization Activity Ready!' : 'Atividade de Memorização Pronta!',
+              message: currentLanguage === 'en'
+                ? 'Gemini AI crafted a custom native story, smart blanks, and writing challenges tailored to your weekly words.'
+                : 'A IA Gemini elaborou uma história nativa inédita, lacunas inteligentes e desafios práticos para suas palavras.',
+              type: 'success',
+              timestamp: new Date().toISOString(),
+              read: false,
+            },
+            ...prev,
+          ]);
+        } else {
+          lastAttemptedSignatureRef.current = '';
+        }
+      } else {
+        lastAttemptedSignatureRef.current = '';
       }
     } catch {
+      lastAttemptedSignatureRef.current = '';
       // Non-blocking fallback
     } finally {
       isGeneratingAiRef.current = false;
       setIsGeneratingHomeworkAi(false);
     }
-  }, [routinesByDay, userProfile, currentAccount?.email, studentDictionaryEntries, homeworkTargetDay]);
+  }, [routinesByDay, userProfile, currentAccount?.email, studentDictionaryEntries, homeworkTargetDay, currentLanguage]);
 
   const lastAttemptedSignatureRef = useRef<string>('');
 

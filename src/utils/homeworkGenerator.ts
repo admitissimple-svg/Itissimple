@@ -577,7 +577,7 @@ export async function generateWeeklyHomeworkWithAi(params: {
     );
 
     const controller = new AbortController();
-    const abortTimeout = setTimeout(() => controller.abort(), 25000);
+    const abortTimeout = setTimeout(() => controller.abort(), 35000);
 
     const response = await fetch('/api/homework/generate-ai', {
       method: 'POST',
@@ -616,13 +616,13 @@ export async function generateWeeklyHomeworkWithAi(params: {
         };
       }
     }
-  } catch {
-    // Non-blocking fallback to high-fidelity structured pedagogical generator
+  } catch (err) {
+    console.warn('AI memorization generation temporarily unavailable, using structured pedagogical base:', err);
   }
 
   return {
     ...localBaseline,
-    isAiGenerated: true,
+    isAiGenerated: false,
   };
 }
 
