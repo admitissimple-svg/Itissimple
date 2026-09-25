@@ -381,7 +381,7 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
       )}
 
       {/* Success Alert */}
-      {sentenceEvaluation && !sentenceEvaluation.hasAnyError && (
+      {sentenceEvaluation && !sentenceEvaluation.hasAnyError && sentenceEvaluation.isCorrect && (
         <div className="p-3.5 bg-[#9AB4FF]/20 rounded-2xl border border-[#607EC9] text-[#062863] flex items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-[#1C4C96] shrink-0" />

@@ -42,7 +42,7 @@ import {
   StudentJournalEntry,
 } from '../types';
 import { Translations, getActivityDisplayName } from '../utils/i18n';
-import { extractYouTubeVideoId, getYouTubeEmbedUrl, getDailyYouTubeVideoForStudent } from '../utils/youtube';
+import { extractYouTubeVideoId, getYouTubeEmbedUrl, getDailyYouTubeVideoForStudent, getYouTubePlaylistForLevel } from '../utils/youtube';
 import {
   getSpotifyEmbedUrl,
   getSpotifyDirectUrl,
@@ -548,7 +548,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     );
   }, [currentDayTrack, normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, levelPlaylistConfig, effectiveJournal]);
 
-  const dailyYouTubeVideo = getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay);
+  const dailyYouTubeVideo = useMemo(() => {
+    return (
+      getDailyYouTubeVideoForStudent(normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, effectiveJournal) ||
+      getYouTubePlaylistForLevel(normalizedLevel)?.videos?.monday
+    );
+  }, [normalizedLevel, selectedDay, activeDaysInOrder, weeklyCycle, effectiveJournal]);
 
   const currentDayActivities = routinesByDay[selectedDay] || [];
 

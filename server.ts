@@ -3786,13 +3786,28 @@ function distributeWeeklyYouTubeForStudent(
   const targetDays = DAYS_SEQUENCE.filter((d) => studentConfiguredDays.includes(d));
   const daysToDistribute = targetDays.length > 0 ? targetDays : DAYS_SEQUENCE;
 
-  // Consumed videos: already watched by this student
+  // Consumed videos: already watched by this student (from watched history AND studentJournal)
   const consumedVideoIds = new Set<string>();
   targetKeys.forEach((k) => {
     const watched = db.studentWatchedVideos?.[k] || [];
     watched.forEach((id: string) => {
       const vid = extractServerYouTubeId(id);
       if (vid) consumedVideoIds.add(vid);
+    });
+
+    const journalEntries = [
+      ...((db.studentActivityJournal?.[k]) || []),
+      ...((db.userProfiles?.[k]?.studentJournal) || []),
+    ];
+    journalEntries.forEach((entry: any) => {
+      if (entry && entry.type === 'video' && entry.id) {
+        const vid = extractServerYouTubeId(entry.id);
+        if (vid) consumedVideoIds.add(vid);
+        if (entry.url) {
+          const urlVid = extractServerYouTubeId(entry.url);
+          if (urlVid) consumedVideoIds.add(urlVid);
+        }
+      }
     });
   });
 
@@ -7670,16 +7685,16 @@ app.post('/api/check-writing', async (req, res) => {
   let hasProgrammaticError = false;
 
   // 1. Rigorous Check: Missing dummy subject "it" in impersonal clauses
-  if (/(^|[.?!;]\s*)(sometimes\s+is\s+better)\b/i.test(programmaticFixed)) {
-    programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)sometimes\s+is\s+better\b/gi, '$1Sometimes it is better');
+  if (/\b(sometimes\s+)?is\s+better\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\b(sometimes\s+)?is\s+better\b/gi, (match) => {
+      if (/^sometimes/i.test(match)) {
+        return match[0] === 'S' ? 'Sometimes it is better' : 'sometimes it is better';
+      }
+      return match[0] === 'I' || match[0] === 'i' ? 'It is better' : 'it is better';
+    });
     hasProgrammaticError = true;
-    programmaticErrorsPt.push("Omissão de sujeito: em inglês, orações impessoais exigem o pronome 'it' (use 'Sometimes it is better').");
-    programmaticErrorsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'Sometimes it is better').");
-  } else if (/(^|[.?!;]\s*)is\s+better\b/i.test(programmaticFixed)) {
-    programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)is\s+better\b/gi, '$1It is better');
-    hasProgrammaticError = true;
-    programmaticErrorsPt.push("Omissão de sujeito: orações impessoais exigem o pronome 'it' (use 'It is better').");
-    programmaticErrorsEn.push("Missing subject: English requires 'it' (use 'It is better').");
+    programmaticErrorsPt.push("Omissão de sujeito: orações impessoais exigem o pronome 'it' (use 'It is better' ou 'Sometimes it is better').");
+    programmaticErrorsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'It is better' or 'Sometimes it is better').");
   } else if (/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential|bad)\b/i.test(programmaticFixed)) {
     programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential|bad)\b/gi, '$1It is $2');
     hasProgrammaticError = true;
@@ -7687,24 +7702,37 @@ app.post('/api/check-writing', async (req, res) => {
     programmaticErrorsEn.push("Missing subject: start with 'It is' for impersonal predicates.");
   }
 
-  // 2. Rigorous Check: Missing infinitive marker "to" after better
-  if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/i.test(programmaticFixed)) {
-    programmaticFixed = programmaticFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/gi, (match, prefix, verb) => {
-      const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : 'It is better';
+  // 2. Rigorous Check: Missing infinitive marker "to" after better + verb
+  if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/gi, (match, prefix, verb) => {
+      const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : (prefix[0] === 'I' ? 'It is better' : 'it is better');
       return `${cleanPrefix} to ${verb}`;
     });
     hasProgrammaticError = true;
-    programmaticErrorsPt.push("Falta de infinitivo: use 'to' após 'better' (ex: 'better to take').");
-    programmaticErrorsEn.push("Missing infinitive: use 'to' after 'better' (e.g., 'better to take').");
+    programmaticErrorsPt.push("Falta de infinitivo: use 'to' após 'better' (ex: 'better to stop', 'better to take').");
+    programmaticErrorsEn.push("Missing infinitive: use 'to' after 'better' (e.g., 'better to stop', 'better to take').");
   }
 
-  // 3. Rigorous Check: Regência / Prepositional complement (instead to -> instead of + gerund)
-  if (/\binstead\s+to\s+([a-z]+)\b/i.test(programmaticFixed)) {
-    programmaticFixed = programmaticFixed.replace(/\binstead\s+to\s+([a-z]+)\b/gi, (match, verb) => {
-      const lowerVerb = verb.toLowerCase();
-      let gerund = lowerVerb + 'ing';
-      if (lowerVerb.endsWith('e') && !lowerVerb.endsWith('ee')) {
-        gerund = lowerVerb.slice(0, -1) + 'ing';
+  // 2b. Rigorous Check: Gerund after 'stop' to cease an action
+  if (/\bstop\s+to\s+(complain|worry|cry|smoke|argue|judge|overthink)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\bstop\s+to\s+(complain|worry|cry|smoke|argue|judge|overthink)\b/gi, (m, verb) => {
+      let g = verb + 'ing';
+      if (verb.endsWith('e') && !verb.endsWith('ee')) g = verb.slice(0, -1) + 'ing';
+      return `stop ${g}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Uso de gerúndio: para cessar uma atitude ou hábito, use 'stop + gerúndio' (ex: 'stop complaining', e não 'stop to complain').");
+    programmaticErrorsEn.push("Gerund usage: to cease an action, use 'stop + gerund' (e.g., 'stop complaining', not 'stop to complain').");
+  }
+
+  // 3. Rigorous Check: Regência / Prepositional complement (instead to / instead + bare verb -> instead of + gerund)
+  if (/\binstead\s+(to\s+([a-z]+)|(face|do|take|make|stay|go|complain|wait)\b)/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\binstead\s+(to\s+([a-z]+)|([a-z]+)\b)/gi, (match, toGroup, verb1, verb2) => {
+      const v = (verb1 || verb2 || '').toLowerCase();
+      if (!v || v === 'of') return match;
+      let gerund = v + 'ing';
+      if (v.endsWith('e') && !v.endsWith('ee')) {
+        gerund = v.slice(0, -1) + 'ing';
       }
       return `instead of ${gerund}`;
     });
@@ -7713,24 +7741,61 @@ app.post('/api/check-writing', async (req, res) => {
     programmaticErrorsEn.push("Incorrect preposition: use 'instead of' + gerund (e.g., 'instead of facing', not 'instead to face').");
   }
 
-  // 4. Rigorous Check: Indefinite article vowel error (a awkward, a interview, etc.)
-  const VOWEL_ARTICLE_REGEX = /\ba\s+(awkward|interview|apple|orange|egg|incident|option|idea|opportunity|issue|event|action|afternoon|evening|example|experience|artist|album|activity|easy|honest|hour)\b/gi;
-  if (VOWEL_ARTICLE_REGEX.test(programmaticFixed)) {
-    programmaticFixed = programmaticFixed.replace(VOWEL_ARTICLE_REGEX, (match, word) => `an ${word}`);
+  // 4. Rigorous Check: Indefinite article vowel error (a vs an)
+  // Matches 'a' before any vowel sound (e.g. "a outstanding", "a awkward", "a apple", "a hour")
+  const A_BEFORE_VOWEL_REGEX = /\ba\s+([aeio][a-z]+|u(?!niversity|nicorn|nique|niform|nion|nit|ser|sage|seful|nisex|niversal|nilateral)[a-z]+|hour[a-z]*|honest[a-z]*|honor[a-z]*|heir[a-z]*)\b/gi;
+  if (A_BEFORE_VOWEL_REGEX.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(A_BEFORE_VOWEL_REGEX, (match, word) => {
+      if (/^(one|once)/i.test(word)) return match;
+      return `an ${word}`;
+    });
     hasProgrammaticError = true;
-    programmaticErrorsPt.push("Erro de artigo indefinido: use 'an' antes de palavras iniciadas por som vocálico (ex: 'an awkward', 'an interview').");
-    programmaticErrorsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an awkward', 'an interview').");
+    programmaticErrorsPt.push("Erro de artigo indefinido: use 'an' antes de palavras iniciadas por som vocálico (ex: 'an outstanding', 'an awkward', 'an hour').");
+    programmaticErrorsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an outstanding', 'an awkward', 'an hour').");
+  }
+
+  // Matches 'an' before consonant sounds (e.g. "an university", "an European", "an book")
+  const AN_BEFORE_CONSONANT_REGEX = /\ban\s+([bcdfghjklmnpqrstvwxyz](?!hour|honest|honor|heir)[a-z]+|university[a-z]*|unicorn[a-z]*|unique[a-z]*|uniform[a-z]*|union[a-z]*|unit[a-z]*|user[a-z]*|usage[a-z]*|useful[a-z]*|european[a-z]*|one|once)\b/gi;
+  if (AN_BEFORE_CONSONANT_REGEX.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(AN_BEFORE_CONSONANT_REGEX, (match, word) => `a ${word}`);
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Erro de artigo indefinido: use 'a' antes de palavras iniciadas por som consonantal (ex: 'a project', 'a university').");
+    programmaticErrorsEn.push("Indefinite article error: use 'a' before words starting with consonant sounds (e.g., 'a project', 'a university').");
   }
 
   // 5. Rigorous Check: Homophone/confusable word (loose vs lose)
-  if (/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace)\b/i.test(programmaticFixed)) {
-    programmaticFixed = programmaticFixed.replace(/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace)\b/gi, 'lose $1');
+  if (/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace|time|money|chance|opportunity|game|match)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace|time|money|chance|opportunity|game|match)\b/gi, 'lose $1');
     hasProgrammaticError = true;
     programmaticErrorsPt.push("Confusão ortográfica: use 'lose' (verbo perder) e não 'loose' (adjetivo frouxo/solto).");
     programmaticErrorsEn.push("Word confusion: use 'lose' (verb to lose) instead of 'loose' (adjective loose).");
   }
 
-  // 6. Rigorous Check: Verb agreement
+  // 6. Rigorous Check: Common spelling mistakes (e.g. millestone -> milestone)
+  const SERVER_SPELLING_FIXES: Record<string, { correct: string; explPt: string; explEn: string }> = {
+    'millestone': { correct: 'milestone', explPt: 'A grafia correta é "milestone" (com apenas um "l").', explEn: 'Correct spelling is "milestone" (single "l").' },
+    'millestones': { correct: 'milestones', explPt: 'A grafia correta é "milestones" (com apenas um "l").', explEn: 'Correct spelling is "milestones" (single "l").' },
+    'definately': { correct: 'definitely', explPt: 'A grafia correta é "definitely" (com "i").', explEn: 'Correct spelling is "definitely".' },
+    'tommorow': { correct: 'tomorrow', explPt: 'A grafia correta é "tomorrow" (com um "m" e dois "r").', explEn: 'Correct spelling is "tomorrow".' },
+    'untill': { correct: 'until', explPt: 'A palavra "until" tem apenas uma letra "l".', explEn: 'The word "until" ends in a single "l".' },
+    'comute': { correct: 'commute', explPt: '"Commute" (deslocamento) tem "mm" duplo.', explEn: '"Commute" has double "mm".' },
+    'breackfast': { correct: 'breakfast', explPt: 'A grafia correta em inglês é "breakfast" (sem "c").', explEn: 'Correct spelling is "breakfast".' },
+    'coffe': { correct: 'coffee', explPt: '"Coffee" termina com "ee" duplo.', explEn: '"Coffee" ends in double "ee".' },
+    'restorant': { correct: 'restaurant', explPt: 'A grafia correta é "restaurant".', explEn: 'Correct spelling is "restaurant".' },
+    'restaurante': { correct: 'restaurant', explPt: 'Em inglês, "restaurant" não tem "e" no final.', explEn: 'In English, "restaurant" does not have an "e" at the end.' },
+  };
+
+  Object.entries(SERVER_SPELLING_FIXES).forEach(([wrong, data]) => {
+    const rx = new RegExp(`\\b${wrong}\\b`, 'gi');
+    if (rx.test(programmaticFixed)) {
+      programmaticFixed = programmaticFixed.replace(rx, data.correct);
+      hasProgrammaticError = true;
+      programmaticErrorsPt.push(data.explPt);
+      programmaticErrorsEn.push(data.explEn);
+    }
+  });
+
+  // 7. Rigorous Check: Verb agreement
   if (/\byou has\b/i.test(programmaticFixed)) {
     programmaticFixed = programmaticFixed.replace(/\byou has\b/gi, 'you have');
     hasProgrammaticError = true;
@@ -7741,47 +7806,56 @@ app.post('/api/check-writing', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (apiKey) {
     const prompt = `YOU ARE A METICULOUS, STRICT SENIOR PROFESSOR OF ENGLISH AND GRAMMAR SPECIALIST AT "IT'S SIMPLE".
-YOUR TASK: Perform an EXTREMELY RIGOROUS, ZERO-TOLERANCE grammatical and linguistic evaluation of an English sentence written by a student.
+YOUR TASK: Perform an EXTREMELY RIGOROUS, ZERO-TOLERANCE grammatical, orthographical, and linguistic evaluation of an English sentence written by a student.
 
 CRITICAL MANDATE - RIGOR ABSOLUTO:
-Under NO circumstances may you approve a sentence as correct or "hasAnyError: false" if it contains ANY linguistic inaccuracy, grammatical error, spelling mistake, awkward non-native phrasing, or omission—no matter how subtle!
-Even if the student's message is understandable or communicative, ANY error MUST be flagged and rejected with "hasAnyError: true" and "isCorrect: false". DO NOT APPROVE AS OUTSTANDING!
+Under NO circumstances may you approve a sentence as correct or "hasAnyError: false" if it contains ANY linguistic inaccuracy, grammatical error, spelling typo, article mismatch, omission, or awkward non-native phrasing—no matter how subtle!
+Even if the student's message is understandable, communicative, or creative, ANY error MUST be flagged and rejected with "hasAnyError": true and "isCorrect": false.
+NEVER APPROVE A SENTENCE AS "OUTSTANDING" IF IT CONTAINS ANY ERROR!
 
 MANDATORY ERROR CHECKLIST TO DETECT AND REJECT:
-1. DUMMY SUBJECT OMISSIONS:
+1. INDEFINITE ARTICLE MISMATCHES (A vs. AN):
+   - "an" MUST precede ALL words starting with a vowel sound (e.g., "an outstanding", "an awkward", "an interview", "an apple", "an option", "an unusual", "an hour", "an honest").
+   - "a" MUST precede words starting with consonant sounds or the /juː/ sound (e.g., "a project", "a university", "a European", "a unique", "a uniform").
+   - REJECT: "a outstanding" -> MUST BE "an outstanding".
+   - REJECT: "a awkward" -> MUST BE "an awkward".
+   - REJECT: "a interview", "a apple", "a hour", "an university", "an European".
+
+2. SPELLING ERRORS & TYPOS:
+   - Detect and reject ANY misspelled word, missing letter, or duplicate consonant error.
+   - REJECT: "millestone" -> MUST BE "milestone" (single 'l').
+   - REJECT: "definately" (definitely), "tommorow" (tomorrow), "untill" (until), "comute" (commute), "breackfast" (breakfast), "coffe" (coffee), "restorant" (restaurant).
+
+3. DUMMY SUBJECT OMISSIONS:
    - English requires explicit subjects in non-imperative clauses.
    - REJECT: "Sometimes is better...", "Is raining", "Is important to...", "Is necessary...", "Was good to see you".
    - MUST BE: "Sometimes IT is better...", "It is raining", "It is important to...", "It was good to see you".
 
-2. PREPOSITION COMPLEMENTS & REGÊNCIA (PREPOSITIONAL GOVERNANCE):
-   - REJECT incorrect prepositions or infinitives after prepositions:
+4. PREPOSITION COMPLEMENTS & REGÊNCIA (PREPOSITIONAL GOVERNANCE):
+   - REJECT incorrect prepositions or bare/infinitive forms after prepositions:
    - REJECT: "instead to face", "instead to do", "instead face".
    - MUST BE: "instead OF facing", "instead of doing".
    - REJECT: "look forward to see", "capable to do", "interested to buy", "in spite to".
    - MUST BE: "look forward to seeing", "capable of doing", "interested in buying", "in spite of".
 
-3. ARTICLE ERRORS (A vs. AN):
-   - REJECT: "a awkward", "a interview", "a apple", "a hour", "an university", "an European".
-   - MUST BE: "an awkward", "an interview", "an apple", "an hour", "a university", "a European".
-
-4. COMMONLY CONFUSED WORDS, HOMOPHONES & SPELLING:
-   - REJECT: "loose" used for "lose" (e.g., "loose your mental state" -> MUST BE "lose your mental state").
+5. COMMONLY CONFUSED WORDS & HOMOPHONES:
+   - REJECT: "loose" used for "lose" (e.g., "loose your mental state / focus / time / keys" -> MUST BE "lose your mental state / focus / time / keys").
    - REJECT: "affect" vs "effect", "their" vs "there" vs "they're", "its" vs "it's", "than" vs "then", "choose" vs "chose", "breathe" vs "breath", "advice" vs "advise".
-   - REJECT any spelling mistake, even 1 letter (e.g. "comute", "breackfast", "restorant").
 
-5. INFINITIVE vs. GERUND vs. BARE INFINITIVE:
+6. INFINITIVE vs. GERUND vs. BARE INFINITIVE:
    - REJECT: "is better take" -> MUST BE: "is better TO take" or "taking".
    - REJECT: "stop to smoke" (when meaning quit smoking) vs "stop smoking".
 
-6. SUBJECT-VERB AGREEMENT & TENSE CONSISTENCY:
+7. SUBJECT-VERB AGREEMENT & TENSE CONSISTENCY:
    - REJECT: "he do", "she have", "you has", "everyone are", "neither of them are".
-   - REJECT inconsistent mixing of tenses without reason.
+   - REJECT unjustified mixing of past and present tenses.
 
-7. PUNCTUATION & CAPITALIZATION:
+8. PUNCTUATION, RUN-ONS & CAPITALIZATION:
    - First letter must be capitalized.
    - Sentence must end with valid punctuation (. ! ?).
+   - Comma splices joining two independent clauses without a conjunction or semicolon must be corrected.
 
-8. TARGET VOCABULARY & TRIGGER USAGE:
+9. TARGET VOCABULARY & TRIGGER USAGE:
    - If target words were provided (${JSON.stringify(allTargetWords)}), verify that the student used the target word ("${mainTarget}").
    - If a specific trigger was requested ("${levelInstruction}"), verify strict compliance.
 
@@ -7792,16 +7866,16 @@ EVALUATION PARAMETERS:
 - Student Input: "${sentence}"
 
 STRICT DECISION RULES:
-- If ANY error from the checklist above (or any other grammar/syntax/collocation flaw) is present:
+- If ANY error from the checklist above (or any other grammar/syntax/collocation/spelling flaw) is present:
   * "hasAnyError": true
   * "isCorrect": false
   * "sentenceFeedback.hasError": true
-  * "explanationPt": Point out EXACTLY what is wrong in clear Portuguese (e.g., "Identificamos erros gramaticais: 1) Omissão do sujeito 'it' em 'it is better'; 2) Falta da partícula de infinitivo 'to take'; 3) Regência incorreta: use 'instead of facing' (com gerúndio) e não 'instead to face'; 4) Artigo indefinido incorreto: use 'an awkward' antes de som vocálico; 5) Confusão ortográfica: use 'lose' (perder) em vez de 'loose' (frouxo).")
+  * "explanationPt": Point out EXACTLY what is wrong in clear, supportive Portuguese (e.g., "Identificamos erros a corrigir: 1) Artigo indefinido incorreto: use 'an outstanding' (e não 'a outstanding') antes de som vocálico; 2) Ortografia: a grafia correta é 'milestone' (com apenas uma letra 'l').")
   * "explanationEn": Point out EXACTLY what is wrong in clear English.
   * "correctedSentence": The fully polished, 100% grammatically correct, native-sounding English sentence.
-  * "overallSummaryPt": "Atenção: sua frase contém incorreções gramaticais que precisam ser corrigidas antes da aprovação."
+  * "overallSummaryPt": "Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação."
   * "overallSummaryEn": "Needs revision: please review the grammar corrections below to perfect your sentence."
-- ONLY IF the sentence is 100% FLAWLESS with NO errors:
+- ONLY IF the sentence is 100% FLAWLESS with NO errors whatsoever:
   * "hasAnyError": false
   * "isCorrect": true
   * "overallSummaryPt": "Excelente! Sua frase está 100% correta gramaticalmente, fluente e natural."
@@ -7840,8 +7914,12 @@ Output STRICT JSON matching this schema:
 
     const parsed = await callGeminiSafeJson(prompt, 10000);
     if (parsed && typeof parsed === 'object') {
-      // Programmatic safety enforcement: if programmatic check detected an error, guarantee failure!
-      if (hasProgrammaticError) {
+      const normalizedOriginal = rawClean.trim().replace(/[.!?\s]+$/, '').toLowerCase();
+      const normalizedCorrected = (parsed.correctedSentence || '').trim().replace(/[.!?\s]+$/, '').toLowerCase();
+      const hasGeminiDiff = Boolean(normalizedCorrected && normalizedCorrected !== normalizedOriginal);
+
+      // Programmatic safety enforcement: if programmatic check detected an error OR Gemini made changes, guarantee failure!
+      if (hasProgrammaticError || hasGeminiDiff || parsed.hasAnyError || parsed.isCorrect === false) {
         parsed.hasAnyError = true;
         parsed.isCorrect = false;
         if (!parsed.sentenceFeedback) {
@@ -7850,14 +7928,18 @@ Output STRICT JSON matching this schema:
         parsed.sentenceFeedback.hasError = true;
         const extraPt = programmaticErrorsPt.join(' ');
         const extraEn = programmaticErrorsEn.join(' ');
-        parsed.sentenceFeedback.explanationPt = parsed.sentenceFeedback.explanationPt
-          ? `${extraPt} ${parsed.sentenceFeedback.explanationPt}`
-          : extraPt;
-        parsed.sentenceFeedback.explanationEn = parsed.sentenceFeedback.explanationEn
-          ? `${extraEn} ${parsed.sentenceFeedback.explanationEn}`
-          : extraEn;
-        parsed.explanation = parsed.sentenceFeedback.explanationPt;
-        parsed.overallSummaryPt = "Atenção: sua frase contém incorreções gramaticais que precisam ser corrigidas antes da aprovação.";
+        if (extraPt) {
+          parsed.sentenceFeedback.explanationPt = parsed.sentenceFeedback.explanationPt
+            ? `${extraPt} ${parsed.sentenceFeedback.explanationPt}`
+            : extraPt;
+        }
+        if (extraEn) {
+          parsed.sentenceFeedback.explanationEn = parsed.sentenceFeedback.explanationEn
+            ? `${extraEn} ${parsed.sentenceFeedback.explanationEn}`
+            : extraEn;
+        }
+        parsed.explanation = parsed.sentenceFeedback.explanationPt || parsed.sentenceFeedback.explanationEn;
+        parsed.overallSummaryPt = "Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação.";
         parsed.overallSummaryEn = "Needs revision: please review the grammar corrections below to perfect your sentence.";
         if (!parsed.correctedSentence || parsed.correctedSentence === rawClean) {
           parsed.correctedSentence = programmaticFixed;
@@ -7865,6 +7947,10 @@ Output STRICT JSON matching this schema:
       }
 
       parsed.isCorrect = parsed.hasAnyError === false;
+      if (parsed.hasAnyError) {
+        parsed.overallSummaryPt = "Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação.";
+        parsed.overallSummaryEn = "Needs revision: please review the grammar corrections below to perfect your sentence.";
+      }
       parsed.explanation =
         parsed.explanation ||
         parsed.sentenceFeedback?.explanationPt ||

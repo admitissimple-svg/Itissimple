@@ -7,10 +7,11 @@ import {
   saveNativeFriendTrackFeedback,
   normalizeStudentIdForPath,
 } from '../utils/routineSync';
-import { DayOfWeek } from '../types';
+import { DayOfWeek, StudentJournalEntry } from '../types';
 import { getStudentCurrentDayOfWeek, sanitizeTimeZone, DEFAULT_STUDENT_TIMEZONE } from '../utils/timezone';
 import { selectCurrentDaySpotifyTrack, normalizeStudentLevel } from '../utils/spotify';
 import { verifyStudentNativeFriendLink } from './useStudentHistory';
+import { subscribeToStudentJournal, fetchStudentJournalActivitiesFromFirestore } from '../utils/studentPersistence';
 
 export interface UseNativeFriendStudentSyncParams {
   studentUid?: string;
@@ -131,6 +132,26 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
   }, [effectiveUid, cleanTeacherUid, studentEmail]);
 
   // 3. Subscribe in real time to Firestore ONLY if authorized by UID
+  const [studentJournal, setStudentJournal] = useState<StudentJournalEntry[]>([]);
+
+  useEffect(() => {
+    if (!effectiveUid || !isAuthorized) {
+      setStudentJournal([]);
+      return;
+    }
+    fetchStudentJournalActivitiesFromFirestore(effectiveUid, studentEmail).then((items) => {
+      if (Array.isArray(items) && items.length > 0) {
+        setStudentJournal(items);
+      }
+    });
+    const unsubJournal = subscribeToStudentJournal(effectiveUid, studentEmail, (items) => {
+      if (Array.isArray(items)) {
+        setStudentJournal(items);
+      }
+    });
+    return () => unsubJournal();
+  }, [effectiveUid, studentEmail, isAuthorized]);
+
   useEffect(() => {
     if (!effectiveUid || !isAuthorized) {
       setRoutineDoc(null);
@@ -169,13 +190,14 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
       return routineDoc.currentSpotifyTrack;
     }
 
-    // B. Real-time deterministic scheduled track for today's active study day
+    // B. Real-time deterministic scheduled track for today's active study day with studentJournal exclusivity
     const normalizedLvl = normalizeStudentLevel(studentLevel || 'intermediate');
     const computed = selectCurrentDaySpotifyTrack({
       level: normalizedLvl,
       selectedDay: todayInStudentTz,
       activeStudyDays: effectiveStudyDays,
       weeklyCycle: weeklyCycle || 5,
+      studentJournal: studentJournal.length > 0 ? studentJournal : routineDoc?.studentJournal,
     });
 
     if (computed) {

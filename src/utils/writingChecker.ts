@@ -199,6 +199,11 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     'restorant': { correct: 'restaurant', explPt: 'A grafia correta é "restaurant".', explEn: 'Correct spelling is "restaurant".' },
     'restaurante': { correct: 'restaurant', explPt: 'Em inglês, "restaurant" não tem "e" no final.', explEn: 'In English, "restaurant" does not have an "e" at the end.' },
     'morrning': { correct: 'morning', explPt: '"Morning" tem apenas um "r".', explEn: '"Morning" has a single "r".' },
+    'millestone': { correct: 'milestone', explPt: 'A grafia correta é "milestone" (com apenas uma letra "l").', explEn: 'Correct spelling is "milestone" (single "l").' },
+    'millestones': { correct: 'milestones', explPt: 'A grafia correta é "milestones" (com apenas um "l").', explEn: 'Correct spelling is "milestones" (single "l").' },
+    'definately': { correct: 'definitely', explPt: 'A grafia correta é "definitely" (com "i").', explEn: 'Correct spelling is "definitely".' },
+    'tommorow': { correct: 'tomorrow', explPt: 'A grafia correta é "tomorrow" (um "m" e dois "r").', explEn: 'Correct spelling is "tomorrow".' },
+    'untill': { correct: 'until', explPt: 'A palavra "until" tem apenas uma letra "l".', explEn: 'The word "until" ends in a single "l".' },
   };
 
   for (const w of allWords) {
@@ -283,17 +288,17 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
   if (sClean.length >= 3) {
     let sFixed = sClean;
 
-    // 1. Rigorous Check: Missing dummy subject "it" (e.g., "Sometimes is better", "is better", "is important")
-    if (/(^|[.?!;]\s*)(sometimes\s+is\s+better)\b/i.test(sFixed)) {
-      sFixed = sFixed.replace(/(^|[.?!;]\s*)sometimes\s+is\s+better\b/gi, '$1Sometimes it is better');
+    // 1. Rigorous Check: Missing dummy subject "it" in impersonal clauses
+    if (/\b(sometimes\s+)?is\s+better\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\b(sometimes\s+)?is\s+better\b/gi, (match) => {
+        if (/^sometimes/i.test(match)) {
+          return match[0] === 'S' ? 'Sometimes it is better' : 'sometimes it is better';
+        }
+        return match[0] === 'I' || match[0] === 'i' ? 'It is better' : 'it is better';
+      });
       hasSentenceError = true;
-      errorDetailsPt.push("Omissão de sujeito: em inglês, orações impessoais exigem o pronome 'it' (use 'Sometimes it is better').");
-      errorDetailsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'Sometimes it is better').");
-    } else if (/(^|[.?!;]\s*)is\s+better\b/i.test(sFixed)) {
-      sFixed = sFixed.replace(/(^|[.?!;]\s*)is\s+better\b/gi, '$1It is better');
-      hasSentenceError = true;
-      errorDetailsPt.push("Omissão de sujeito: orações impessoais exigem 'it' (use 'It is better').");
-      errorDetailsEn.push("Missing subject: English requires 'it' (use 'It is better').");
+      errorDetailsPt.push("Omissão de sujeito: orações impessoais exigem o pronome 'it' (use 'It is better' ou 'Sometimes it is better').");
+      errorDetailsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'It is better' or 'Sometimes it is better').");
     } else if (/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential)\b/i.test(sFixed)) {
       sFixed = sFixed.replace(/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential)\b/gi, '$1It is $2');
       hasSentenceError = true;
@@ -301,24 +306,37 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
       errorDetailsEn.push("Missing subject: start with 'It is' for predicate adjectives.");
     }
 
-    // 2. Rigorous Check: Missing infinitive particle "to" after "better" (e.g., "better take", "better face")
-    if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/i.test(sFixed)) {
-      sFixed = sFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be)\b/gi, (match, prefix, verb) => {
-        const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : 'It is better';
+    // 2. Rigorous Check: Missing infinitive particle "to" after "better" (e.g., "better stop", "better take", "better face")
+    if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/gi, (match, prefix, verb) => {
+        const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : (prefix[0] === 'I' ? 'It is better' : 'it is better');
         return `${cleanPrefix} to ${verb}`;
       });
       hasSentenceError = true;
-      errorDetailsPt.push("Falta do marcador de infinitivo: use 'to' após 'better' (ex: 'better to take').");
-      errorDetailsEn.push("Missing infinitive particle: use 'to' after 'better' (e.g., 'better to take').");
+      errorDetailsPt.push("Falta do marcador de infinitivo: use 'to' após 'better' (ex: 'better to stop', 'better to take').");
+      errorDetailsEn.push("Missing infinitive particle: use 'to' after 'better' (e.g., 'better to stop', 'better to take').");
+    }
+
+    // 2b. Rigorous Check: Gerund after 'stop' to cease an action
+    if (/\bstop\s+to\s+(complain|worry|cry|smoke|argue|judge|overthink)\b/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\bstop\s+to\s+(complain|worry|cry|smoke|argue|judge|overthink)\b/gi, (m, verb) => {
+        let g = verb + 'ing';
+        if (verb.endsWith('e') && !verb.endsWith('ee')) g = verb.slice(0, -1) + 'ing';
+        return `stop ${g}`;
+      });
+      hasSentenceError = true;
+      errorDetailsPt.push("Uso de gerúndio: para cessar uma atitude ou hábito, use 'stop + gerúndio' (ex: 'stop complaining', e não 'stop to complain').");
+      errorDetailsEn.push("Gerund usage: to cease an action, use 'stop + gerund' (e.g., 'stop complaining', not 'stop to complain').");
     }
 
     // 3. Rigorous Check: Incorrect prepositional governance / regência (e.g., "instead to face", "instead face")
-    if (/\binstead\s+to\s+([a-z]+)\b/i.test(sFixed)) {
-      sFixed = sFixed.replace(/\binstead\s+to\s+([a-z]+)\b/gi, (match, verb) => {
-        const lowerVerb = verb.toLowerCase();
-        let gerund = lowerVerb + 'ing';
-        if (lowerVerb.endsWith('e') && !lowerVerb.endsWith('ee')) {
-          gerund = lowerVerb.slice(0, -1) + 'ing';
+    if (/\binstead\s+(to\s+([a-z]+)|(face|do|take|make|stay|go|complain|wait)\b)/i.test(sFixed)) {
+      sFixed = sFixed.replace(/\binstead\s+(to\s+([a-z]+)|([a-z]+)\b)/gi, (match, toGroup, verb1, verb2) => {
+        const v = (verb1 || verb2 || '').toLowerCase();
+        if (!v || v === 'of') return match;
+        let gerund = v + 'ing';
+        if (v.endsWith('e') && !v.endsWith('ee')) {
+          gerund = v.slice(0, -1) + 'ing';
         }
         return `instead of ${gerund}`;
       });
@@ -327,13 +345,26 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
       errorDetailsEn.push("Incorrect preposition complement: use 'instead of' + gerund (e.g., 'instead of facing', not 'instead to face').");
     }
 
-    // 4. Rigorous Check: Indefinite article vowel error (a awkward, a interview, a apple, etc.)
-    const VOWEL_ARTICLE_REGEX = /\ba\s+(awkward|interview|apple|orange|egg|incident|option|idea|opportunity|issue|event|action|afternoon|evening|example|experience|artist|album|activity|easy|honest|hour)\b/gi;
-    if (VOWEL_ARTICLE_REGEX.test(sFixed)) {
-      sFixed = sFixed.replace(VOWEL_ARTICLE_REGEX, (match, word) => `an ${word}`);
+    // 4. Rigorous Check: Indefinite article vowel error (a vs an)
+    // Matches 'a' before any vowel sound (e.g. "a outstanding", "a awkward", "a apple", "a hour")
+    const A_BEFORE_VOWEL_REGEX = /\ba\s+([aeio][a-z]+|u(?!niversity|nicorn|nique|niform|nion|nit|ser|sage|seful|nisex|niversal|nilateral)[a-z]+|hour[a-z]*|honest[a-z]*|honor[a-z]*|heir[a-z]*)\b/gi;
+    if (A_BEFORE_VOWEL_REGEX.test(sFixed)) {
+      sFixed = sFixed.replace(A_BEFORE_VOWEL_REGEX, (match, word) => {
+        if (/^(one|once)/i.test(word)) return match; // 'a one-time opportunity'
+        return `an ${word}`;
+      });
       hasSentenceError = true;
-      errorDetailsPt.push("Erro de artigo indefinido: utilize 'an' antes de palavras iniciadas por som vocálico (ex: 'an awkward', 'an interview').");
-      errorDetailsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an awkward', 'an interview').");
+      errorDetailsPt.push("Erro de artigo indefinido: utilize 'an' antes de palavras iniciadas por som vocálico (ex: 'an outstanding', 'an awkward', 'an hour').");
+      errorDetailsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an outstanding', 'an awkward', 'an hour').");
+    }
+
+    // Matches 'an' before consonant sounds (e.g. "an university", "an European", "an book")
+    const AN_BEFORE_CONSONANT_REGEX = /\ban\s+([bcdfghjklmnpqrstvwxyz](?!hour|honest|honor|heir)[a-z]+|university[a-z]*|unicorn[a-z]*|unique[a-z]*|uniform[a-z]*|union[a-z]*|unit[a-z]*|user[a-z]*|usage[a-z]*|useful[a-z]*|european[a-z]*|one|once)\b/gi;
+    if (AN_BEFORE_CONSONANT_REGEX.test(sFixed)) {
+      sFixed = sFixed.replace(AN_BEFORE_CONSONANT_REGEX, (match, word) => `a ${word}`);
+      hasSentenceError = true;
+      errorDetailsPt.push("Erro de artigo indefinido: utilize 'a' antes de palavras iniciadas por som consonantal (ex: 'a project', 'a university').");
+      errorDetailsEn.push("Indefinite article error: use 'a' before words starting with consonant sounds (e.g., 'a project', 'a university').");
     }
 
     // 5. Rigorous Check: Confusable word homophone "loose" vs "lose"
@@ -436,14 +467,14 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
       ? `Inclua a palavra-alvo "${mainTarget}" na sua frase para validar a atividade.`
       : usedTrigger === false
       ? triggerFeedback || 'Revise o gatilho solicitado para a frase.'
-      : 'Revisamos a pontuação e estrutura da frase.',
+      : 'Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação.',
     overallSummaryEn: !hasAnyError
       ? `Outstanding! You naturally applied "${mainTarget || 'target word'}" and fulfilled the pedagogical challenge.`
       : !usedTargetWord
       ? `Please include the target word "${mainTarget}" in your sentence.`
       : usedTrigger === false
       ? 'Review the requested challenge trigger in your sentence.'
-      : 'Reviewed punctuation and sentence flow.',
+      : 'Needs revision: your sentence contains grammatical or spelling errors that must be corrected before approval.',
     levelTipsPt: isBeg
       ? 'Dica Iniciante: Lembre-se de manter Sujeito + Verbo + Complemento.'
       : isAdv

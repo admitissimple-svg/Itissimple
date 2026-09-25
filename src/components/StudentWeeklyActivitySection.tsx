@@ -351,42 +351,33 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     );
   };
 
-  // Check if an activity is completed: checks weeklyChecks, homework state, and studentJournal
+  // Check if an activity is completed: rendered uniquely based on events registered in studentJournal for persistent cross-device sync
   const isActivityCompleted = useCallback(
     (rowId: string, dayKey: DayOfWeek): boolean => {
-      // 1. Instant reflection from weeklyChecks state
-      const checkKey = `${rowId}_${dayKey}`;
-      if (weeklyChecks && weeklyChecks[checkKey]) {
-        return true;
-      }
-
-      // 2. Instant reflection for memorization from weekly homework progress
-      if (rowId === 'memorization') {
-        if (homework?.completedPartsByDay && homework.completedPartsByDay[dayKey]) {
-          return true;
-        }
-        if (homework?.isDayPartCompleted && homework?.targetDay === dayKey) {
-          return true;
-        }
-      }
-
-      // 3. Rendered based on events registered in studentJournal for persistent cross-device sync
       const targetType = mapStepIdToJournalType(rowId);
       const currentWeek = userProfile?.weeklyCycle || 1;
       const dayCalendarDate = getDateForDayInCurrentWeek(dayKey);
 
       return activeJournal.some((entry) => {
-        if (!entry || entry.type !== targetType) return false;
+        if (!entry) return false;
+        const matchesType =
+          entry.type === targetType ||
+          (rowId === 'tutor_live' && (entry.type === 'lesson' || (entry as any).type === 'tutor_live')) ||
+          (rowId === 'video_day' && (entry.type === 'video' || (entry as any).type === 'video_day')) ||
+          (rowId === 'audio_day' && (entry.type === 'audio' || (entry as any).type === 'audio_day')) ||
+          (rowId === 'memorization' && (entry.type === 'memorization' || (entry as any).type === 'homework'));
+        if (!matchesType) return false;
+
         // Match exact calendar date in this current week
         if (entry.date && entry.date === dayCalendarDate) return true;
         // Match day of week in this cycle
-        if (entry.dayOfWeek && entry.dayOfWeek === dayKey) {
+        if (entry.dayOfWeek && entry.dayOfWeek.toLowerCase() === dayKey.toLowerCase()) {
           if (entry.week === undefined || entry.week === currentWeek) return true;
         }
         return false;
       });
     },
-    [weeklyChecks, homework, activeJournal, userProfile?.weeklyCycle]
+    [activeJournal, userProfile?.weeklyCycle]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {

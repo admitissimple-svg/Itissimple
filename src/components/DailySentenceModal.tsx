@@ -208,7 +208,7 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
 
           {/* AI Feedback */}
           {evaluation && (
-            evaluation.hasAnyError || (evaluation.correctedSentence && evaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase()) ? (
+            (evaluation.hasAnyError || !evaluation.isCorrect || (evaluation.correctedSentence && evaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase())) ? (
               <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs space-y-2 text-amber-900 animate-in fade-in">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 font-bold text-amber-950">

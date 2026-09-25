@@ -1,4 +1,4 @@
-import { DayOfWeek, EnglishLevel } from '../types';
+import { DayOfWeek, EnglishLevel, StudentJournalEntry } from '../types';
 import { DAYS_SEQUENCE, NormalizedStudentLevel, normalizeStudentLevel } from './spotify';
 
 /**
@@ -759,12 +759,125 @@ export function getWeeklyYouTubeVideosForLevel(rawLevel?: string | EnglishLevel 
 }
 
 /**
- * Retrieves the daily YouTube video sequentially mapped from the level's playlist for the selected day
+ * Selects exactly one YouTube video for a student's study day, respecting:
+ * 1. Daily exclusivity: 1 video per active study day in sequential curriculum order.
+ * 2. Weekly frequency with Rest Days returning null.
+ * 3. Strict Student Journal Exclusivity: Queries studentJournal to filter and skip video IDs already consumed, guaranteeing videos never repeat.
+ * 4. Looping: (cycle - 1) * studyDaysCount + studyDayIndex % totalUnconsumedVideos.
+ */
+export function selectCurrentDayYouTubeVideo(params: {
+  level?: string | EnglishLevel | null;
+  selectedDay: DayOfWeek;
+  activeStudyDays?: DayOfWeek[];
+  weeklyCycle?: number;
+  studentJournal?: StudentJournalEntry[];
+  consumedVideoIds?: string[];
+}): YouTubeDailyVideoConfig | null {
+  const { level, selectedDay, activeStudyDays, weeklyCycle = 1, studentJournal, consumedVideoIds } = params;
+  const norm = normalizeStudentLevel(level);
+
+  // 1. Determine active study days in calendar order
+  const calendarOrder: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const effectiveStudyDays = activeStudyDays && activeStudyDays.length > 0
+    ? calendarOrder.filter((d) => activeStudyDays.includes(d))
+    : calendarOrder.slice(0, 5); // Default to 5x (Mon-Fri)
+
+  // 2. Check if selectedDay is an active study day or Rest Day
+  const studyDayIndex = effectiveStudyDays.indexOf(selectedDay);
+  if (studyDayIndex === -1) {
+    return null; // Rest Day: No video scheduled
+  }
+
+  // 3. Pool of videos from YouTube playlist for this level
+  const config = YOUTUBE_LEVEL_PLAYLISTS[norm] || YOUTUBE_LEVEL_PLAYLISTS.beginner;
+  const effectivePool: YouTubeDailyVideoConfig[] = [
+    ...DAYS_SEQUENCE.map((d) => config.videos[d]).filter(Boolean),
+    ...(config.pool || []).map((p) => ({
+      ...p,
+      dayOfWeek: selectedDay,
+      dayLabelPt: config.videos[selectedDay]?.dayLabelPt || 'Dia de estudo',
+      dayLabelEn: config.videos[selectedDay]?.dayLabelEn || 'Study day',
+    })),
+  ];
+
+  if (effectivePool.length === 0) return null;
+
+  // 4. Strict Student Journal Exclusivity Filter: Consult studentJournal to skip already consumed/watched videos
+  const consumedSet = new Set<string>();
+  if (Array.isArray(consumedVideoIds)) {
+    consumedVideoIds.forEach((id) => {
+      const vid = extractYouTubeVideoId(id) || id?.trim().toLowerCase();
+      if (vid) consumedSet.add(vid);
+    });
+  }
+  if (Array.isArray(studentJournal)) {
+    studentJournal.forEach((entry) => {
+      if (entry && entry.type === 'video' && entry.id) {
+        const vid = (extractYouTubeVideoId(entry.id) || entry.id).trim().toLowerCase();
+        if (vid) consumedSet.add(vid);
+        if (entry.url) {
+          const uVid = (extractYouTubeVideoId(entry.url) || '').trim().toLowerCase();
+          if (uVid) consumedSet.add(uVid);
+        }
+      }
+    });
+  }
+
+  // Filter pool to unconsumed candidates
+  const unconsumedPool = effectivePool.filter((vid) => {
+    const rawId = vid.videoId || (vid.url ? extractYouTubeVideoId(vid.url) : null);
+    if (!rawId) return true;
+    return !consumedSet.has(rawId.toLowerCase().trim());
+  });
+
+  // If all videos in curriculum have been consumed over time, loop back through effectivePool
+  const candidatePool = unconsumedPool.length > 0 ? unconsumedPool : effectivePool;
+  const totalCandidates = candidatePool.length;
+
+  // 5. Sequential distribution + Looping
+  const cycle = Math.max(1, weeklyCycle);
+  const studyDaysCount = Math.max(1, effectiveStudyDays.length);
+  const rawVideoIndex = (cycle - 1) * studyDaysCount + studyDayIndex;
+  const videoIndex = rawVideoIndex % totalCandidates;
+
+  const baseVideo = candidatePool[videoIndex];
+  if (!baseVideo) return null;
+
+  const cleanVidId = baseVideo.videoId || (baseVideo.url ? extractYouTubeVideoId(baseVideo.url) : 'dQw4w9WgXcQ') || 'dQw4w9WgXcQ';
+  const embedUrl = getYouTubeEmbedUrl(cleanVidId);
+  const watchUrl = getYouTubeWatchUrl(cleanVidId);
+
+  return {
+    ...baseVideo,
+    videoId: cleanVidId,
+    url: watchUrl,
+    embedUrl,
+    dayOfWeek: selectedDay,
+    dayLabelPt: config.videos[selectedDay]?.dayLabelPt || baseVideo.dayLabelPt,
+    dayLabelEn: config.videos[selectedDay]?.dayLabelEn || baseVideo.dayLabelEn,
+  };
+}
+
+/**
+ * Retrieves the daily YouTube video sequentially mapped from the level's playlist for the selected day,
+ * consulting studentJournal to avoid repetitions.
  */
 export function getDailyYouTubeVideoForStudent(
   rawLevel?: string | EnglishLevel | null,
-  dayOfWeek: DayOfWeek = 'monday'
+  dayOfWeek: DayOfWeek = 'monday',
+  activeStudyDays?: DayOfWeek[],
+  weeklyCycle: number = 1,
+  studentJournal?: StudentJournalEntry[]
 ): YouTubeDailyVideoConfig {
+  const exclusive = selectCurrentDayYouTubeVideo({
+    level: rawLevel,
+    selectedDay: dayOfWeek,
+    activeStudyDays,
+    weeklyCycle,
+    studentJournal,
+  });
+  if (exclusive) return exclusive;
+
   const playlist = getYouTubePlaylistForLevel(rawLevel);
   return playlist.videos[dayOfWeek] || playlist.videos.monday;
 }
