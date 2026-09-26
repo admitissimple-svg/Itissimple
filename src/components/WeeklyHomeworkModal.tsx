@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   X,
   BookOpen,
@@ -41,9 +41,20 @@ interface WeeklyHomeworkModalProps {
   selectedDay?: DayOfWeek;
   activeStudyDays?: DayOfWeek[];
   weeklyCycle?: number;
+  weeklyChecks?: Record<string, boolean>;
   onCompleteTodayPart?: (partKey: 'matching' | 'fill' | 'writing' | 'reading', day: DayOfWeek) => void;
   onChangeDay?: (day: DayOfWeek) => void;
 }
+
+const WEEK_DAYS: { key: DayOfWeek; label: string }[] = [
+  { key: 'monday', label: 'Mon' },
+  { key: 'tuesday', label: 'Tus' },
+  { key: 'wednesday', label: 'Wed' },
+  { key: 'thursday', label: 'Thu' },
+  { key: 'friday', label: 'Fri' },
+  { key: 'saturday', label: 'Sat' },
+  { key: 'sunday', label: 'Sun' },
+];
 
 interface MemorizationAiLoadingSkeletonProps {
   isEn: boolean;
@@ -206,13 +217,30 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   selectedDay,
   activeStudyDays,
   weeklyCycle = 1,
+  weeklyChecks,
   onCompleteTodayPart,
   onChangeDay,
 }) => {
   const isEn = currentLanguage === 'en';
   const memT = useMemo(() => getMemorizationTranslations(currentLanguage), [currentLanguage]);
 
-  const targetDay: DayOfWeek = selectedDay || homework?.targetDay || 'monday';
+  const [internalDay, setInternalDay] = useState<DayOfWeek>(selectedDay || homework?.targetDay || 'monday');
+
+  useEffect(() => {
+    if (selectedDay) {
+      setInternalDay(selectedDay);
+    }
+  }, [selectedDay]);
+
+  const targetDay: DayOfWeek = selectedDay || internalDay;
+
+  const handleSelectDay = (newDay: DayOfWeek) => {
+    setInternalDay(newDay);
+    if (onChangeDay) {
+      onChangeDay(newDay);
+    }
+  };
+
   const dailySchedule = useMemo(() => {
     return getDailyMemorizationSchedule(
       targetDay,
@@ -221,9 +249,11 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     );
   }, [targetDay, activeStudyDays, weeklyCycle]);
 
+  // Accurately determine if targetDay's activity part has been completed
   const isTodayPartCompleted = Boolean(
     homework?.completedPartsByDay?.[targetDay] ||
-    (homework?.assignedPartKey && homework?.isDayPartCompleted)
+    weeklyChecks?.[`memorization_${targetDay}`] ||
+    (homework?.targetDay === targetDay && homework?.isDayPartCompleted)
   );
 
   // Safety timeout to prevent any stuck loading indicator if background network hangs
@@ -372,40 +402,37 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
   // Check if each individual part has all questions answered
   const isMatchingComplete = useMemo(() => {
-    return (
-      homework.matchingPairs.length > 0 &&
-      homework.matchingPairs.every((pair) => Boolean(matchingAnswers[pair.id]))
-    );
+    if (!homework.matchingPairs || homework.matchingPairs.length === 0) return true;
+    return homework.matchingPairs.every((pair) => Boolean(matchingAnswers[pair.id]));
   }, [homework.matchingPairs, matchingAnswers]);
 
   const isFillComplete = useMemo(() => {
-    return (
-      homework.fillInBlanks.length > 0 &&
-      homework.fillInBlanks.every((item) => Boolean(fillAnswers[item.id]))
-    );
+    if (!homework.fillInBlanks || homework.fillInBlanks.length === 0) return true;
+    return homework.fillInBlanks.every((item) => Boolean(fillAnswers[item.id]));
   }, [homework.fillInBlanks, fillAnswers]);
 
   const isWritingComplete = useMemo(() => {
-    return (
-      homework.sentenceWritingPrompts.length > 0 &&
-      homework.sentenceWritingPrompts.every((p) => {
-        const val =
-          sentenceAnswers[p.word] ||
-          sentenceAnswers[p.word.trim()] ||
-          sentenceAnswers[p.word.toUpperCase()] ||
-          sentenceAnswers[p.word.toLowerCase()] ||
-          '';
-        return val.trim().length >= 4;
-      })
-    );
-  }, [homework.sentenceWritingPrompts, sentenceAnswers]);
+    if (!homework.sentenceWritingPrompts || homework.sentenceWritingPrompts.length === 0) return true;
+    return homework.sentenceWritingPrompts.every((p) => {
+      const val =
+        sentenceAnswers[p.word] ||
+        sentenceAnswers[p.word.trim()] ||
+        sentenceAnswers[p.word.toUpperCase()] ||
+        sentenceAnswers[p.word.toLowerCase()] ||
+        '';
+      const hasFeedback = Boolean(
+        sentenceFeedbacks[p.word] ||
+        sentenceFeedbacks[p.word.toUpperCase()] ||
+        sentenceFeedbacks[p.word.toLowerCase()]
+      );
+      return val.trim().length >= 3 || hasFeedback;
+    });
+  }, [homework.sentenceWritingPrompts, sentenceAnswers, sentenceFeedbacks]);
 
   const isReadingComplete = useMemo(() => {
-    return (
-      homework.readingPassage.questions.length > 0 &&
-      homework.readingPassage.questions.every((q) => quizAnswers[q.id] !== undefined)
-    );
-  }, [homework.readingPassage.questions, quizAnswers]);
+    if (!homework.readingPassage?.questions || homework.readingPassage.questions.length === 0) return true;
+    return homework.readingPassage.questions.every((q) => quizAnswers[q.id] !== undefined);
+  }, [homework.readingPassage?.questions, quizAnswers]);
 
   // Check if today's scheduled part has been answered
   const isPartAnswersComplete = useMemo(() => {
@@ -439,22 +466,15 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     }
   }, [activeTab, isMatchingComplete, isFillComplete, isWritingComplete, isReadingComplete]);
 
-  // Automatic S-Path Completion when questions for the day or current part are answered
-  const autoCompletedDayRef = React.useRef<string>('');
-  useEffect(() => {
-    if (!isOpen || !homework) return;
-    const isCompletedNow = isPartAnswersComplete || (activeTab !== 'results' && isCurrentActiveTabComplete);
-    const currentDayKey = `${targetDay}_${activeTab}_${homework.id}`;
-
-    if (isCompletedNow && !isTodayPartCompleted && autoCompletedDayRef.current !== currentDayKey) {
-      autoCompletedDayRef.current = currentDayKey;
-
+  // Event-driven helper to synchronously mark S-Path completed and persist to state/DB
+  const markSPathCompleted = useCallback(
+    (day: DayOfWeek, partKey: string) => {
       const updated: WeeklyHomeworkData = {
         ...homework,
         isDayPartCompleted: true,
         completedPartsByDay: {
           ...(homework?.completedPartsByDay || {}),
-          [targetDay]: true,
+          [day]: true,
         },
         studentAnswers: {
           matching: matchingAnswers,
@@ -466,13 +486,28 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
 
       onSaveProgress(updated);
       if (onCompleteTodayPart) {
-        onCompleteTodayPart(dailySchedule.partKey, targetDay);
+        onCompleteTodayPart(partKey as any, day);
       }
+    },
+    [homework, matchingAnswers, fillAnswers, sentenceAnswers, quizAnswers, onSaveProgress, onCompleteTodayPart]
+  );
+
+  // Strict Automated S-Path Tracking: triggers instantly upon activity completion with zero user click
+  const autoCompletedDayRef = React.useRef<string>('');
+  useEffect(() => {
+    if (!isOpen || !homework) return;
+    const isCompletedNow = isPartAnswersComplete || (activeTab !== 'results' && isCurrentActiveTabComplete) || homework.isCompleted;
+    const completionKey = `${targetDay}_${activeTab}_${dailySchedule.partKey}`;
+
+    if (isCompletedNow && !isTodayPartCompleted && autoCompletedDayRef.current !== completionKey) {
+      autoCompletedDayRef.current = completionKey;
+
+      markSPathCompleted(targetDay, dailySchedule.partKey);
 
       setSubmittedFeedbackToast(
         isEn
-          ? `🎉 Questions answered! Marked as complete on your S-Path graph automatically.`
-          : `🎉 Questões respondidas! Marcada como concluída no seu Gráfico S-Path automaticamente.`
+          ? `🎉 Part ${dailySchedule.partNumber} completed! Automatically marked on your S-Path progression.`
+          : `🎉 Parte ${dailySchedule.partNumber} concluída! Marcada automaticamente no seu Gráfico S-Path.`
       );
       setTimeout(() => setSubmittedFeedbackToast(null), 5000);
     }
@@ -484,14 +519,10 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
     targetDay,
     activeTab,
     dailySchedule.partKey,
+    dailySchedule.partNumber,
     isEn,
     homework,
-    matchingAnswers,
-    fillAnswers,
-    sentenceAnswers,
-    quizAnswers,
-    onSaveProgress,
-    onCompleteTodayPart,
+    markSPathCompleted,
   ]);
 
   const handleCheckSentence = async (prompt: SentenceWritingPrompt, textOverride?: string) => {
@@ -829,6 +860,65 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
           </div>
         </div>
 
+        {/* S-Path Rhythm 7-Day Timeline Bar */}
+        <div className="px-4 sm:px-6 py-2.5 bg-[#000035]/95 border-b border-[#1C4C96]/60 flex flex-wrap items-center justify-between gap-3 text-white print:hidden">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-[#BFDBFE]">
+              {isEn ? 'S-Path Rhythm (1 Part / Day):' : 'Ritmo S-Path (1 Parte / Dia):'}
+            </span>
+            <span className="text-[10px] font-extrabold text-[#F4CA54] bg-[#062863] px-2.5 py-0.5 rounded-full border border-[#1C4C96] flex items-center gap-1 shadow-xs">
+              <span>⭐ {isEn ? `Day Focus: Part ${dailySchedule.partNumber}` : `Foco do Dia: Parte ${dailySchedule.partNumber}`}</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {WEEK_DAYS.map((d) => {
+              const isSelected = d.key === targetDay;
+              const isDayCompleted = Boolean(
+                homework?.completedPartsByDay?.[d.key] ||
+                weeklyChecks?.[`memorization_${d.key}`] ||
+                (d.key === targetDay && isTodayPartCompleted)
+              );
+              const daySchedule = getDailyMemorizationSchedule(d.key, activeStudyDays, weeklyCycle);
+              const isDayInPlan = !activeStudyDays || activeStudyDays.includes(d.key);
+
+              return (
+                <button
+                  key={d.key}
+                  type="button"
+                  onClick={() => handleSelectDay(d.key)}
+                  disabled={!isDayInPlan}
+                  title={`${d.label}: Parte ${daySchedule.partNumber} ${isDayCompleted ? (isEn ? '• Completed' : '• Concluída') : ''}`}
+                  className={`px-2.5 py-1 rounded-xl text-[10px] font-bold flex items-center gap-1.5 transition cursor-pointer select-none border ${
+                    isSelected
+                      ? 'bg-[#1C4C96] text-white border-[#F4CA54] shadow-xs ring-1 ring-[#F4CA54]/40'
+                      : isDayCompleted
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50 hover:bg-emerald-500/30'
+                      : isDayInPlan
+                      ? 'bg-[#062863]/60 text-[#9AB4FF] border-[#1C4C96]/60 hover:bg-[#062863] hover:text-white'
+                      : 'opacity-30 text-slate-400 border-transparent cursor-not-allowed'
+                  }`}
+                >
+                  <span className="uppercase text-[9px] font-mono">{d.label}</span>
+                  {isDayCompleted ? (
+                    <div className="w-3.5 h-3.5 rounded-full bg-emerald-500/30 text-emerald-300 flex items-center justify-center">
+                      <Check className="w-2.5 h-2.5 text-emerald-300" />
+                    </div>
+                  ) : (
+                    <span
+                      className={`text-[8px] font-mono px-1 py-0.2 rounded font-black ${
+                        isSelected ? 'bg-[#F4CA54] text-[#000035]' : 'bg-[#000035] text-[#9AB4FF]'
+                      }`}
+                    >
+                      P{daySchedule.partNumber}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Dismissible Error / Notice Banner */}
         {regenerateError && (
           <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 text-amber-900 flex items-center justify-between text-xs print:hidden">
@@ -1148,7 +1238,12 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     )}
                     <button
                       type="button"
-                      onClick={() => setActiveTab('fill')}
+                      onClick={() => {
+                        if (isMatchingComplete && !isTodayPartCompleted) {
+                          markSPathCompleted(targetDay, 'matching');
+                        }
+                        setActiveTab('fill');
+                      }}
                       className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition ml-auto"
                     >
                       <span>{memT.part1.nextBtn}</span>
@@ -1251,7 +1346,12 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     )}
                     <button
                       type="button"
-                      onClick={() => setActiveTab('writing')}
+                      onClick={() => {
+                        if (isFillComplete && !isTodayPartCompleted) {
+                          markSPathCompleted(targetDay, 'fill');
+                        }
+                        setActiveTab('writing');
+                      }}
                       className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition ml-auto"
                     >
                       <span>{memT.part2.nextBtn}</span>
@@ -1501,7 +1601,12 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
                     )}
                     <button
                       type="button"
-                      onClick={() => setActiveTab('reading')}
+                      onClick={() => {
+                        if (isWritingComplete && !isTodayPartCompleted) {
+                          markSPathCompleted(targetDay, 'writing');
+                        }
+                        setActiveTab('reading');
+                      }}
                       className="px-5 py-2 bg-[#000035] hover:bg-[#062863] text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition ml-auto"
                     >
                       <span>{memT.part3.nextBtn}</span>

@@ -351,9 +351,16 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     );
   };
 
-  // Check if an activity is completed: rendered uniquely based on events registered in studentJournal for persistent cross-device sync
+  // Check if an activity is completed: rendered with instant synchronization from weeklyChecks, homework progress, and studentJournal for persistent multi-device sync
   const isActivityCompleted = useCallback(
     (rowId: string, dayKey: DayOfWeek): boolean => {
+      const checkKey = `${rowId}_${dayKey}`;
+      // 1. Instant synchronization with application weeklyChecks state (from props or local)
+      if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
+      // 2. Instant synchronization with homework completedPartsByDay (for memorization activity)
+      if (rowId === 'memorization' && Boolean(homework?.completedPartsByDay?.[dayKey])) return true;
+
+      // 3. Persistent synchronization from studentJournal entries
       const targetType = mapStepIdToJournalType(rowId);
       const currentWeek = userProfile?.weeklyCycle || 1;
       const dayCalendarDate = getDateForDayInCurrentWeek(dayKey);
@@ -377,7 +384,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         return false;
       });
     },
-    [activeJournal, userProfile?.weeklyCycle]
+    [activeJournal, userProfile?.weeklyCycle, weeklyChecks, homework?.completedPartsByDay]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
@@ -1015,8 +1022,8 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
                             }
                           >
                             {isChecked ? (
-                              <div className="w-5 h-5 rounded-full bg-[#1C4C96] text-[#9AB4FF] flex items-center justify-center border border-[#9AB4FF] shadow-xs">
-                                <CheckCircle2 className="w-3.5 h-3.5 text-[#9AB4FF]" />
+                              <div className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-400/80 shadow-xs">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                               </div>
                             ) : memPart ? (
                               <div className="w-5 h-5 rounded-full border-2 border-[#607EC9]/50 hover:border-[#9AB4FF] transition bg-[#000035]/40 flex items-center justify-center text-[8px] font-bold text-[#9AB4FF]/80">

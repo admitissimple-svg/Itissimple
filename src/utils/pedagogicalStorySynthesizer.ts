@@ -363,7 +363,94 @@ export const COMPREHENSIVE_LEXICON: Record<string, Omit<LexicalWordProfile, 'wor
     definitionEn: 'Forward or onward movement toward a destination or goal',
     exampleSentenceEn: 'Tracking daily accomplishments highlights the steady progress you make each week.',
   },
+
+  // Core Common Vocabulary & Action Terms
+  this: {
+    partOfSpeech: 'other',
+    category: 'general',
+    translationPt: 'este / esta / isto',
+    definitionEn: 'Used to identify a specific person, object, or situation close at hand or currently being discussed',
+    exampleSentenceEn: 'We need to review this proposal carefully before submitting it to the executive board.',
+  },
+  that: {
+    partOfSpeech: 'other',
+    category: 'general',
+    translationPt: 'aquele / aquela / aquilo',
+    definitionEn: 'Used to refer to a specific person, thing, or event previously mentioned or further away',
+    exampleSentenceEn: 'I hope that meeting provides the answers we have been waiting for.',
+  },
+  is: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'é / está',
+    definitionEn: 'Third-person singular present of "be", expressing current existence, state, or fundamental identity',
+    exampleSentenceEn: 'Clear communication is the essential foundation for effective teamwork across departments.',
+  },
+  are: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'são / estão',
+    definitionEn: 'Present tense plural form of "be", expressing the state or condition of multiple people or things',
+    exampleSentenceEn: 'Consistent daily routines are powerful tools for building long-term fluency and confidence.',
+  },
+  just: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'acabar de / apenas / exatamente',
+    definitionEn: 'Used to indicate that an event happened only a moment ago, or to convey precision and simplicity',
+    exampleSentenceEn: 'She has just finalized the project schedule and shared it with the entire department.',
+  },
+  new: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'novo / recém-chegado / inovador',
+    definitionEn: 'Recently produced, introduced, discovered, or experienced for the first time in your routine',
+    exampleSentenceEn: 'Our team adopted a new software system that drastically reduces manual data entry.',
+  },
+  test: {
+    partOfSpeech: 'noun',
+    category: 'work',
+    translationPt: 'teste / avaliar / verificação',
+    definitionEn: 'A procedure or trial designed to evaluate the performance, reliability, or quality of a system or idea',
+    exampleSentenceEn: 'The engineers conducted a rigorous performance test before approving the product launch.',
+  },
+  plan: {
+    partOfSpeech: 'noun',
+    category: 'work',
+    translationPt: 'plano / planejar',
+    definitionEn: 'A detailed proposal for doing or achieving something through organized steps',
+    exampleSentenceEn: 'Creating a realistic weekly plan keeps your daily workload structured and manageable.',
+  },
+  goal: {
+    partOfSpeech: 'noun',
+    category: 'work',
+    translationPt: 'meta / objetivo',
+    definitionEn: 'An aim or desired result that a person or group envisions and commits to achieve',
+    exampleSentenceEn: 'Speaking English effortlessly with international colleagues is my primary professional goal.',
+  },
+  habit: {
+    partOfSpeech: 'noun',
+    category: 'general',
+    translationPt: 'hábito / prática diária',
+    definitionEn: 'A settled or regular tendency or practice, especially one that is hard to give up or routine',
+    exampleSentenceEn: 'Listening to an English podcast during breakfast has become an effortless daily habit.',
+  },
 };
+
+/**
+ * Clean any boilerplate or generic text from incoming definitions or sentences
+ */
+function isGenericText(text?: string): boolean {
+  if (!text || typeof text !== 'string') return true;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('core active vocabulary applied') ||
+    lower.includes('active vocabulary practiced during') ||
+    lower.includes('i practice using') ||
+    lower.includes('key vocabulary term practiced') ||
+    lower.includes('applied during your daily')
+  );
+}
 
 /**
  * Resolves or dynamically profiles any English word into a rich lexical profile.
@@ -382,13 +469,19 @@ export function profileWord(
   // 1. Exact match in comprehensive lexicon
   if (COMPREHENSIVE_LEXICON[lower]) {
     const lex = COMPREHENSIVE_LEXICON[lower];
+    const userDef = providedDetails?.definitionEn && !isGenericText(providedDetails.definitionEn)
+      ? providedDetails.definitionEn
+      : lex.definitionEn;
+    const userEx = providedDetails?.exampleSentence && !isGenericText(providedDetails.exampleSentence) && providedDetails.exampleSentence.toLowerCase().includes(lower)
+      ? providedDetails.exampleSentence
+      : lex.exampleSentenceEn;
     return {
       word: clean,
       partOfSpeech: lex.partOfSpeech,
       category: lex.category,
       translationPt: providedDetails?.translationPt || lex.translationPt,
-      definitionEn: providedDetails?.definitionEn || lex.definitionEn,
-      exampleSentenceEn: providedDetails?.exampleSentence || lex.exampleSentenceEn,
+      definitionEn: userDef,
+      exampleSentenceEn: userEx,
     };
   }
 
@@ -404,12 +497,39 @@ export function profileWord(
   if (/er$|or$|ee$|ist$|ian$/i.test(clean)) category = 'people';
   else if (/tion$|sion$|ment$|ness$|ship$/i.test(clean)) category = 'relation';
 
-  const defaultDef = providedDetails?.definitionEn || `Key vocabulary term practiced in daily routines and communication.`;
+  // Dynamic contextual definition based on grammar and form - ZERO boilerplate!
+  let defaultDef = '';
+  let defaultEx = '';
+
+  if (providedDetails?.definitionEn && !isGenericText(providedDetails.definitionEn)) {
+    defaultDef = providedDetails.definitionEn;
+  } else {
+    switch (partOfSpeech) {
+      case 'verb':
+        defaultDef = `Action term describing how to perform, manage, or execute "${clean}" in practical activities.`;
+        defaultEx = `Taking time to ${clean} effectively ensures optimal performance throughout the project.`;
+        break;
+      case 'adjective':
+        defaultDef = `Descriptive term characterizing a condition, quality, or standard described as "${clean}".`;
+        defaultEx = `The team established a ${clean} process to handle daily tasks smoothly.`;
+        break;
+      case 'adverb':
+        defaultDef = `Modifying term highlighting the manner, timing, or degree of performing an action "${clean}".`;
+        defaultEx = `Approaching the conversation ${clean} helped clarify expectations immediately.`;
+        break;
+      default:
+        defaultDef = `Key concept representing "${clean}" applied in professional responsibilities and daily routines.`;
+        defaultEx = `Understanding how to optimize "${clean}" directly enhances our daily productivity.`;
+    }
+  }
+
+  if (providedDetails?.exampleSentence && !isGenericText(providedDetails.exampleSentence) && providedDetails.exampleSentence.toLowerCase().includes(lower)) {
+    defaultEx = providedDetails.exampleSentence;
+  } else if (!defaultEx) {
+    defaultEx = `Applying "${clean}" with clear intention creates noticeable progress in daily conversations.`;
+  }
+
   const defaultTrans = providedDetails?.translationPt || clean;
-  const defaultEx =
-    providedDetails?.exampleSentence && providedDetails.exampleSentence.toLowerCase().includes(lower)
-      ? providedDetails.exampleSentence
-      : `I practice using "${clean}" naturally in my daily conversations.`;
 
   return {
     word: clean,
@@ -827,39 +947,47 @@ export function synthesizeFillInBlanks(
     const wordRegex = new RegExp(`\\b${w}\\b`, 'i');
     let sentenceWithBlank = '';
 
-    if (profile.exampleSentenceEn && wordRegex.test(profile.exampleSentenceEn)) {
+    if (profile.exampleSentenceEn && !isGenericText(profile.exampleSentenceEn) && wordRegex.test(profile.exampleSentenceEn)) {
       sentenceWithBlank = profile.exampleSentenceEn.replace(wordRegex, '______');
     } else {
       switch (profile.category) {
         case 'people':
-          sentenceWithBlank = `A dedicated ______ plays a vital role in our daily teamwork.`;
+          sentenceWithBlank = `A dedicated ______ plays an indispensable role in maintaining team morale and momentum.`;
           break;
         case 'relation':
-          sentenceWithBlank = `Fostering a healthy professional ______ with colleagues builds long-term trust.`;
+          sentenceWithBlank = `Fostering a healthy professional ______ with colleagues builds lasting trust across the company.`;
           break;
         case 'setting':
-          sentenceWithBlank = `Working in a positive ______ significantly increases motivation and focus.`;
+          sentenceWithBlank = `Working in an organized, supportive ______ significantly enhances daily productivity and focus.`;
           break;
         case 'time':
-          sentenceWithBlank = `______, many companies adopt flexible schedules to support employee well-being.`;
+          sentenceWithBlank = `Taking a brief pause during a busy ______ helps restore energy before the next meeting.`;
           break;
         case 'weather':
-          sentenceWithBlank = `We adjusted our plans because the ______ became quite unpredictable.`;
+          sentenceWithBlank = `We adjusted our schedule because the sudden change in the ______ made traveling impractical.`;
           break;
         case 'fitness':
-          sentenceWithBlank = `Completing a steady ______ in the morning gives me physical energy and focus.`;
+          sentenceWithBlank = `Completing a steady ______ early in the morning sets a positive, energized tone for the day.`;
           break;
         case 'work':
-          sentenceWithBlank = `Having clear responsibilities at my ______ makes daily collaboration seamless.`;
+          sentenceWithBlank = `Meeting every milestone required disciplined focus on this critical ______ from start to finish.`;
           break;
         case 'communication':
-          sentenceWithBlank = `We exchanged helpful ______ to ensure all project details were aligned.`;
+          sentenceWithBlank = `We had an insightful ______ to align on upcoming priorities before the client presentation.`;
           break;
         case 'emotion':
-          sentenceWithBlank = `Consistent daily practice builds genuine ______ when speaking in public.`;
+          sentenceWithBlank = `Consistent daily practice builds authentic ______ when communicating with international partners.`;
           break;
         default:
-          sentenceWithBlank = `Paying close attention to ______ helped us complete the assignment on time.`;
+          if (profile.partOfSpeech === 'verb') {
+            sentenceWithBlank = `Before finalizing the project deliverables, the team needs to ______ each detail carefully.`;
+          } else if (profile.partOfSpeech === 'adjective') {
+            sentenceWithBlank = `Our department adopted a ______ strategy that simplified the entire workflow.`;
+          } else if (profile.partOfSpeech === 'adverb') {
+            sentenceWithBlank = `She had ______ delivered the executive summary when the stakeholders entered the room.`;
+          } else {
+            sentenceWithBlank = `Paying close attention to ______ ensured that the team delivered high quality results on time.`;
+          }
       }
     }
 
@@ -868,10 +996,10 @@ export function synthesizeFillInBlanks(
       sentenceWithBlank,
       correctWord: w,
       options: options.sort(() => 0.5 - Math.random()),
-      hintPt: `Dica: Refere-se a "${profile.translationPt}".`,
-      hintEn: `Hint: Focus on the sentence context to identify "${w}".`,
-      explanationPt: `A palavra "${w}" (${profile.translationPt}) completa a frase de forma correta e natural.`,
-      explanationEn: `"${w}" is the only choice that logically and grammatically completes this thought.`,
+      hintPt: `Dica contextual: Encaixa com o sentido de "${profile.translationPt}".`,
+      hintEn: `Context clue: Choose the word meaning "${profile.definitionEn.slice(0, 70)}...".`,
+      explanationPt: `A palavra "${w}" (${profile.translationPt}) completa a frase com precisão semântica e gramatical.`,
+      explanationEn: `"${w}" is the only choice that logically and grammatically fits this specific context.`,
     };
   });
 }

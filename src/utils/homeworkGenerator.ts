@@ -327,13 +327,18 @@ export function generateWeeklyHomework(
       const trimmed = (cw?.word || '').trim();
       if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
         seenWords.add(trimmed.toLowerCase());
+        const prof = profileWord(trimmed, {
+          definitionEn: cw.definitionEn,
+          translationPt: cw.translationPt,
+          exampleSentence: cw.exampleSentence,
+        });
         rawWords.push({
           word: trimmed,
           sourceActivityName: cw.sourceActivityName || 'Live Session',
           sourceDay: cw.sourceDay || targetDay || 'monday',
-          definitionEn: cw.definitionEn || `Active vocabulary practiced during your native friend conversation.`,
-          translationPt: cw.translationPt || '',
-          exampleSentence: cw.exampleSentence || `I use "${trimmed}" naturally in my daily conversations.`,
+          definitionEn: prof.definitionEn,
+          translationPt: prof.translationPt,
+          exampleSentence: prof.exampleSentenceEn,
         });
       }
     });
@@ -352,26 +357,19 @@ export function generateWeeklyHomework(
             seenWords.add(trimmed.toLowerCase());
             const lower = trimmed.toLowerCase();
             const dictMatch = ROUTINE_VOCAB_DICT[lower];
-
-            const translationPt = dictMatch
-              ? dictMatch.translationPt
-              : '';
-
-            const definitionEn = dictMatch
-              ? dictMatch.definitionEn
-              : `Core active vocabulary applied during your daily ${getActivityDisplayName(item.activityName, 'en')} routine.`;
-
-            const exampleSentence = dictMatch
-              ? dictMatch.exampleSentence
-              : `I practice using "${trimmed}" naturally in my daily routine conversation.`;
+            const prof = profileWord(trimmed, dictMatch ? {
+              definitionEn: dictMatch.definitionEn,
+              translationPt: dictMatch.translationPt,
+              exampleSentence: dictMatch.exampleSentence,
+            } : undefined);
 
             rawWords.push({
               word: trimmed,
               sourceActivityName: item.activityName,
               sourceDay: d,
-              definitionEn,
-              translationPt,
-              exampleSentence,
+              definitionEn: prof.definitionEn,
+              translationPt: prof.translationPt,
+              exampleSentence: prof.exampleSentenceEn,
             });
           }
         }
@@ -441,29 +439,39 @@ export function generateWeeklyHomework(
 
   // 4. Build Sentence Writing Prompts (Part 3 - Construção de Frases Ativas): Calibrado por nível
   const sentenceWritingPrompts: SentenceWritingPrompt[] = rawWords.slice(0, 5).map((item) => {
+    const prof = profileWord(item.word);
+    let hintEn = '';
+    let hintPt = '';
+
     if (isAdv) {
+      hintEn = `Formulate an advanced sentence applying "${item.word}" to analyze a complex decision, project challenge, or strategic goal in your career.`;
+      hintPt = `Formule uma frase em nível avançado aplicando "${item.word}" (${prof.translationPt}) para analisar uma decisão complexa, desafio de projeto ou meta estratégica.`;
       return {
         word: item.word,
-        hint: `Craft an advanced English sentence with "${item.word}" demonstrating complex sentence structure in your professional or personal life.`,
-        hintEn: `Craft an advanced English sentence with "${item.word}" demonstrating complex sentence structure in your professional or personal life.`,
-        hintPt: `Crie uma frase em inglês avançado usando "${item.word}" (${item.translationPt}) com estrutura elaborada e vocabulário refinado.`,
-        levelInstruction: 'Use complex clauses, conditionals, or executive phrasing.',
+        hint: hintEn,
+        hintEn,
+        hintPt,
+        levelInstruction: 'Use complex clauses, conditionals (if/would), or executive phrasing.',
       };
     }
     if (isInter) {
+      hintEn = `Write a realistic compound sentence with "${item.word}" connecting two related actions or explaining a key reason in your daily routine or work.`;
+      hintPt = `Escreva uma frase intermediária autêntica com "${item.word}" (${prof.translationPt}) conectando duas ações ou explicando uma razão da sua rotina ou trabalho.`;
       return {
         word: item.word,
-        hint: `Write a compound sentence using "${item.word}" connecting two actions or reasons in your routine.`,
-        hintEn: `Write a compound sentence using "${item.word}" connecting two actions or reasons in your routine.`,
-        hintPt: `Escreva uma frase intermediária usando "${item.word}" (${item.translationPt}) conectando duas ações com conectivos como "because" ou "although".`,
-        levelInstruction: 'Connect two ideas using a transition word.',
+        hint: hintEn,
+        hintEn,
+        hintPt,
+        levelInstruction: 'Connect two ideas using a connector like "because", "although", "since", or "while".',
       };
     }
+    hintEn = `Write a clear, direct English sentence about your daily routine or home life applying "${item.word}".`;
+    hintPt = `Escreva uma frase simples e direta sobre sua rotina diária aplicando "${item.word}" (${prof.translationPt}).`;
     return {
       word: item.word,
-      hint: `Write a simple, clear English sentence using "${item.word}" in your daily routine.`,
-      hintEn: `Write a simple, clear English sentence using "${item.word}" in your daily routine.`,
-      hintPt: `Escreva uma frase simples e direta em inglês usando "${item.word}" (${item.translationPt}) sobre a sua rotina.`,
+      hint: hintEn,
+      hintEn,
+      hintPt,
       levelInstruction: 'Use a clear Subject + Verb + Object structure.',
     };
   });
@@ -604,7 +612,10 @@ export async function generateWeeklyHomeworkWithAi(params: {
           assignedPartKey: localBaseline.assignedPartKey,
           studentLevel: data.homework.studentLevel || localBaseline.studentLevel,
           totalWordsCollected: localBaseline.totalWordsCollected,
-          vocabularyList: localBaseline.vocabularyList,
+          vocabularyList:
+            Array.isArray(data.homework.vocabularyList) && data.homework.vocabularyList.length > 0
+              ? data.homework.vocabularyList
+              : localBaseline.vocabularyList,
           isAiGenerated: true,
         };
       }

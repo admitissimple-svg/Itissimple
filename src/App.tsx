@@ -31,7 +31,7 @@ import {
   DEFAULT_STUDENT_TIMEZONE,
   DEFAULT_TEACHER_TIMEZONE,
 } from './utils/timezone';
-import { getTodayDayOfWeek } from './utils/notifications';
+import { getTodayDayOfWeek, DAYS_OF_WEEK } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
 import { normalizeStudentLevel, fetchTracksForStudentLevel } from './utils/spotify';
 import { executeStartNewWeek } from './utils/StartNewWeekHandler';
@@ -482,9 +482,45 @@ export default function App() {
           }
         }
       }
-      return generated;
+      return {
+        ...generated,
+        isCompleted: prev?.isCompleted || generated.isCompleted,
+        isDayPartCompleted: prev?.isDayPartCompleted || generated.isDayPartCompleted,
+        completedPartsByDay: {
+          ...(prev?.completedPartsByDay || {}),
+          ...(generated.completedPartsByDay || {}),
+        },
+        studentAnswers: {
+          matching: { ...(prev?.studentAnswers?.matching || {}), ...(generated.studentAnswers?.matching || {}) },
+          fillInBlanks: { ...(prev?.studentAnswers?.fillInBlanks || {}), ...(generated.studentAnswers?.fillInBlanks || {}) },
+          sentences: { ...(prev?.studentAnswers?.sentences || {}), ...(generated.studentAnswers?.sentences || {}) },
+          quizAnswers: { ...(prev?.studentAnswers?.quizAnswers || {}), ...(generated.studentAnswers?.quizAnswers || {}) },
+        },
+      };
     });
   }, [routinesByDay, userProfile.name, userProfile.level, studentDictionaryEntries, homeworkTargetDay, userProfile?.weeklyStudyDays, userProfile?.weeklyCycle]);
+
+  // Synchronize completedPartsByDay from weeklyChecks so memorization S-Path checks are always in sync
+  useEffect(() => {
+    if (!weeklyChecks || Object.keys(weeklyChecks).length === 0) return;
+    setWeeklyHomework((prev) => {
+      if (!prev) return prev;
+      let hasChanges = false;
+      const currentParts = { ...(prev.completedPartsByDay || {}) };
+      DAYS_OF_WEEK.forEach((d) => {
+        if (weeklyChecks[`memorization_${d}`] && !currentParts[d]) {
+          currentParts[d] = true;
+          hasChanges = true;
+        }
+      });
+      if (!hasChanges) return prev;
+      return {
+        ...prev,
+        isDayPartCompleted: true,
+        completedPartsByDay: currentParts,
+      };
+    });
+  }, [weeklyChecks]);
 
   // AI-powered dynamic regeneration for Memorization Activity (focused on target day's vocabulary)
   const [isGeneratingHomeworkAi, setIsGeneratingHomeworkAi] = useState<boolean>(false);
@@ -514,7 +550,21 @@ export default function App() {
         })),
       });
       if (generated) {
-        setWeeklyHomework(generated);
+        setWeeklyHomework((prev) => ({
+          ...generated,
+          isCompleted: prev?.isCompleted || generated.isCompleted,
+          isDayPartCompleted: prev?.isDayPartCompleted || generated.isDayPartCompleted,
+          completedPartsByDay: {
+            ...(prev?.completedPartsByDay || {}),
+            ...(generated.completedPartsByDay || {}),
+          },
+          studentAnswers: {
+            matching: { ...(prev?.studentAnswers?.matching || {}), ...(generated.studentAnswers?.matching || {}) },
+            fillInBlanks: { ...(prev?.studentAnswers?.fillInBlanks || {}), ...(generated.studentAnswers?.fillInBlanks || {}) },
+            sentences: { ...(prev?.studentAnswers?.sentences || {}), ...(generated.studentAnswers?.sentences || {}) },
+            quizAnswers: { ...(prev?.studentAnswers?.quizAnswers || {}), ...(generated.studentAnswers?.quizAnswers || {}) },
+          },
+        }));
         if (generated.isAiGenerated) {
           setNotifications((prev) => [
             {
@@ -695,6 +745,39 @@ export default function App() {
             .catch((err) => {
               console.warn('Notice loading weekly checks from Firestore:', err);
             });
+
+          fetch(`/api/routines/weekly-checks?studentEmail=${encodeURIComponent(email)}`)
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+              if (data && data.checks) {
+                setWeeklyChecks((prev) => ({ ...data.checks, ...prev }));
+              }
+            })
+            .catch(() => {});
+
+          fetch('/api/homework')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((savedHw) => {
+              if (savedHw && savedHw.completedPartsByDay) {
+                setWeeklyHomework((prev) => {
+                  if (!prev) return prev;
+                  return {
+                    ...prev,
+                    completedPartsByDay: {
+                      ...(prev.completedPartsByDay || {}),
+                      ...savedHw.completedPartsByDay,
+                    },
+                    studentAnswers: {
+                      matching: { ...(prev.studentAnswers?.matching || {}), ...(savedHw.studentAnswers?.matching || {}) },
+                      fillInBlanks: { ...(prev.studentAnswers?.fillInBlanks || {}), ...(savedHw.studentAnswers?.fillInBlanks || {}) },
+                      sentences: { ...(prev.studentAnswers?.sentences || {}), ...(savedHw.studentAnswers?.sentences || {}) },
+                      quizAnswers: { ...(prev.studentAnswers?.quizAnswers || {}), ...(savedHw.studentAnswers?.quizAnswers || {}) },
+                    },
+                  };
+                });
+              }
+            })
+            .catch(() => {});
         } catch (err) {
           console.warn('Could not fetch student data:', err);
         }
@@ -1661,6 +1744,26 @@ export default function App() {
         if (prev[checkKey] === isCompleted) return prev;
         return { ...prev, [checkKey]: isCompleted };
       });
+
+      if (stepId === 'memorization') {
+        setWeeklyHomework((prev) => {
+          if (!prev) return prev;
+          const currentParts = prev.completedPartsByDay || {};
+          if (currentParts[dayKey] === isCompleted) return prev;
+          const updatedParts = { ...currentParts, [dayKey]: isCompleted };
+          const updatedHw = {
+            ...prev,
+            isDayPartCompleted: isCompleted,
+            completedPartsByDay: updatedParts,
+          };
+          fetch('/api/homework', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weeklyHomework: updatedHw }),
+          }).catch(() => {});
+          return updatedHw;
+        });
+      }
 
       if (uid) {
         const targetType = mapStepIdToJournalType(stepId);
@@ -4280,7 +4383,16 @@ export default function App() {
       selectedDay={homeworkTargetDay}
       activeStudyDays={userProfile?.weeklyStudyDays}
       weeklyCycle={userProfile?.weeklyCycle || 1}
-      onSaveProgress={(updated) => setWeeklyHomework(updated)}
+      weeklyChecks={weeklyChecks}
+      onChangeDay={(day) => setHomeworkTargetDay(day)}
+      onSaveProgress={(updated) => {
+        setWeeklyHomework(updated);
+        fetch('/api/homework', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weeklyHomework: updated }),
+        }).catch(() => {});
+      }}
       onRegenerateWithAi={handleRegenerateHomeworkWithAi}
       isGeneratingAi={isGeneratingHomeworkAi}
       onCompleteTodayPart={(partKey, day) => {
@@ -4288,6 +4400,11 @@ export default function App() {
       }}
       onSubmitToTeacher={(updated) => {
         setWeeklyHomework(updated);
+        fetch('/api/homework', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weeklyHomework: updated }),
+        }).catch(() => {});
         setNotifications((prev) => [
           {
             id: `hw-${Date.now()}`,
