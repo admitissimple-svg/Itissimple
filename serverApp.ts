@@ -1,0 +1,8500 @@
+import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import dotenv from 'dotenv';
+dotenv.config();
+import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import {
+  fetchAppStateFromFirestore,
+  saveAppStateToFirestore,
+  saveUserToFirestore,
+  fetchUserFromFirestore,
+  checkUserExistsInFirestore,
+  getFirestoreDb,
+  saveStudentAssignmentsByUid,
+  fetchStudentAssignmentsByUid,
+  saveTeacherAvailabilityToFirestore,
+  fetchTeacherAvailabilityFromFirestore,
+  saveRoutineVideoSubcollection,
+  resetRepeatFlagsSubcollection,
+  addWatchedVideoToUserDoc,
+} from './src/serverFirestore';
+import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
+import { defaultRoutinesByDay } from './src/data/defaultRoutines';
+import {
+  parseSpotifyUrl,
+  isValidSpotifyUrl,
+  CORRUPT_SPOTIFY_IDS,
+  extractSpotifyTrackId,
+  getWeeklySpotifyTracksForLevel,
+  getDailySpotifyTrackForStudent,
+  DAYS_SEQUENCE,
+  SPOTIFY_LEVEL_PLAYLISTS,
+  SPOTIFY_BEARER_TOKEN,
+} from './src/utils/spotify';
+import {
+  extractYouTubeVideoId,
+  getYouTubeEmbedUrl,
+  getYouTubeWatchUrl,
+  YOUTUBE_LEVEL_PLAYLISTS,
+  getYouTubePlaylistForLevel,
+  getWeeklyYouTubeVideosForLevel,
+  getDailyYouTubeVideoForStudent,
+} from './src/utils/youtube';
+import { DayOfWeek } from './src/types';
+import {
+  synthesizeCohesiveStoryAndQuestions,
+  synthesizeFillInBlanks,
+  profileWord,
+} from './src/utils/pedagogicalStorySynthesizer';
+
+const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
+const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
+const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3-flash-preview' : rawEnvModel;
+const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
+
+const app = express();
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+// Universal CORS & embedding middleware for published app previews, Cloud Run, and cross-account requests
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
+
+  // Prevent frame blocking when published or embedded in preview containers
+  res.removeHeader('X-Frame-Options');
+
+  // Support Firebase Auth Popup & Cross-Account window communication
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+
+  // Allow iframe embedding across Google AI Studio, Cloud Run, and published previews
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com https://*.googleusercontent.com *;");
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
+app.use(express.json());
+
+
+// In-memory / persistent mock database file
+const DB_FILE = path.join(process.cwd(), 'app-data.json');
+
+interface AppDb {
+  teachers: Array<{ email: string; name: string; role: string; registeredByAdmin?: boolean; avatar?: string; picture?: string; approvalStatus?: string; country?: string; accent?: string; timezone?: string; availableDays?: any; videoIntroUrl?: string; [key: string]: any }>;
+  tutorsList: Array<any>;
+  deletedTutorIds?: string[];
+  deletedTutorEmails?: string[];
+  deletedStudentEmails?: string[];
+  students: Array<any>;
+  meetSettings: Record<string, any>;
+  teacherSettings: Record<string, any>;
+  liveLessons: any[];
+  chatMessages: any[];
+  routinesByDay: Record<string, any>;
+  studentRoutinesMap: Record<string, any>;
+  contractedLessons: Record<string, number>;
+  userProfiles: Record<string, any>;
+  emailLogs: any[];
+  weeklyHomework: any;
+  landingContent: any;
+  dictionary: Record<string, any>;
+  studentWeeklyChecks: Record<string, Record<string, boolean>>;
+  weeklyNativeTargets?: Record<string, number>;
+  weeklyStudyDaysTargets?: Record<string, number>;
+  weeklyStudyDays?: Record<string, string[]>;
+  studentDictionaryMap?: Record<string, any[]>;
+  studentJournalMap?: Record<string, any[]>;
+  studentActivityJournal?: Record<string, any[]>;
+  authUsers: Record<string, { uid?: string; email: string; password?: string; name: string; role: string; createdAt?: string; updatedAt?: string }>;
+  transactions?: any[];
+  youtubePlaylists?: any[];
+  studentVideoAssignments?: Record<string, any[]>;
+  studentWatchedVideos?: Record<string, string[]>;
+  studentSpotifyAssignments?: Record<string, any[]>;
+  studentListenedTracks?: Record<string, string[]>;
+  studentAwaitingTopicSelection?: Record<string, boolean>;
+  spotifyPlaylists?: Record<string, any>;
+}
+
+const DEFAULT_LANDING_CONTENT = {
+  heroBadge: 'Uma Nova Filosofia de Inglês',
+  heroHeadlineStart: 'Learn English by',
+  heroHeadlineHighlight: 'Living your Life',
+  heroQuote: '“Você não precisa estudar mais. Você pode viver em inglês.”',
+  heroSubtext: 'Transforme sua rotina diária em prática real. Do café da manhã ao trabalho e descanso noturno. Sua vida. Seu inglês. Do seu jeito.',
+  heroFindFriendBtn: 'Encontre Seu Amigo Nativo',
+  heroStartLivingBtn: 'Comece a Viver em Inglês',
+  philosophyBadge: 'A Ciência do Hábito',
+  philosophyHeading1: 'Não mude sua rotina.',
+  philosophyHeading2: 'Viva-a em Inglês.',
+  philosophySubheading: 'Aprender inglês não precisa ser uma tarefa pesada de 2 horas em uma sala de aula após um longo dia de trabalho. Conectamos seu aprendizado com o que você já faz todos os dias.',
+  philosophyPillar1Title: 'Prática Integrada à Sua Vida',
+  philosophyPillar1Desc: 'Cada momento do seu dia se torna uma oportunidade de aprendizado natural — sem sobrecarregar sua agenda.',
+  philosophyPillar1Tag: 'Zero Sobrecarga',
+  philosophyPillar2Title: '5 Palavras Chave por Atividade',
+  philosophyPillar2Desc: 'Foque apenas nas palavras e expressões essenciais para cada momento. Qualidade e contexto superam quantidade.',
+  philosophyPillar2Tag: 'Aprendizado Focado',
+  philosophyPillar3Title: 'Amigos Nativos & IA',
+  philosophyPillar3Desc: 'Sessões individuais ao vivo no Google Meet combinadas com correções instantâneas de IA no seu diário.',
+  philosophyPillar3Tag: 'Imersão Humana + IA',
+  footerSlogan: 'Learn English by living your life!',
+};
+
+// Clean initial state: zero mock tutors, zero fake test accounts
+const DEFAULT_TUTORS_LIST: any[] = [];
+
+const DEFAULT_DB: AppDb = {
+  teachers: [
+    {
+      email: 'adm.itissimple@gmail.com',
+      name: "Admin It's Simple",
+      role: 'admin',
+      registeredByAdmin: true,
+    },
+  ],
+  tutorsList: [],
+  deletedTutorIds: [],
+  deletedTutorEmails: [],
+  deletedStudentEmails: [],
+  students: [],
+  meetSettings: {},
+  teacherSettings: {},
+  liveLessons: [],
+  chatMessages: [],
+  routinesByDay: defaultRoutinesByDay,
+  studentRoutinesMap: {},
+  contractedLessons: {},
+  userProfiles: {
+    'adm.itissimple@gmail.com': {
+      uid: 'admin-master-uid',
+      email: 'adm.itissimple@gmail.com',
+      name: "Admin It's Simple",
+      role: 'admin',
+    },
+  },
+  emailLogs: [],
+  weeklyHomework: null,
+  landingContent: DEFAULT_LANDING_CONTENT,
+  dictionary: {},
+  studentWeeklyChecks: {},
+  studentDictionaryMap: {},
+  studentSpotifyAssignments: {},
+  studentListenedTracks: {},
+  authUsers: {
+    'adm.itissimple@gmail.com': {
+      uid: 'admin-master-uid',
+      email: 'adm.itissimple@gmail.com',
+      name: "Admin It's Simple",
+      role: 'admin',
+      password: 'Makeiteasy2026*',
+    },
+  },
+};
+
+// Cached memory state backed by both app-data.json and Firebase Firestore cloud
+let inMemoryDb: AppDb = DEFAULT_DB;
+
+/**
+ * Returns the default standard Spotify track for a given day and level from the official curriculum
+ */
+function getDefaultDailySpotify(dayKey: string, level: string = 'beginner') {
+  const norm = normalizeStudentLevel(level).key;
+  const normalizedDay = (dayKey || 'monday').toLowerCase().trim();
+  const targetDay = (DAYS_SEQUENCE.includes(normalizedDay as any) ? normalizedDay : 'monday') as any;
+  const track = SPOTIFY_LEVEL_PLAYLISTS[norm]?.tracks[targetDay] || SPOTIFY_LEVEL_PLAYLISTS.beginner.tracks[targetDay];
+  return {
+    id: `sp-${targetDay}-1`,
+    url: track.url,
+    title: track.title,
+    artistOrHost: track.artist,
+    type: 'music',
+    duration: (track as any)?.duration || '3-4 min',
+    instructions: track.teacherTipPt,
+    addedAt: '2025-01-15T08:00:00Z',
+  };
+}
+
+function sanitizeSpotifyRecord(obj: any, dayHint?: string): any {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => sanitizeSpotifyRecord(item, dayHint));
+  }
+  const clean = { ...obj };
+  const effectiveDay = (clean.day || clean.dayOfWeek || dayHint || 'monday').toLowerCase();
+
+  if (clean.teacherSpotify && typeof clean.teacherSpotify === 'object') {
+    const spot = clean.teacherSpotify;
+    if (spot.url) {
+      const parsed = parseSpotifyUrl(spot.url);
+      const isCorrupt = !parsed.isValid || CORRUPT_SPOTIFY_IDS.some((bad) => spot.url.includes(bad));
+      // Anti-repetition check: If not Monday and track is "Count on Me", heal it to this day's designated track
+      const isDuplicatedMondayTrack =
+        effectiveDay !== 'monday' &&
+        (spot.url.includes('3B5UbSndRz907IZhhmUfLi') || spot.title === 'Count on Me');
+
+      if (isCorrupt || isDuplicatedMondayTrack) {
+        const fallback = getDefaultDailySpotify(effectiveDay);
+        clean.teacherSpotify = {
+          ...spot,
+          url: fallback.url,
+          title: fallback.title,
+          artistOrHost: fallback.artistOrHost,
+          type: fallback.type,
+          instructions: fallback.instructions,
+        };
+      } else if (parsed.canonicalUrl) {
+        clean.teacherSpotify.url = parsed.canonicalUrl;
+      }
+    }
+  }
+
+  if (clean.url && (clean.day || clean.activityId) && typeof clean.url === 'string') {
+    const parsed = parseSpotifyUrl(clean.url);
+    const isCorrupt = !parsed.isValid || CORRUPT_SPOTIFY_IDS.some((bad) => clean.url.includes(bad));
+    const isDuplicatedMondayTrack =
+      effectiveDay !== 'monday' &&
+      (clean.url.includes('3B5UbSndRz907IZhhmUfLi') || clean.title === 'Count on Me');
+
+    if (isCorrupt || isDuplicatedMondayTrack) {
+      const fallback = getDefaultDailySpotify(effectiveDay);
+      clean.url = fallback.url;
+      clean.title = fallback.title;
+      clean.artistOrHost = fallback.artistOrHost;
+      clean.type = fallback.type;
+    } else if (parsed.canonicalUrl) {
+      clean.url = parsed.canonicalUrl;
+    }
+  }
+  return clean;
+}
+
+function mergeDbWithDefaults(parsed: any): AppDb {
+  const merged: AppDb = {
+    ...DEFAULT_DB,
+    ...(parsed || {}),
+    routinesByDay:
+      parsed && parsed.routinesByDay && Object.keys(parsed.routinesByDay).length > 0
+        ? parsed.routinesByDay
+        : defaultRoutinesByDay,
+    studentWeeklyChecks: (parsed && parsed.studentWeeklyChecks) || {},
+    studentDictionaryMap: (parsed && parsed.studentDictionaryMap) || {},
+    studentListenedTracks: (parsed && parsed.studentListenedTracks) || {},
+    authUsers: (parsed && parsed.authUsers) || DEFAULT_DB.authUsers,
+    teacherSettings: (parsed && parsed.teacherSettings) || {},
+    meetSettings: (parsed && parsed.meetSettings) || {},
+    landingContent: {
+      ...DEFAULT_LANDING_CONTENT,
+      ...((parsed && parsed.landingContent) || {}),
+    },
+    deletedTutorIds: Array.isArray(parsed?.deletedTutorIds) ? parsed.deletedTutorIds : [],
+    deletedTutorEmails: Array.isArray(parsed?.deletedTutorEmails) ? parsed.deletedTutorEmails : [],
+    deletedStudentEmails: Array.isArray(parsed?.deletedStudentEmails) ? parsed.deletedStudentEmails : [],
+    tutorsList: Array.isArray(parsed?.tutorsList) ? parsed.tutorsList : [],
+    teachers: (Array.isArray(parsed?.teachers) ? parsed.teachers : DEFAULT_DB.teachers).filter(
+      (t: any) => t.email?.toLowerCase() !== 'reginahelena1980@gmail.com' && !t.name?.toLowerCase().includes('regina')
+    ),
+    students: (Array.isArray(parsed?.students) ? parsed.students : []).filter((s: any) => {
+      const email = (s.email || s.studentEmail || '').toLowerCase().trim();
+      const deletedStudentList: string[] = Array.isArray(parsed?.deletedStudentEmails) ? parsed.deletedStudentEmails : [];
+      return !email || !deletedStudentList.includes(email);
+    }),
+    liveLessons: (Array.isArray(parsed?.liveLessons) ? parsed.liveLessons : []).map((l: any) => {
+      if (l && (l.cancelledAt || l.cancelledBy || l.cancellationReason) && l.status !== 'cancelled') {
+        l.status = 'cancelled';
+      }
+      if (!l.studentEmail || l.studentEmail.trim() === '') {
+        if (l.studentUid) {
+          const allProfiles = Object.values(parsed?.userProfiles || {});
+          const foundProfile = (allProfiles as any[]).find((p: any) => p.id === l.studentUid || p.uid === l.studentUid);
+          const foundStudent = (Array.isArray(parsed?.students) ? parsed.students : []).find((s: any) => s.studentUid === l.studentUid || s.id === l.studentUid);
+          if (foundProfile?.email) {
+            l.studentEmail = foundProfile.email.toLowerCase().trim();
+          } else if (foundStudent?.email || foundStudent?.studentEmail) {
+            l.studentEmail = (foundStudent.email || foundStudent.studentEmail).toLowerCase().trim();
+          }
+        }
+      }
+      return l;
+    }),
+    contractedLessons: (parsed && parsed.contractedLessons) || {},
+    userProfiles: (parsed && parsed.userProfiles) || DEFAULT_DB.userProfiles,
+  };
+
+  // Sanitize routinesByDay for corrupted Spotify entries and daily sequential uniqueness
+  if (merged.routinesByDay) {
+    Object.keys(merged.routinesByDay).forEach((d) => {
+      if (Array.isArray(merged.routinesByDay[d])) {
+        merged.routinesByDay[d] = merged.routinesByDay[d].map((item: any) => sanitizeSpotifyRecord(item, d));
+      }
+    });
+  }
+
+  // Sanitize studentRoutinesMap for corrupted Spotify entries and daily sequential uniqueness
+  if (merged.studentRoutinesMap) {
+    Object.keys(merged.studentRoutinesMap).forEach((stKey) => {
+      const studentRoutine = merged.studentRoutinesMap[stKey];
+      if (studentRoutine && typeof studentRoutine === 'object') {
+        Object.keys(studentRoutine).forEach((d) => {
+          if (Array.isArray(studentRoutine[d])) {
+            studentRoutine[d] = studentRoutine[d].map((item: any) => sanitizeSpotifyRecord(item, d));
+          }
+        });
+      }
+    });
+  }
+
+  // Sanitize studentSpotifyAssignments for corrupted Spotify entries and daily sequential uniqueness
+  if (merged.studentSpotifyAssignments) {
+    Object.keys(merged.studentSpotifyAssignments).forEach((stKey) => {
+      if (Array.isArray(merged.studentSpotifyAssignments![stKey])) {
+        merged.studentSpotifyAssignments![stKey] = merged.studentSpotifyAssignments![stKey].map((item: any) =>
+          sanitizeSpotifyRecord(item, item.day)
+        );
+      }
+    });
+  }
+
+  return merged;
+}
+
+function readDb(): AppDb {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const data = fs.readFileSync(DB_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      inMemoryDb = mergeDbWithDefaults(parsed);
+      return inMemoryDb;
+    }
+  } catch (err) {
+    console.warn('Error reading local db file:', err);
+  }
+  return inMemoryDb;
+}
+
+let syncTimeout: any = null;
+
+function writeDb(db: AppDb) {
+  inMemoryDb = db;
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Error writing db file:', err);
+  }
+
+  // Cloud Firestore asynchronous sync
+  if (syncTimeout) clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(() => {
+    saveAppStateToFirestore(db).catch((err) => {
+      console.warn('Background Firestore sync error:', err);
+    });
+  }, 300);
+}
+
+// Immediate synchronous disk write + background Cloud Firestore sync
+async function writeDbSync(db: AppDb): Promise<void> {
+  inMemoryDb = db;
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Error writing db file:', err);
+  }
+  // Run Firestore sync in background without blocking the HTTP response
+  saveAppStateToFirestore(db).catch((err) => {
+    console.warn('Background Firestore sync error:', err);
+  });
+}
+
+// Initial hydration from Firestore on server startup
+async function initCloudPersistence() {
+  try {
+    // 1. Read local file first
+    readDb();
+
+    // 2. Fetch latest state from Cloud Firestore
+    const cloudState = await fetchAppStateFromFirestore();
+    if (cloudState && typeof cloudState === 'object') {
+      console.log('Successfully hydrated database from Firebase Firestore cloud');
+      const mergedAuthUsers = {
+        ...(inMemoryDb.authUsers || {}),
+        ...(cloudState.authUsers || {}),
+      };
+      const mergedUserProfiles = {
+        ...(inMemoryDb.userProfiles || {}),
+        ...(cloudState.userProfiles || {}),
+      };
+
+      // Merge tutorsList by email/id so NO tutor is ever lost
+      const localTutors = inMemoryDb.tutorsList || [];
+      const cloudTutors = Array.isArray(cloudState.tutorsList) ? cloudState.tutorsList : [];
+      const tutorMap = new Map<string, any>();
+      cloudTutors.forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) tutorMap.set(key, t);
+      });
+      localTutors.forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) {
+          const existing = tutorMap.get(key) || {};
+          tutorMap.set(key, { ...existing, ...t });
+        }
+      });
+      const mergedTutorsList = Array.from(tutorMap.values());
+
+      // Merge teachers list by email
+      const localTeachers = inMemoryDb.teachers || [];
+      const cloudTeachers = Array.isArray(cloudState.teachers) ? cloudState.teachers : [];
+      const teacherMap = new Map<string, any>();
+      cloudTeachers.forEach((t: any) => {
+        const key = (t.email || '').toLowerCase().trim();
+        if (key) teacherMap.set(key, t);
+      });
+      localTeachers.forEach((t: any) => {
+        const key = (t.email || '').toLowerCase().trim();
+        if (key) {
+          const existing = teacherMap.get(key) || {};
+          teacherMap.set(key, { ...existing, ...t });
+        }
+      });
+      const mergedTeachers = Array.from(teacherMap.values());
+
+      // Merge students list by email, excluding deleted students
+      const localDeletedStudents: string[] = inMemoryDb.deletedStudentEmails || [];
+      const cloudDeletedStudents: string[] = Array.isArray(cloudState.deletedStudentEmails) ? cloudState.deletedStudentEmails : [];
+      const allDeletedStudentEmails = Array.from(new Set([...localDeletedStudents, ...cloudDeletedStudents]));
+      inMemoryDb.deletedStudentEmails = allDeletedStudentEmails;
+
+      allDeletedStudentEmails.forEach((em) => {
+        delete mergedUserProfiles[em];
+      });
+
+      const localStudents = inMemoryDb.students || [];
+      const cloudStudents = Array.isArray(cloudState.students) ? cloudState.students : [];
+      const studentMap = new Map<string, any>();
+      cloudStudents.forEach((s: any) => {
+        const key = (s.studentEmail || s.email || '').toLowerCase().trim();
+        if (key && !allDeletedStudentEmails.includes(key)) studentMap.set(key, s);
+      });
+      localStudents.forEach((s: any) => {
+        const key = (s.studentEmail || s.email || '').toLowerCase().trim();
+        if (key && !allDeletedStudentEmails.includes(key)) {
+          const existing = studentMap.get(key) || {};
+          studentMap.set(key, { ...existing, ...s });
+        }
+      });
+      const mergedStudents = Array.from(studentMap.values());
+
+      // Merge liveLessons by id
+      const localLessons = inMemoryDb.liveLessons || [];
+      const cloudLessons = Array.isArray(cloudState.liveLessons) ? cloudState.liveLessons : [];
+      const lessonMap = new Map<string, any>();
+      cloudLessons.forEach((l: any) => {
+        if (l.id) lessonMap.set(l.id, l);
+      });
+      localLessons.forEach((l: any) => {
+        if (l.id) {
+          const existing = lessonMap.get(l.id) || {};
+          const merged = { ...existing, ...l };
+          if (existing.cancelledAt || l.cancelledAt || existing.status === 'cancelled' || l.status === 'cancelled') {
+            merged.status = 'cancelled';
+            merged.cancelledAt = l.cancelledAt || existing.cancelledAt || new Date().toISOString();
+            merged.cancelledBy = l.cancelledBy || existing.cancelledBy || 'student';
+          }
+          lessonMap.set(l.id, merged);
+        }
+      });
+      const mergedLiveLessons = Array.from(lessonMap.values()).map((l: any) => {
+        if (l && (l.cancelledAt || l.cancelledBy || l.cancellationReason) && l.status !== 'cancelled') {
+          l.status = 'cancelled';
+        }
+        if (!l.studentEmail || l.studentEmail.trim() === '') {
+          if (l.studentUid) {
+            const allProfiles = Object.values(inMemoryDb?.userProfiles || cloudState?.userProfiles || {});
+            const foundProfile = (allProfiles as any[]).find((p: any) => p.id === l.studentUid || p.uid === l.studentUid);
+            const foundStudent = (Array.isArray(inMemoryDb?.students) ? inMemoryDb.students : []).find((s: any) => s.studentUid === l.studentUid || s.id === l.studentUid);
+            if (foundProfile?.email) {
+              l.studentEmail = foundProfile.email.toLowerCase().trim();
+            } else if (foundStudent?.email || foundStudent?.studentEmail) {
+              l.studentEmail = (foundStudent.email || foundStudent.studentEmail).toLowerCase().trim();
+            }
+          }
+        }
+        return l;
+      });
+
+      // Merge student media assignments, routines and progress maps across reboots
+      const mergedVideoAssignments = {
+        ...(inMemoryDb.studentVideoAssignments || {}),
+        ...(cloudState.studentVideoAssignments || {}),
+      };
+      const mergedSpotifyAssignments = {
+        ...(inMemoryDb.studentSpotifyAssignments || {}),
+        ...(cloudState.studentSpotifyAssignments || {}),
+      };
+      const mergedStudentRoutines = {
+        ...(inMemoryDb.studentRoutinesMap || {}),
+        ...(cloudState.studentRoutinesMap || {}),
+      };
+      const mergedWatchedVideos = {
+        ...(inMemoryDb.studentWatchedVideos || {}),
+        ...(cloudState.studentWatchedVideos || {}),
+      };
+      const mergedListenedTracks = {
+        ...(inMemoryDb.studentListenedTracks || {}),
+        ...(cloudState.studentListenedTracks || {}),
+      };
+
+      inMemoryDb = mergeDbWithDefaults({
+        ...inMemoryDb,
+        ...cloudState,
+        authUsers: mergedAuthUsers,
+        userProfiles: mergedUserProfiles,
+        tutorsList: mergedTutorsList,
+        teachers: mergedTeachers,
+        students: mergedStudents,
+        liveLessons: mergedLiveLessons,
+        studentVideoAssignments: mergedVideoAssignments,
+        studentSpotifyAssignments: mergedSpotifyAssignments,
+        studentRoutinesMap: mergedStudentRoutines,
+        studentWatchedVideos: mergedWatchedVideos,
+        studentListenedTracks: mergedListenedTracks,
+      });
+      fs.writeFileSync(DB_FILE, JSON.stringify(inMemoryDb, null, 2), 'utf-8');
+      await saveAppStateToFirestore(inMemoryDb);
+    } else {
+      console.log('No existing Firestore state found, bootstrapping initial state to cloud');
+      await saveAppStateToFirestore(inMemoryDb);
+    }
+  } catch (err) {
+    console.warn('Cloud persistence init notice:', err);
+  }
+}
+
+// 1. Health Endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// 1.1 Auth Endpoints (Preply-style Login & Registration)
+app.get('/api/auth/admin-status', (req, res) => {
+  const db = readDb();
+  // Check if admin is registered with credentials
+  const adminWithPassword = Object.values(db.authUsers || {}).find(
+    (u: any) => u.role === 'admin' && u.password
+  );
+  const adminAccount = adminWithPassword || db.teachers?.find((t) => t.role === 'admin');
+
+  res.json({
+    hasAdminRegistered: !!adminWithPassword,
+    adminEmail: adminAccount ? adminAccount.email : null,
+    adminName: adminAccount ? adminAccount.name : null,
+  });
+});
+
+app.get('/api/auth/admin-status', (req, res) => {
+  const db = readDb();
+  const existingAdminWithPassword = Object.values(db.authUsers || {}).find(
+    (u: any) => u.role === 'admin' && u.password
+  );
+  res.json({
+    hasAdmin: !!existingAdminWithPassword,
+    adminEmail: existingAdminWithPassword ? (existingAdminWithPassword as any).email : 'adm.itissimple@gmail.com',
+  });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const db = readDb();
+  const { email, password, role: requestedRole, localBackup, uid } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Email or username is required' });
+  }
+
+  const cleanEmail = email.toLowerCase().trim();
+  let authRecord = db.authUsers?.[cleanEmail];
+
+  // Also check case-insensitive match in authUsers
+  if (!authRecord && db.authUsers) {
+    const matchedKey = Object.keys(db.authUsers).find(
+      (k) => k.toLowerCase().trim() === cleanEmail
+    );
+    if (matchedKey) {
+      authRecord = db.authUsers[matchedKey];
+    }
+  }
+
+  // If user is not yet in authUsers, check if user exists in Firestore
+  let firestoreDoc: any = null;
+  if (!authRecord) {
+    try {
+      firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid);
+      if (firestoreDoc) {
+        authRecord = {
+          uid: firestoreDoc.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          email: cleanEmail,
+          name: firestoreDoc.name || cleanEmail.split('@')[0],
+          password: firestoreDoc.password || password || '',
+          role: firestoreDoc.role || requestedRole || 'student',
+          createdAt: firestoreDoc.createdAt || new Date().toISOString(),
+        };
+        if (!db.authUsers) db.authUsers = {};
+        db.authUsers[cleanEmail] = authRecord;
+      }
+    } catch (fsErr) {
+      console.warn('Firestore hydration notice on login:', fsErr);
+    }
+  }
+
+  // If user is not yet in authUsers, check if client provided a local localStorage backup to restore
+  if (!authRecord && localBackup && localBackup.email && localBackup.email.toLowerCase().trim() === cleanEmail) {
+    console.log('Restoring account from client localStorage backup:', cleanEmail);
+    const restoredUid = localBackup.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+    authRecord = {
+      uid: restoredUid,
+      email: cleanEmail,
+      name: localBackup.name || cleanEmail.split('@')[0],
+      password: localBackup.password || password || '',
+      role: localBackup.role || requestedRole || 'student',
+      createdAt: localBackup.registeredAt || new Date().toISOString(),
+    };
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = authRecord;
+
+    if (authRecord.role === 'student') {
+      if (!db.students) db.students = [];
+      const hasStudent = db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+      if (!hasStudent) {
+        db.students.push({
+          id: restoredUid,
+          name: authRecord.name,
+          studentName: authRecord.name,
+          email: cleanEmail,
+          studentEmail: cleanEmail,
+          level: localBackup.profile?.level || 'iniciante',
+          studentLevel: localBackup.profile?.level || 'iniciante',
+          goal: localBackup.profile?.learningGoal || 'English for everyday life & work',
+          learningGoal: localBackup.profile?.learningGoal || 'English for everyday life & work',
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          status: 'active',
+          activeSince: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          avatar: localBackup.profile?.avatar || '',
+          picture: localBackup.profile?.picture || '',
+        });
+      }
+      if (!db.userProfiles) db.userProfiles = {};
+      if (!db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail] = {
+          id: restoredUid,
+          name: authRecord.name,
+          email: cleanEmail,
+          level: localBackup.profile?.level || 'iniciante',
+          enrollmentStatus: 'active',
+          learningGoal: localBackup.profile?.learningGoal || 'English for everyday life & work',
+          streakDays: 0,
+          streakCount: 0,
+          points: 0,
+          dailyGoalMinutes: 30,
+          completedTodayMinutes: 0,
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          picture: localBackup.profile?.picture || '',
+          avatar: localBackup.profile?.avatar || '',
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+    await writeDbSync(db);
+  }
+
+  // Strictly require existing registered account (no auto-creating unregistered accounts on login)
+  if (!authRecord && cleanEmail !== 'adm.itissimple@gmail.com') {
+    const isKnownTeacher = (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+    const isKnownStudent = (db.students || []).some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+    if (!isKnownTeacher && !isKnownStudent) {
+      return res.status(401).json({
+        error: 'Conta não encontrada. Por favor, crie seu cadastro antes de fazer login.',
+      });
+    }
+  }
+
+  // If user registered with password, enforce password check
+  if (authRecord && authRecord.password && password) {
+    // Special admin handling for adm.itissimple@gmail.com
+    if (cleanEmail === 'adm.itissimple@gmail.com') {
+      if (password === 'Makeiteasy2026*' || password === 'admin' || authRecord.password === password) {
+        if (authRecord.password !== password) {
+          authRecord.password = password;
+          writeDb(db);
+        }
+      } else {
+        return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
+      }
+    } else if (authRecord.password !== password) {
+      return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
+    }
+  } else if (!authRecord && cleanEmail === 'adm.itissimple@gmail.com' && password) {
+    if (password !== 'Makeiteasy2026*' && password !== 'admin') {
+      return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
+    }
+  }
+
+  let role = requestedRole || 'student';
+  let name = cleanEmail.split('@')[0];
+
+  // 1. Check if admin: strictly for adm.itissimple@gmail.com or an explicitly verified admin record when requested as admin
+  if (cleanEmail === 'adm.itissimple@gmail.com' || (authRecord?.role === 'admin' && requestedRole === 'admin')) {
+    role = 'admin';
+    name = authRecord?.name || 'Admin It\'s Simple';
+  } else if (
+    (requestedRole === 'teacher' || (!requestedRole && authRecord?.role === 'teacher')) &&
+    (authRecord?.role === 'teacher' ||
+      (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail) ||
+      (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin'))
+  ) {
+    // 2. Native Friend / Teacher: strictly enforce Teacher role so student data is never leaked or mixed
+    role = 'teacher';
+    const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+    const teacherObj = (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+    name = tutorObj?.name || teacherObj?.name || authRecord?.name || name;
+
+    // Purge any accidental student profile entry for this teacher
+    if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      delete db.userProfiles[cleanEmail];
+      writeDb(db);
+    }
+  } else if (firestoreDoc?.role === 'student' || requestedRole === 'student' || authRecord?.role === 'student') {
+    // 3. Student Access: guarantee role stays 'student' and never gets overridden to 'admin'
+    role = 'student';
+    name = firestoreDoc?.name || authRecord?.name || name;
+  } else if (authRecord) {
+    role = authRecord.role;
+    name = authRecord.name || name;
+  } else if (requestedRole) {
+    role = requestedRole === 'teacher' ? 'teacher' : (requestedRole === 'admin' ? 'admin' : 'student');
+    if (role === 'teacher') {
+      const teacherObj = db.teachers?.find((t) => t.email.toLowerCase() === cleanEmail);
+      if (teacherObj) name = teacherObj.name;
+    } else if (role === 'student') {
+      const studentObj = db.students?.find(
+        (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+      );
+      if (studentObj) name = studentObj.name || studentObj.studentName || name;
+    }
+  }
+
+  const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+
+  const account = {
+    uid: authRecord?.uid || (tutorObj as any)?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`),
+    email: cleanEmail,
+    name: name.charAt(0).toUpperCase() + name.slice(1),
+    role,
+    picture: '',
+  };
+
+  let studentProfile: any = null;
+  let studentObj: any = null;
+
+  if (role === 'student') {
+    studentObj = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    );
+
+    studentProfile = db.userProfiles?.[cleanEmail] || null;
+
+    // If profile is missing or lacks target settings, hydrate from Firestore
+    if (!studentProfile || studentProfile.weeklyStudyDaysTarget === undefined || !studentProfile.level) {
+      try {
+        const firestoreUser = await fetchUserFromFirestore(cleanEmail, account.uid);
+        const firestoreAssignments = await fetchStudentAssignmentsByUid(account.uid);
+        if (firestoreUser || firestoreAssignments) {
+          studentProfile = {
+            ...(studentProfile || {}),
+            ...(firestoreUser || {}),
+            ...(firestoreAssignments || {}),
+          };
+        }
+      } catch (err) {
+        console.warn('Could not hydrate student from Firestore:', err);
+      }
+    }
+
+    const defaultLevel = studentObj?.level || studentObj?.studentLevel || 'iniciante';
+    const targetDays =
+      studentProfile?.weeklyStudyDaysTarget ??
+      studentObj?.weeklyStudyDaysTarget ??
+      db.weeklyStudyDaysTargets?.[cleanEmail] ??
+      (account.uid ? db.weeklyStudyDaysTargets?.[account.uid] : undefined) ??
+      7;
+
+    const studyDays =
+      studentProfile?.weeklyStudyDays ??
+      studentObj?.weeklyStudyDays ??
+      db.weeklyStudyDays?.[cleanEmail] ??
+      (account.uid ? db.weeklyStudyDays?.[account.uid] : undefined) ??
+      ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+    if (!studentProfile) {
+      studentProfile = {
+        id: account.uid,
+        name: account.name,
+        email: cleanEmail,
+        level: defaultLevel,
+        userLevel: defaultLevel,
+        englishLevel: defaultLevel,
+        learningGoal: studentObj?.goal || studentObj?.learningGoal || 'English for everyday life & work',
+        routineVideoTime: studentObj?.routineVideoTime || '09:00',
+        routineAudioTime: studentObj?.routineAudioTime || '14:00',
+        dailyPhraseTime: studentObj?.dailyPhraseTime || '20:00',
+        weeklyStudyDaysTarget: targetDays,
+        weeklyStudyDays: studyDays,
+        selectedStudyDays: studyDays,
+        teacherEmail: studentObj?.teacherEmail || null,
+        teacherName: studentObj?.teacherName || null,
+        contractedLessons: studentObj?.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 1,
+        completedLessonsCount: studentObj?.completedLessonsCount ?? 0,
+        enrollmentStatus: studentObj?.status || 'active',
+        streakDays: 0,
+        streakCount: 0,
+        points: 0,
+        dailyGoalMinutes: 30,
+        completedTodayMinutes: 0,
+        createdAt: studentObj?.createdAt || new Date().toISOString(),
+      };
+    } else {
+      studentProfile = {
+        ...studentProfile,
+        id: studentProfile.id || account.uid,
+        name: studentProfile.name || account.name,
+        email: cleanEmail,
+        level: studentProfile.level || defaultLevel,
+        userLevel: studentProfile.userLevel || studentProfile.level || defaultLevel,
+        englishLevel: studentProfile.englishLevel || studentProfile.level || defaultLevel,
+        learningGoal: studentProfile.learningGoal || studentObj?.goal || studentObj?.learningGoal || 'English for everyday life & work',
+        weeklyStudyDaysTarget: targetDays,
+        weeklyStudyDays: studyDays,
+        selectedStudyDays: studyDays,
+        routineVideoTime: studentProfile.routineVideoTime || studentObj?.routineVideoTime || '09:00',
+        routineAudioTime: studentProfile.routineAudioTime || studentObj?.routineAudioTime || '14:00',
+        dailyPhraseTime: studentProfile.dailyPhraseTime || studentObj?.dailyPhraseTime || '20:00',
+        teacherEmail: studentProfile.teacherEmail ?? studentObj?.teacherEmail ?? null,
+        teacherName: studentProfile.teacherName ?? studentObj?.teacherName ?? null,
+        contractedLessons: studentProfile.contractedLessons ?? studentObj?.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 1,
+      };
+    }
+
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[cleanEmail] = studentProfile;
+
+    // Distribute Spotify and YouTube media if not yet assigned for this student
+    const normLevel = normalizeStudentLevel(studentProfile.level).key;
+    if (!db.studentSpotifyAssignments?.[cleanEmail] || !db.studentVideoAssignments?.[cleanEmail]) {
+      distributeWeeklySpotifyForStudent(db, cleanEmail, account.uid, normLevel, undefined, undefined, studyDays);
+      distributeWeeklyYouTubeForStudent(db, cleanEmail, account.uid, normLevel, undefined, undefined, studyDays);
+    }
+
+    account.picture = studentProfile.picture || studentProfile.avatar || studentObj?.picture || studentObj?.avatar || '';
+
+    // Persist to Firestore asynchronously
+    saveUserToFirestore(studentProfile).catch(() => {});
+    saveStudentAssignmentsByUid(account.uid, {
+      uid: account.uid,
+      email: cleanEmail,
+      level: studentProfile.level,
+      weeklyStudyDaysTarget: studentProfile.weeklyStudyDaysTarget,
+      weeklyStudyDays: studentProfile.weeklyStudyDays,
+      videoAssignments: db.studentVideoAssignments?.[cleanEmail] || [],
+      spotifyAssignments: db.studentSpotifyAssignments?.[cleanEmail] || [],
+    }).catch(() => {});
+
+    writeDb(db);
+  } else if (role === 'teacher') {
+    account.picture = tutorObj?.avatar || tutorObj?.picture || '';
+  }
+
+  res.json({
+    success: true,
+    account,
+    profile: role === 'teacher' ? null : studentProfile,
+    student: role === 'teacher' ? null : (studentObj || (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null),
+    tutor: tutorObj || null,
+  });
+});
+
+app.post('/api/auth/reset-password', (req, res) => {
+  const db = readDb();
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: 'Email e nova senha são obrigatórios.' });
+  }
+  const cleanEmail = email.toLowerCase().trim();
+  if (!db.authUsers) db.authUsers = {};
+
+  if (!db.authUsers[cleanEmail]) {
+    const inStudents = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    );
+    const inTeachers = (db.teachers || []).find(
+      (t: any) => t.email?.toLowerCase() === cleanEmail
+    );
+    const inTutors = (db.tutorsList || []).find(
+      (t: any) => t.email?.toLowerCase() === cleanEmail
+    );
+    const role = cleanEmail === 'adm.itissimple@gmail.com' ? 'admin' : inTeachers || inTutors ? 'teacher' : 'student';
+    const name = inStudents?.name || inTeachers?.name || inTutors?.name || cleanEmail.split('@')[0];
+
+    db.authUsers[cleanEmail] = {
+      email: cleanEmail,
+      name,
+      role,
+      password: newPassword,
+      createdAt: new Date().toISOString(),
+    };
+  } else {
+    db.authUsers[cleanEmail].password = newPassword;
+    db.authUsers[cleanEmail].updatedAt = new Date().toISOString();
+  }
+
+  writeDb(db);
+  res.json({ success: true, message: 'Senha atualizada com sucesso!' });
+});
+
+app.get('/api/auth/check-user', async (req, res) => {
+  const db = readDb();
+  const email = ((req.query.email as string) || '').toLowerCase().trim();
+  const name = ((req.query.name as string) || '').toLowerCase().trim();
+  const role = ((req.query.role as string) || '').toLowerCase().trim();
+
+  let emailExists = false;
+  let nameExists = false;
+  let existingRole: string | null = null;
+  let existingUser: any = null;
+
+  if (email) {
+    const inAuth = db.authUsers?.[email] || null;
+    const inStudents = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === email
+    );
+    const inTutors = (db.tutorsList || []).find((t: any) => t.email?.toLowerCase() === email);
+    const inProfiles = db.userProfiles?.[email] || null;
+
+    if (inAuth || inStudents || inTutors || inProfiles) {
+      emailExists = true;
+      existingRole = inAuth?.role || (inTutors ? 'teacher' : inStudents ? 'student' : inProfiles?.role || null);
+      existingUser = inAuth || inTutors || inStudents || inProfiles;
+    } else {
+      // Check Firebase Firestore persistence directly
+      try {
+        const firestoreUser = await fetchUserFromFirestore(email);
+        if (firestoreUser) {
+          emailExists = true;
+          existingRole = firestoreUser.role || (firestoreUser.isTeacher ? 'teacher' : 'student');
+          existingUser = firestoreUser;
+          // Hydrate in memory database for ultra-fast subsequent checks
+          if (!db.authUsers) db.authUsers = {};
+          if (!db.authUsers[email]) {
+            db.authUsers[email] = {
+              uid: firestoreUser.uid || firestoreUser.id || `usr-${email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+              email,
+              name: firestoreUser.name || email.split('@')[0],
+              role: existingRole || 'student',
+              createdAt: firestoreUser.createdAt || new Date().toISOString(),
+            };
+          }
+          if (existingRole === 'student') {
+            if (!db.userProfiles) db.userProfiles = {};
+            if (!db.userProfiles[email]) db.userProfiles[email] = firestoreUser;
+            if (!db.students) db.students = [];
+            if (!db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === email)) {
+              db.students.push(firestoreUser);
+            }
+          }
+          writeDb(db);
+        }
+      } catch (err) {
+        console.warn('Error checking user in Firestore:', err);
+      }
+    }
+  }
+
+  if (name) {
+    const inStudents = (db.students || []).some(
+      (s: any) => ((s.name || s.studentName || '') as string).trim().toLowerCase() === name
+    );
+    const inAuthStudent = Object.values(db.authUsers || {}).some(
+      (u: any) => (u.name || '').trim().toLowerCase() === name && u.role === 'student'
+    );
+    const inTutors = (db.tutorsList || []).some(
+      (t: any) => (t.name || '').trim().toLowerCase() === name
+    );
+
+    if (role === 'student' && (inStudents || inAuthStudent)) {
+      nameExists = true;
+    } else if (role === 'teacher' && inTutors) {
+      nameExists = true;
+    } else if (!role && (inStudents || inAuthStudent || inTutors)) {
+      nameExists = true;
+    }
+  }
+
+  res.json({
+    exists: emailExists || nameExists,
+    emailExists,
+    nameExists,
+    role: existingRole,
+    name: existingUser?.name || null,
+    profile: email ? (db.userProfiles?.[email] || null) : null,
+    student: email ? (db.students?.find((s: any) => (s.email || s.studentEmail || '').toLowerCase() === email) || null) : null,
+    tutor: email ? (db.tutorsList?.find((t: any) => t.email?.toLowerCase() === email) || null) : null,
+  });
+});
+
+const handleRegistration = async (req: any, res: any) => {
+  const db = readDb();
+  const { name, email, password, role = 'student' } = req.body;
+  const level = req.body.englishLevel || req.body.level || 'iniciante';
+  const goal = req.body.learningGoal || req.body.goal || 'English for everyday life & work';
+
+  if (!email || !name) {
+    return res.status(400).json({ error: 'Name and email are required' });
+  }
+
+  const cleanEmail = email.toLowerCase().trim();
+  const cleanName = name.trim();
+  const cleanNameLower = cleanName.toLowerCase();
+  const requestedRole = (role || 'student').toLowerCase();
+
+  // ----------------------------------------------------
+  // 1. ADMIN REGISTRATION (Strictly only 1 admin allowed)
+  // ----------------------------------------------------
+  if (requestedRole === 'admin') {
+    // Check if an admin already exists in authUsers or teachers
+    const existingAdminInAuth = Object.values(db.authUsers || {}).find(
+      (u: any) => u.role === 'admin' && u.email !== cleanEmail
+    );
+    const existingAdminInTeachers = (db.teachers || []).find(
+      (t: any) => t.role === 'admin' && (t.email || '').toLowerCase() !== cleanEmail
+    );
+
+    if (existingAdminInAuth || existingAdminInTeachers) {
+      return res.status(403).json({
+        error: 'Já existe um Administrador cadastrado na plataforma. Só é permitido um único Administrador no sistema.',
+        hasAdminRegistered: true,
+      });
+    }
+
+    const adminUid = req.body.uid || 'admin-master-uid';
+    // Register or update admin credentials
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = {
+      uid: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      password: password || '',
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    };
+
+    // Ensure teachers list has this admin marked as admin
+    const tIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+    if (tIdx >= 0) {
+      db.teachers[tIdx] = { ...db.teachers[tIdx], name: cleanName, role: 'admin', registeredByAdmin: true };
+    } else {
+      db.teachers.push({ email: cleanEmail, name: cleanName, role: 'admin', registeredByAdmin: true });
+    }
+
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[cleanEmail] = {
+      uid: adminUid,
+      id: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'admin',
+    };
+
+    await writeDbSync(db);
+    await saveUserToFirestore({
+      uid: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    });
+
+    const account = {
+      uid: adminUid,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'admin',
+      picture: '',
+    };
+
+    return res.json({
+      success: true,
+      account,
+      message: 'Administrador cadastrado com sucesso.',
+    });
+  }
+
+  // ----------------------------------------------------
+  // 2. TEACHER / NATIVE FRIEND REGISTRATION
+  // ----------------------------------------------------
+  if (requestedRole === 'teacher') {
+    // Check duplicate email across platform
+    const isExistingTutorEmail =
+      (db.tutorsList || []).some((t: any) => t.email?.toLowerCase() === cleanEmail) ||
+      (db.teachers || []).some((t: any) => t.email?.toLowerCase() === cleanEmail && t.role !== 'admin') ||
+      Boolean(db.authUsers?.[cleanEmail]);
+
+    if (isExistingTutorEmail && !req.body.isUpdate) {
+      return res.status(409).json({
+        error: 'Este e-mail já está cadastrado no sistema. Por favor, faça login com sua conta ou utilize outro e-mail.',
+        duplicateField: 'email',
+        isExistingUser: true,
+      });
+    }
+
+    // Check duplicate name for Native Friend
+    const isExistingTutorName =
+      (db.tutorsList || []).some((t: any) => (t.name || '').trim().toLowerCase() === cleanNameLower) ||
+      (db.teachers || []).some((t: any) => (t.name || '').trim().toLowerCase() === cleanNameLower && t.role === 'teacher') ||
+      Object.values(db.authUsers || {}).some((u: any) => (u.name || '').trim().toLowerCase() === cleanNameLower && u.role === 'teacher');
+
+    if (isExistingTutorName && !req.body.isUpdate) {
+      return res.status(409).json({
+        error: 'Já existe um Amigo Nativo cadastrado com este nome na plataforma. Por favor, inclua seu sobrenome ou use um nome distintivo.',
+        duplicateField: 'name',
+        isExistingUser: true,
+      });
+    }
+
+    const tutorId = req.body.id || req.body.uid || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+    // Zero-leakage: never use stock mock photos. If user provided an avatar use it, otherwise empty string.
+    const tutorAvatar = req.body.avatar || req.body.picture || '';
+
+    const tutorEntry = {
+      id: tutorId,
+      uid: tutorId,
+      name: cleanName,
+      email: cleanEmail,
+      avatar: tutorAvatar,
+      picture: tutorAvatar,
+      role: 'teacher',
+      country: req.body.country || 'United States',
+      countryCode: req.body.countryCode || 'US',
+      flag: req.body.flag || '🇺🇸',
+      accent: req.body.accent || 'North American',
+      rating: 5.0,
+      reviewsCount: 0,
+      activeStudents: 0,
+      lessonsTaught: 0,
+      pricePerSessionUsd: Number(req.body.pricePerSessionUsd || req.body.priceUsd) || 20,
+      pricePerSessionBrl: Math.round((Number(req.body.pricePerSessionUsd || req.body.priceUsd) || 20) * 5.5),
+      headline: req.body.headline || 'Conversational Native Friend',
+      bio: req.body.bio || 'Hello! I am excited to help you live English in your daily routine.',
+      specialties: Array.isArray(req.body.specialties) && req.body.specialties.length > 0
+        ? req.body.specialties
+        : (typeof req.body.specialties === 'string' && req.body.specialties.trim().length > 0
+            ? req.body.specialties.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : ['Daily Routine & Lifestyle', 'Conversational Fluency']),
+      videoIntroUrl: req.body.videoIntroUrl || req.body.videoUrl || '',
+      availableDays: req.body.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+      availableHours: req.body.availableHours || ['08:00', '09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00'],
+      approvalStatus: 'pending', // REQUIRED: All new Native Friends default strictly to pending approval
+      appliedAt: new Date().toISOString(),
+      registeredByAdmin: false,
+      meetUrl: req.body.meetUrl || req.body.meetLink || 'https://meet.google.com/new',
+    };
+
+    if (!db.tutorsList) db.tutorsList = [];
+    const tutorIdx = db.tutorsList.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+    if (tutorIdx >= 0) {
+      db.tutorsList[tutorIdx] = { ...db.tutorsList[tutorIdx], ...tutorEntry };
+    } else {
+      db.tutorsList.push(tutorEntry);
+    }
+
+    // Maintain teachers list
+    const teacherIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+    if (teacherIdx >= 0) {
+      db.teachers[teacherIdx] = {
+        ...db.teachers[teacherIdx],
+        name: cleanName,
+        email: cleanEmail,
+        role: 'teacher',
+        avatar: tutorEntry.avatar,
+        picture: tutorEntry.avatar,
+      };
+    } else {
+      db.teachers.push({
+        name: cleanName,
+        email: cleanEmail,
+        role: 'teacher',
+        registeredByAdmin: false,
+        avatar: tutorEntry.avatar,
+        picture: tutorEntry.avatar,
+      });
+    }
+
+    // Save auth credentials
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = {
+      uid: tutorId,
+      email: cleanEmail,
+      name: cleanName,
+      password: password || '',
+      role: 'teacher',
+      createdAt: new Date().toISOString(),
+    };
+
+    // Maintain meet settings
+    if (!db.meetSettings) db.meetSettings = {};
+    db.meetSettings[cleanEmail] = {
+      teacherEmail: cleanEmail,
+      meetLink: req.body.meetUrl || req.body.meetLink || 'https://meet.google.com/new',
+      workingHoursStart: '08:00',
+      workingHoursEnd: '18:00',
+      slotDurationMinutes: 30,
+      availableDays: tutorEntry.availableDays,
+      timezone: 'America/New_York',
+    };
+
+    // Purge any accidental student profile entry for this teacher
+    if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      delete db.userProfiles[cleanEmail];
+    }
+    if (db.students) {
+      db.students = db.students.filter((s: any) => (s.email || s.studentEmail || '').toLowerCase() !== cleanEmail);
+    }
+
+    // Log admin notification
+    if (!db.emailLogs) db.emailLogs = [];
+    db.emailLogs.push({
+      id: `log-${Date.now()}`,
+      to: 'adm.itissimple@gmail.com',
+      subject: `Nova Solicitação de Amigo Nativo: ${cleanName}`,
+      preview: `${cleanName} (${cleanEmail}) se cadastrou como Amigo Nativo e aguarda sua aprovação.`,
+      date: new Date().toISOString(),
+      status: 'pending_approval',
+    });
+
+    await writeDbSync(db);
+    await saveUserToFirestore(tutorEntry);
+
+    const account = {
+      uid: tutorId,
+      email: cleanEmail,
+      name: cleanName,
+      role: 'teacher',
+      picture: tutorEntry.avatar,
+    };
+
+    return res.json({
+      success: true,
+      account,
+      tutor: tutorEntry,
+      approvalStatus: 'pending',
+      message: 'Cadastro de Amigo Nativo enviado com sucesso! Seus dados foram salvos no seu perfil e aguardam aprovação do Administrador.',
+    });
+  }
+
+  // ----------------------------------------------------
+  // 3. STUDENT REGISTRATION
+  // ----------------------------------------------------
+  // 3.1 Check duplicate email across any platform table and Firebase Firestore
+  let isExistingStudentEmail =
+    (db.students || []).some(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    ) ||
+    Boolean(db.authUsers?.[cleanEmail]) ||
+    Boolean(db.userProfiles?.[cleanEmail]) ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+
+  if (!isExistingStudentEmail && !req.body.isUpdate) {
+    try {
+      const existsInFirestore = await checkUserExistsInFirestore(cleanEmail);
+      if (existsInFirestore) {
+        isExistingStudentEmail = true;
+      }
+    } catch (err) {
+      console.warn('Firestore duplicate check error:', err);
+    }
+  }
+
+  if (isExistingStudentEmail && !req.body.isUpdate) {
+    return res.status(409).json({
+      error: 'Este e-mail já possui uma conta cadastrada.',
+      duplicateField: 'email',
+      isExistingUser: true,
+    });
+  }
+
+  // 3.2 Check duplicate name for student
+  const isExistingStudentName =
+    (db.students || []).some(
+      (s: any) => ((s.name || s.studentName || '') as string).trim().toLowerCase() === cleanNameLower
+    ) ||
+    Object.values(db.authUsers || {}).some(
+      (u: any) => (u.name || '').trim().toLowerCase() === cleanNameLower && u.role === 'student'
+    );
+
+  if (isExistingStudentName && !req.body.isUpdate) {
+    return res.status(409).json({
+      error: 'Já existe um(a) aluno(a) cadastrado(a) com este nome no sistema. Por favor, informe seu nome completo e sobrenome para garantir sua identificação individual.',
+      duplicateField: 'name',
+      isExistingUser: true,
+    });
+  }
+
+  // Generate clean, strictly exclusive UID for this new student
+  const userUid = req.body.uid || req.body.id || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  // Zero-leakage: completely clean, no stock or mock photo
+  const userAvatar = req.body.avatar || req.body.picture || '';
+
+  // Save student credentials permanently
+  if (!db.authUsers) db.authUsers = {};
+  db.authUsers[cleanEmail] = {
+    uid: userUid,
+    email: cleanEmail,
+    name: cleanName,
+    password: password || '',
+    role: 'student',
+    createdAt: new Date().toISOString(),
+  };
+
+  const existingIdx = db.students.findIndex(
+    (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+  );
+
+  const routineVideoTime = req.body.routineVideoTime || '09:00';
+  const routineAudioTime = req.body.routineAudioTime || '14:00';
+  const dailyPhraseTime = req.body.dailyPhraseTime || '20:00';
+
+  if (existingIdx >= 0) {
+    const existing = db.students[existingIdx];
+    db.students[existingIdx] = {
+      ...existing,
+      id: existing.id || userUid,
+      name: cleanName,
+      studentName: cleanName,
+      email: cleanEmail,
+      studentEmail: cleanEmail,
+      level: level || existing.level || existing.studentLevel,
+      studentLevel: level || existing.studentLevel || existing.level,
+      goal: goal || existing.goal || existing.learningGoal,
+      learningGoal: goal || existing.learningGoal || existing.goal,
+      routineVideoTime: req.body.routineVideoTime || existing.routineVideoTime || routineVideoTime,
+      routineAudioTime: req.body.routineAudioTime || existing.routineAudioTime || routineAudioTime,
+      dailyPhraseTime: req.body.dailyPhraseTime || existing.dailyPhraseTime || dailyPhraseTime,
+      contractedLessons: existing.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 0,
+      completedLessonsCount: existing.completedLessonsCount ?? 0,
+      teacherEmail: existing.teacherEmail || null,
+      teacherName: existing.teacherName || null,
+      status: existing.status || 'active',
+      activeSince: existing.activeSince || new Date().toISOString().split('T')[0],
+      createdAt: existing.createdAt || new Date().toISOString(),
+      picture: userAvatar,
+      avatar: userAvatar,
+    };
+  } else {
+    // New Student: Respect explicit onboarding selected tutor and trial lesson credit if provided
+    const initialTeacherEmail = req.body.teacherEmail ? (req.body.teacherEmail as string).toLowerCase().trim() : null;
+    const initialTeacherName = req.body.teacherName || null;
+    const initialContractedLessons = Number(req.body.contractedLessons ?? 0);
+    const initialEnrollmentStatus = req.body.enrollmentStatus || (initialTeacherEmail ? 'active' : 'not_enrolled');
+    const initialWeeklyStudyDaysTarget = req.body.weeklyStudyDaysTarget !== undefined ? Number(req.body.weeklyStudyDaysTarget) : 7;
+    const initialWeeklyStudyDays = req.body.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+    const studentData = {
+      id: userUid,
+      name: cleanName,
+      studentName: cleanName,
+      email: cleanEmail,
+      studentEmail: cleanEmail,
+      level,
+      studentLevel: level,
+      goal: goal || 'English for everyday life & work',
+      learningGoal: goal || 'English for everyday life & work',
+      contractedLessons: initialContractedLessons,
+      completedLessonsCount: 0,
+      teacherEmail: initialTeacherEmail,
+      teacherName: initialTeacherName,
+      routineVideoTime,
+      routineAudioTime,
+      dailyPhraseTime,
+      status: 'active',
+      activeSince: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+      picture: userAvatar,
+      avatar: userAvatar,
+    };
+    db.students.push(studentData);
+
+    if (initialContractedLessons > 0) {
+      if (!db.contractedLessons) db.contractedLessons = {};
+      db.contractedLessons[cleanEmail] = initialContractedLessons;
+    }
+  }
+
+  if (!db.contractedLessons) db.contractedLessons = {};
+  if (db.contractedLessons[cleanEmail] === undefined) {
+    db.contractedLessons[cleanEmail] = Number(req.body.contractedLessons ?? 0);
+  }
+
+  const initialTeacherEmail = req.body.teacherEmail ? (req.body.teacherEmail as string).toLowerCase().trim() : null;
+  const initialTeacherName = req.body.teacherName || null;
+  const initialContracted = Number(req.body.contractedLessons ?? db.contractedLessons[cleanEmail] ?? 0);
+  const initialEnrollment = req.body.enrollmentStatus || (initialTeacherEmail ? 'active' : 'not_enrolled');
+
+  if (!db.userProfiles) db.userProfiles = {};
+  if (!db.userProfiles[cleanEmail]) {
+    db.userProfiles[cleanEmail] = {
+      id: userUid,
+      name: cleanName,
+      email: cleanEmail,
+      level,
+      teacherEmail: initialTeacherEmail,
+      teacherName: initialTeacherName,
+      routineVideoTime,
+      routineAudioTime,
+      dailyPhraseTime,
+      enrollmentStatus: initialEnrollment,
+      learningGoal: goal || 'English for everyday life & work',
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: initialContracted,
+      completedLessonsCount: 0,
+      weeklyStudyDaysTarget: req.body.weeklyStudyDaysTarget !== undefined ? Number(req.body.weeklyStudyDaysTarget) : 7,
+      weeklyStudyDays: req.body.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+      onboardingCompleted: req.body.onboardingCompleted ?? false,
+      picture: userAvatar,
+      avatar: userAvatar,
+      createdAt: new Date().toISOString(),
+    };
+  } else {
+    const p = db.userProfiles[cleanEmail];
+    db.userProfiles[cleanEmail] = {
+      ...p,
+      id: p.id || userUid,
+      name: cleanName,
+      level: level || p.level,
+      learningGoal: goal || p.learningGoal,
+      routineVideoTime: req.body.routineVideoTime || p.routineVideoTime || routineVideoTime,
+      routineAudioTime: req.body.routineAudioTime || p.routineAudioTime || routineAudioTime,
+      dailyPhraseTime: req.body.dailyPhraseTime || p.dailyPhraseTime || dailyPhraseTime,
+      teacherEmail: p.teacherEmail || null,
+      teacherName: p.teacherName || null,
+      contractedLessons: p.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 0,
+      completedLessonsCount: p.completedLessonsCount ?? 0,
+      picture: userAvatar,
+      avatar: userAvatar,
+    };
+  }
+
+  writeDb(db);
+
+  // Persist 100% of student profile settings to Firestore in background
+  const fullProfileToSave = {
+    uid: userUid,
+    id: userUid,
+    email: cleanEmail,
+    name: cleanName,
+    role: 'student',
+    picture: userAvatar,
+    avatar: userAvatar,
+    level,
+    userLevel: level,
+    englishLevel: level,
+    learningGoal: goal,
+    routineVideoTime,
+    routineAudioTime,
+    dailyPhraseTime,
+    weeklyStudyDaysTarget: db.userProfiles[cleanEmail].weeklyStudyDaysTarget,
+    weeklyStudyDays: db.userProfiles[cleanEmail].weeklyStudyDays,
+    teacherEmail: initialTeacherEmail,
+    teacherName: initialTeacherName,
+    contractedLessons: initialContracted,
+    createdAt: new Date().toISOString(),
+  };
+
+  saveUserToFirestore(fullProfileToSave).catch(() => {});
+  saveStudentAssignmentsByUid(userUid, {
+    uid: userUid,
+    email: cleanEmail,
+    level,
+    weeklyStudyDaysTarget: db.userProfiles[cleanEmail].weeklyStudyDaysTarget,
+    weeklyStudyDays: db.userProfiles[cleanEmail].weeklyStudyDays,
+    videoAssignments: db.studentVideoAssignments?.[cleanEmail] || [],
+    spotifyAssignments: db.studentSpotifyAssignments?.[cleanEmail] || [],
+  }).catch(() => {});
+
+  const account = {
+    uid: userUid,
+    email: cleanEmail,
+    name: cleanName,
+    role: 'student',
+    picture: userAvatar,
+  };
+
+  res.json({
+    success: true,
+    account,
+    profile: db.userProfiles?.[cleanEmail] || null,
+    student: (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null,
+    tutor: (db.tutorsList || []).find((t) => t.email.toLowerCase() === cleanEmail) || null,
+  });
+};
+
+// Endpoint to sync client localStorage registered users to server database
+app.post('/api/auth/sync-local-users', async (req, res) => {
+  const db = readDb();
+  const { users } = req.body;
+  if (!users || typeof users !== 'object') {
+    return res.json({ success: true, synced: 0 });
+  }
+  let count = 0;
+  for (const [rawEmail, user] of Object.entries(users as Record<string, any>)) {
+    const cleanEmail = rawEmail.toLowerCase().trim();
+    if (!cleanEmail || !user) continue;
+    if (!db.authUsers) db.authUsers = {};
+    if (!db.authUsers[cleanEmail]) {
+      db.authUsers[cleanEmail] = {
+        uid: user.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        email: cleanEmail,
+        name: user.name || cleanEmail.split('@')[0],
+        password: user.password || '',
+        role: user.role || 'student',
+        createdAt: user.registeredAt || new Date().toISOString(),
+      };
+      count++;
+    }
+    if (user.role === 'student') {
+      if (!db.students) db.students = [];
+      if (!db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail)) {
+        db.students.push({
+          id: user.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          name: user.name,
+          studentName: user.name,
+          email: cleanEmail,
+          studentEmail: cleanEmail,
+          level: user.profile?.level || 'iniciante',
+          studentLevel: user.profile?.level || 'iniciante',
+          goal: user.profile?.learningGoal || 'English for everyday life & work',
+          learningGoal: user.profile?.learningGoal || 'English for everyday life & work',
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          status: 'active',
+          activeSince: new Date().toISOString().split('T')[0],
+          createdAt: new Date().toISOString(),
+          avatar: user.profile?.avatar || '',
+          picture: user.profile?.picture || '',
+        });
+      }
+      if (!db.userProfiles) db.userProfiles = {};
+      if (!db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail] = {
+          id: user.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          name: user.name,
+          email: cleanEmail,
+          level: user.profile?.level || 'iniciante',
+          enrollmentStatus: 'active',
+          learningGoal: user.profile?.learningGoal || 'English for everyday life & work',
+          streakDays: 0,
+          points: 0,
+          dailyGoalMinutes: 30,
+          completedTodayMinutes: 0,
+          contractedLessons: 5,
+          completedLessonsCount: 0,
+          picture: user.profile?.picture || '',
+          avatar: user.profile?.avatar || '',
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+  }
+  if (count > 0) {
+    await writeDbSync(db);
+  }
+  res.json({ success: true, synced: count });
+});
+
+app.post('/api/auth/register', handleRegistration);
+app.post('/api/auth/signup', handleRegistration);
+
+app.post('/api/auth/google', (req, res) => {
+  const db = readDb();
+  const { email, name, picture, role: requestedRole, uid } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required for Google login' });
+  }
+
+  const cleanEmail = email.toLowerCase().trim();
+  const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail === 'admin@itissimple.com';
+  let role = requestedRole === 'teacher' ? 'teacher' : 'student';
+  let displayName = name || cleanEmail.split('@')[0];
+
+  if (isMasterAdmin) {
+    role = 'admin';
+    if (!name || name === cleanEmail.split('@')[0]) {
+      displayName = "Admin It's Simple";
+    }
+  } else if (
+    db.teachers?.some((t) => t.email.toLowerCase() === cleanEmail) ||
+    db.tutorsList?.some((t) => t.email.toLowerCase() === cleanEmail)
+  ) {
+    role = 'teacher';
+  } else if (requestedRole) {
+    role = requestedRole === 'teacher' ? 'teacher' : (requestedRole === 'admin' && isMasterAdmin ? 'admin' : 'student');
+  }
+
+  // Update or record in authUsers
+  if (!db.authUsers) db.authUsers = {};
+  if (!db.authUsers[cleanEmail]) {
+    db.authUsers[cleanEmail] = {
+      uid: uid || `google-${Date.now()}`,
+      email: cleanEmail,
+      name: displayName,
+      role,
+      createdAt: new Date().toISOString(),
+    };
+  } else if (uid && !db.authUsers[cleanEmail].uid) {
+    db.authUsers[cleanEmail].uid = uid;
+  }
+
+  // If new student, add to students list
+  if (role === 'student') {
+    const existing = db.students.find(
+      (s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+    );
+    if (!existing) {
+      db.students.push({
+        id: `st-${Date.now()}`,
+        uid: uid || db.authUsers[cleanEmail]?.uid,
+        name: displayName,
+        studentName: displayName,
+        email: cleanEmail,
+        studentEmail: cleanEmail,
+        picture: picture || '',
+        avatar: picture || '',
+        level: 'iniciante',
+        studentLevel: 'iniciante',
+        goal: 'English for everyday life & work',
+        learningGoal: 'English for everyday life & work',
+        contractedLessons: 0,
+        completedLessonsCount: 0,
+        teacherEmail: null,
+        teacherName: null,
+        routineVideoTime: '09:00',
+        routineAudioTime: '14:00',
+        dailyPhraseTime: '20:00',
+        status: 'active',
+        activeSince: new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+      });
+      if (!db.contractedLessons) db.contractedLessons = {};
+      db.contractedLessons[cleanEmail] = 0;
+
+      if (!db.userProfiles) db.userProfiles = {};
+      if (!db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail] = {
+          id: `usr-${Date.now()}`,
+          uid: uid || db.authUsers[cleanEmail]?.uid,
+          name: displayName,
+          email: cleanEmail,
+          picture: picture || '',
+          avatar: picture || '',
+          level: 'iniciante',
+          teacherEmail: null,
+          teacherName: null,
+          routineVideoTime: '09:00',
+          routineAudioTime: '14:00',
+          dailyPhraseTime: '20:00',
+          enrollmentStatus: 'not_enrolled',
+          learningGoal: 'English for everyday life & work',
+          streakDays: 0,
+          streakCount: 0,
+          points: 0,
+          contractedLessons: 0,
+          completedLessonsCount: 0,
+        };
+      }
+      writeDb(db);
+    }
+  }
+
+  const effectiveUid = uid || db.authUsers?.[cleanEmail]?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
+
+  const account = {
+    uid: effectiveUid,
+    email: cleanEmail,
+    name: displayName,
+    role,
+    picture:
+      picture ||
+      db.userProfiles?.[cleanEmail]?.picture ||
+      db.userProfiles?.[effectiveUid]?.picture ||
+      '',
+  };
+
+  res.json({
+    success: true,
+    account,
+    profile: db.userProfiles?.[cleanEmail] || null,
+    student: (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null,
+    tutor: (db.tutorsList || []).find((t) => t.email.toLowerCase() === cleanEmail) || null,
+  });
+});
+
+// 1.2 Landing Page Content (Editable by Admin)
+app.get('/api/landing-content', (req, res) => {
+  const db = readDb();
+  res.json(db.landingContent || DEFAULT_LANDING_CONTENT);
+});
+
+app.post('/api/landing-content', (req, res) => {
+  const db = readDb();
+  const content = req.body;
+  db.landingContent = { ...DEFAULT_LANDING_CONTENT, ...(db.landingContent || {}), ...content };
+  writeDb(db);
+  res.json({ success: true, landingContent: db.landingContent });
+});
+
+// 2. Teachers / Native Friends Endpoints
+app.get('/api/teachers', (req, res) => {
+  const db = readDb();
+  res.json({ teachers: db.teachers || [] });
+});
+
+app.get('/api/tutors', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  const db = readDb();
+  const requesterEmail = ((req.query.email as string) || '').toLowerCase().trim();
+  const role = req.query.role as string;
+  const uid = (req.query.uid as string) || '';
+
+  const isAdmin =
+    role === 'admin' ||
+    req.query.admin === 'true' ||
+    req.query.includePending === 'true' ||
+    requesterEmail === 'adm.itissimple@gmail.com' ||
+    Boolean(db.authUsers?.[requesterEmail]?.role === 'admin');
+
+  if (isAdmin) {
+    return res.json(db.tutorsList || []);
+  }
+
+  // Approved tutors are public; pending tutors are visible ONLY to the tutor themselves
+  const list = (db.tutorsList || []).filter((t: any) => {
+    const tEmail = (t.email || '').toLowerCase().trim();
+    const tId = (t.id || '').toLowerCase().trim();
+    if (db.deletedTutorEmails?.includes(tEmail) || db.deletedTutorIds?.includes(tId)) {
+      return false;
+    }
+    if (t.approvalStatus === 'approved') return true;
+    if (requesterEmail && tEmail === requesterEmail) return true;
+    if (uid && t.uid === uid) return true;
+    return false;
+  });
+  res.json(list);
+});
+
+app.post('/api/tutors', async (req, res) => {
+  const db = readDb();
+  const newTutor = req.body.tutor || req.body;
+  if (!newTutor || !newTutor.email) {
+    return res.status(400).json({ error: 'Invalid tutor data' });
+  }
+  const cleanEmail = newTutor.email.toLowerCase().trim();
+  const cleanName = (newTutor.name || '').trim();
+  const cleanNameLower = cleanName.toLowerCase();
+  const tutorId = newTutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+  // Check if tutor already exists by explicit email or matching unique ID
+  const existingEmailIdx = (db.tutorsList || []).findIndex(
+    (t: any) =>
+      (t.email && t.email.toLowerCase() === cleanEmail) ||
+      (newTutor.id && t.id && t.id === newTutor.id)
+  );
+
+  if (existingEmailIdx >= 0 && !req.body.isUpdate && !newTutor.isUpdate) {
+    return res.status(409).json({
+      error: 'Este e-mail já está cadastrado no sistema como Amigo Nativo. Por favor, faça login com sua conta.',
+      duplicateField: 'email',
+      isExistingUser: true,
+    });
+  }
+
+  // Check if tutor already exists by name
+  const existingName = (db.tutorsList || []).some(
+    (t: any) => (t.name || '').trim().toLowerCase() === cleanNameLower && t.email?.toLowerCase() !== cleanEmail
+  );
+
+  if (existingName && !req.body.isUpdate && !newTutor.isUpdate) {
+    return res.status(409).json({
+      error: 'Já existe um Amigo Nativo cadastrado com este nome na plataforma. Por favor, inclua seu sobrenome ou use um nome distintivo.',
+      duplicateField: 'name',
+      isExistingUser: true,
+    });
+  }
+  
+  const rawVideoLink = (newTutor.videoIntroUrl || newTutor.youtubeUrl || newTutor.videoUrl || newTutor.introVideoUrl || '').trim();
+  const extractedVideoId = newTutor.youtubeEmbedId || extractYouTubeVideoId(rawVideoLink) || '';
+
+  const tutorEntry = {
+    ...newTutor,
+    name: cleanName,
+    id: tutorId,
+    email: cleanEmail,
+    role: 'teacher',
+    videoIntroUrl: rawVideoLink,
+    youtubeUrl: rawVideoLink,
+    videoUrl: rawVideoLink,
+    introVideoUrl: rawVideoLink,
+    youtubeEmbedId: extractedVideoId,
+    approvalStatus: newTutor.approvalStatus || (newTutor.registeredByAdmin ? 'approved' : 'pending'),
+    appliedAt: newTutor.appliedAt || new Date().toISOString(),
+  };
+
+  if (existingEmailIdx >= 0) {
+    db.tutorsList[existingEmailIdx] = { ...db.tutorsList[existingEmailIdx], ...tutorEntry };
+  } else {
+    db.tutorsList = db.tutorsList || [];
+    db.tutorsList.push(tutorEntry);
+  }
+
+  // Also maintain teachers list for auth
+  const teacherIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+  if (teacherIdx >= 0) {
+    db.teachers[teacherIdx] = { ...db.teachers[teacherIdx], name: newTutor.name || cleanName, email: cleanEmail, role: 'teacher' };
+  } else {
+    db.teachers.push({ email: cleanEmail, name: newTutor.name || cleanName, role: 'teacher' });
+  }
+
+  // Ensure auth record exists with role 'teacher'
+  if (!db.authUsers) db.authUsers = {};
+  db.authUsers[cleanEmail] = {
+    email: cleanEmail,
+    name: newTutor.name || cleanName,
+    password: newTutor.password || db.authUsers[cleanEmail]?.password || '',
+    role: 'teacher',
+    createdAt: db.authUsers[cleanEmail]?.createdAt || new Date().toISOString(),
+  };
+
+  // Unmark from deleted lists if newly registered or re-registering
+  if (db.deletedTutorIds) {
+    db.deletedTutorIds = db.deletedTutorIds.filter((id) => id !== newTutor.id?.toLowerCase());
+  }
+  if (db.deletedTutorEmails) {
+    db.deletedTutorEmails = db.deletedTutorEmails.filter((em) => em !== cleanEmail);
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, tutor: tutorEntry, tutors: db.tutorsList });
+});
+
+app.put('/api/tutors/:id', (req, res) => {
+  const db = readDb();
+  const tutorId = req.params.id;
+  const rawBody = req.body;
+  const updatedData = rawBody?.tutor ? { ...rawBody.tutor } : { ...rawBody };
+  if ((updatedData as any).tutor) delete (updatedData as any).tutor;
+  
+  const existingIdx = (db.tutorsList || []).findIndex(
+    (t) => t.id === tutorId || t.email?.toLowerCase() === tutorId?.toLowerCase()
+  );
+
+  if (existingIdx >= 0) {
+    const existingTutor = db.tutorsList[existingIdx];
+    const tEmail = (existingTutor.email || updatedData.email || '').toLowerCase();
+    const existingSettings = (db.teacherSettings && db.teacherSettings[tEmail]) || (db.meetSettings && db.meetSettings[tEmail]);
+
+    const rawVideoLink = (
+      updatedData.videoIntroUrl ||
+      updatedData.youtubeUrl ||
+      updatedData.videoUrl ||
+      updatedData.introVideoUrl ||
+      existingTutor.videoIntroUrl ||
+      existingTutor.youtubeUrl ||
+      existingTutor.videoUrl ||
+      existingTutor.introVideoUrl ||
+      ''
+    ).trim();
+    const extractedVideoId = updatedData.youtubeEmbedId || extractYouTubeVideoId(rawVideoLink) || existingTutor.youtubeEmbedId || '';
+
+    db.tutorsList[existingIdx] = {
+      ...existingTutor,
+      ...updatedData,
+      id: existingTutor.id || tutorId,
+      videoIntroUrl: rawVideoLink,
+      youtubeUrl: rawVideoLink,
+      videoUrl: rawVideoLink,
+      introVideoUrl: rawVideoLink,
+      youtubeEmbedId: extractedVideoId,
+      // Strictly preserve centralized meetUrl, availableDays, and availability
+      meetUrl: updatedData.meetUrl || existingTutor.meetUrl || existingSettings?.meetLink || '',
+      availableDays:
+        (updatedData.availableDays && updatedData.availableDays.length > 0)
+          ? updatedData.availableDays
+          : (existingTutor.availableDays || existingSettings?.availableDays || []),
+      availability:
+        updatedData.availability ||
+        existingTutor.availability ||
+        existingSettings?.availability ||
+        existingSettings?.availableHoursByDay,
+    };
+    
+    // Sync with db.teachers
+    const currentTutor = db.tutorsList[existingIdx];
+    const teacherIdx = (db.teachers || []).findIndex((tc: any) => tc.email?.toLowerCase() === tEmail);
+    if (teacherIdx >= 0) {
+      db.teachers[teacherIdx] = {
+        ...db.teachers[teacherIdx],
+        name: currentTutor.name,
+        avatar: currentTutor.avatar,
+        country: currentTutor.country,
+        accent: currentTutor.accent,
+        timezone: currentTutor.timezone,
+        availableDays: currentTutor.availableDays,
+        videoIntroUrl: currentTutor.videoIntroUrl,
+      };
+    }
+
+    // Sync with db.teacherSettings
+    if (tEmail) {
+      db.teacherSettings = db.teacherSettings || {};
+      db.teacherSettings[tEmail] = {
+        ...db.teacherSettings[tEmail],
+        teacherEmail: tEmail,
+        ...(currentTutor.meetUrl ? { meetLink: currentTutor.meetUrl } : {}),
+        ...(currentTutor.timezone ? { timezone: currentTutor.timezone } : {}),
+        ...(currentTutor.availableDays && currentTutor.availableDays.length > 0 ? { availableDays: currentTutor.availableDays } : {}),
+      };
+    }
+
+    writeDb(db);
+    return res.json({ success: true, tutor: db.tutorsList[existingIdx], tutors: db.tutorsList });
+  }
+
+  // If not found in db.tutorsList, insert it
+  const newEntry = { ...updatedData, id: tutorId };
+  db.tutorsList = db.tutorsList || [];
+  db.tutorsList.push(newEntry);
+  writeDb(db);
+  res.json({ success: true, tutor: newEntry, tutors: db.tutorsList });
+});
+
+// Admin Delete Tutor
+app.delete('/api/tutors/:id', async (req, res) => {
+  const db = readDb();
+  const tutorId = decodeURIComponent(req.params.id);
+  const targetEmailQuery = ((req.query.email as string) || '').toLowerCase();
+
+  const targetTutor = (db.tutorsList || []).find(
+    (t: any) =>
+      t.id === tutorId ||
+      t.email?.toLowerCase() === tutorId.toLowerCase() ||
+      (targetEmailQuery && t.email?.toLowerCase() === targetEmailQuery)
+  );
+  const targetEmail = (
+    targetTutor?.email ||
+    targetEmailQuery ||
+    (tutorId.includes('@') ? tutorId : '')
+  )?.toLowerCase();
+
+  // Track permanently so deleted tutors are NEVER re-added by defaults or sync
+  db.deletedTutorIds = Array.from(
+    new Set([...(db.deletedTutorIds || []), tutorId.toLowerCase()])
+  );
+  if (targetEmail) {
+    db.deletedTutorEmails = Array.from(
+      new Set([...(db.deletedTutorEmails || []), targetEmail.toLowerCase()])
+    );
+  }
+
+  db.tutorsList = (db.tutorsList || []).filter(
+    (t: any) =>
+      t.id !== tutorId &&
+      t.email?.toLowerCase() !== tutorId.toLowerCase() &&
+      (!targetEmail || t.email?.toLowerCase() !== targetEmail)
+  );
+
+  if (targetEmail) {
+    // Only remove from teachers if NOT an admin! Admins must keep admin access
+    db.teachers = (db.teachers || []).filter(
+      (t: any) => t.email?.toLowerCase() !== targetEmail || t.role === 'admin'
+    );
+    if (db.meetSettings && targetEmail !== 'adm.itissimple@gmail.com') {
+      delete db.meetSettings[targetEmail];
+    }
+    if (db.teacherSettings && targetEmail !== 'adm.itissimple@gmail.com') {
+      delete db.teacherSettings[targetEmail];
+    }
+    // Only delete from authUsers if their role is teacher and not admin!
+    if (db.authUsers && db.authUsers[targetEmail]?.role === 'teacher') {
+      delete db.authUsers[targetEmail];
+    }
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, message: 'Amigo Nativo excluído com sucesso.', tutors: db.tutorsList });
+});
+
+app.post('/api/tutors/:id/approve', async (req, res) => {
+  const db = readDb();
+  const tutorId = req.params.id;
+  let approvedEmail = '';
+  db.tutorsList = (db.tutorsList || []).map((t) => {
+    if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
+      approvedEmail = (t.email || '').toLowerCase();
+      return { ...t, approvalStatus: 'approved' };
+    }
+    return t;
+  });
+
+  if (approvedEmail) {
+    const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === approvedEmail);
+    if (tIdx >= 0) {
+      db.teachers[tIdx] = { ...db.teachers[tIdx], approvalStatus: 'approved' };
+    }
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, tutors: db.tutorsList });
+});
+
+app.post('/api/tutors/:id/reject', async (req, res) => {
+  const db = readDb();
+  const tutorId = req.params.id;
+  let rejectedEmail = '';
+  db.tutorsList = (db.tutorsList || []).map((t) => {
+    if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
+      rejectedEmail = (t.email || '').toLowerCase();
+      return { ...t, approvalStatus: 'rejected' };
+    }
+    return t;
+  });
+
+  if (rejectedEmail) {
+    const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === rejectedEmail);
+    if (tIdx >= 0) {
+      db.teachers[tIdx] = { ...db.teachers[tIdx], approvalStatus: 'rejected' };
+    }
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, tutors: db.tutorsList });
+});
+
+app.post('/api/teachers', (req, res) => {
+  const db = readDb();
+  const newTeacher = req.body.teacher || req.body;
+  if (!newTeacher || !newTeacher.email) {
+    return res.status(400).json({ error: 'Invalid teacher data' });
+  }
+  const cleanEmail = newTeacher.email.toLowerCase().trim();
+  const existingIdx = db.teachers.findIndex((t) => t.email.toLowerCase() === cleanEmail);
+  if (existingIdx >= 0) {
+    db.teachers[existingIdx] = { ...db.teachers[existingIdx], ...newTeacher, email: cleanEmail };
+  } else {
+    db.teachers.push({ ...newTeacher, email: cleanEmail });
+  }
+  writeDb(db);
+  res.json({ success: true, teachers: db.teachers });
+});
+
+app.delete('/api/teachers/:email', (req, res) => {
+  const db = readDb();
+  const email = decodeURIComponent(req.params.email).toLowerCase().trim();
+  db.teachers = db.teachers.filter((t) => t.email.toLowerCase() !== email);
+  writeDb(db);
+  res.json({ success: true, teachers: db.teachers });
+});
+
+// 2.1 Official Merriam-Webster Dictionary Integration & Extraction Helpers
+function cleanMwMarkup(text: string): string {
+  if (!text) return '';
+  let cleaned = text
+    .replace(/\{bc\}/g, '')
+    .replace(/\{it\}(.*?)\{\/it\}/g, '$1')
+    .replace(/\{b\}(.*?)\{\/b\}/g, '$1')
+    .replace(/\{wi\}(.*?)\{\/wi\}/g, '$1')
+    .replace(/\{phrase\}(.*?)\{\/phrase\}/g, '$1')
+    .replace(/\{inf\}(.*?)\{\/inf\}/g, '$1')
+    .replace(/\{sup\}(.*?)\{\/sup\}/g, '$1')
+    .replace(/\{gloss\}(.*?)\{\/gloss\}/g, '$1')
+    .replace(/\{qword\}(.*?)\{\/qword\}/g, '$1')
+    .replace(/\{sc\}(.*?)\{\/sc\}/g, '$1')
+    .replace(/\{dx\}.*?\{\/dx\}/g, '')
+    .replace(/\{dxt\|(.*?)(?:\|.*?)*\}/g, '$1')
+    .replace(/\{d_link\|(.*?)(?:\|.*?)*\}/g, '$1')
+    .replace(/\{a_link\|(.*?)\}/g, '$1')
+    .replace(/\{sx\|(.*?)(?:\|.*?)*\}/g, '$1')
+    .replace(/\{[^}]+?\}/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  cleaned = cleaned.replace(/^[:\s\-—]+/, '').trim();
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
+function formatExampleSentence(ex: string): string {
+  if (!ex) return '';
+  let cleaned = ex.trim().replace(/^["'\s]+|["'\s]+$/g, '').trim();
+  if (cleaned && !/[.!?]$/.test(cleaned)) {
+    cleaned += '.';
+  }
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
+function extractExampleFromSense(dt: any[]): string {
+  if (!Array.isArray(dt)) return '';
+  for (const item of dt) {
+    if (item[0] === 'vis' && Array.isArray(item[1])) {
+      for (const v of item[1]) {
+        if (v && v.t) {
+          const ex = cleanMwMarkup(v.t);
+          if (ex) return formatExampleSentence(ex);
+        }
+      }
+    }
+    if (item[0] === 'uns' && Array.isArray(item[1])) {
+      for (const unsGroup of item[1]) {
+        if (Array.isArray(unsGroup)) {
+          for (const unsItem of unsGroup) {
+            if (unsItem[0] === 'vis' && Array.isArray(unsItem[1])) {
+              for (const v of unsItem[1]) {
+                if (v && v.t) {
+                  const ex = cleanMwMarkup(v.t);
+                  if (ex) return formatExampleSentence(ex);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return '';
+}
+
+function findExampleInEntry(entry: any): string {
+  if (!entry || !entry.def) return '';
+  const sseqs = entry.def.flatMap((d: any) => d.sseq || []) || [];
+  for (const group of sseqs) {
+    for (const item of group) {
+      if (item[0] === 'sense' && item[1]?.dt) {
+        const ex = extractExampleFromSense(item[1].dt);
+        if (ex) return ex;
+      }
+      if (item[0] === 'bs' && item[1]?.sense?.dt) {
+        const ex = extractExampleFromSense(item[1].sense.dt);
+        if (ex) return ex;
+      }
+    }
+  }
+  return '';
+}
+
+function generateInternalFallbackExample(word: string, partOfSpeech: string): string {
+  const w = word.trim();
+  const offline = getDictionaryDefinition(w);
+  if (offline && offline.exampleSentenceEn && offline.exampleSentenceEn.trim()) {
+    return formatExampleSentence(offline.exampleSentenceEn);
+  }
+
+  const lowerPos = (partOfSpeech || '').toLowerCase();
+  if (lowerPos.includes('verb')) {
+    return `We practiced how to ${w} during our English routine.`;
+  }
+  if (lowerPos.includes('adjective') || lowerPos.includes('adj')) {
+    return `It was a very ${w} moment in our daily conversation.`;
+  }
+  if (lowerPos.includes('adverb') || lowerPos.includes('adv')) {
+    return `She spoke English ${w} during the live lesson.`;
+  }
+  if (lowerPos.includes('noun')) {
+    return `The word "${w}" is frequently used in everyday English conversations.`;
+  }
+  return `He practiced using the word "${w}" in a complete sentence.`;
+}
+
+function mapMerriamWebsterResponse(data: any[], rawWord: string) {
+  if (!Array.isArray(data) || data.length === 0) return null;
+  if (typeof data[0] === 'string') return null; // Array of spelling suggestions
+
+  const cleanTarget = rawWord.trim().toLowerCase();
+
+  // 1. Check for defined run-on phrase in dros (e.g. "touch base")
+  for (const entry of data) {
+    if (Array.isArray(entry.dros)) {
+      for (const dro of entry.dros) {
+        if (dro.drp && dro.drp.toLowerCase() === cleanTarget) {
+          let droDef = '';
+          let droExample = '';
+          const sseqs = dro.def?.flatMap((d: any) => d.sseq || []) || [];
+          for (const group of sseqs) {
+            for (const item of group) {
+              if (item[0] === 'sense' && item[1]?.dt) {
+                if (!droExample) droExample = extractExampleFromSense(item[1].dt);
+                if (!droDef) {
+                  const textItem = item[1].dt.find((d: any) => d[0] === 'text');
+                  if (textItem && textItem[1]) droDef = cleanMwMarkup(textItem[1]);
+                }
+              }
+            }
+          }
+          if (droDef) {
+            const pos = dro.gram || entry.fl || 'idiom';
+            return {
+              word: dro.drp,
+              partOfSpeech: pos,
+              definitionEn: droDef,
+              exampleSentenceEn: droExample || generateInternalFallbackExample(dro.drp, pos),
+              source: 'merriam-webster',
+              notFound: false,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Exact match or primary entry
+  const entry =
+    data.find((e: any) => {
+      const id = (e.meta?.id || '').replace(/:\d+$/, '').toLowerCase();
+      return id === cleanTarget;
+    }) || data[0];
+
+  const word = (entry.meta?.id || '').replace(/:\d+$/, '') || rawWord.trim();
+  const partOfSpeech = entry.fl || 'word';
+
+  // 3. Definition: shortdef or first structured definition
+  let definition = '';
+  if (Array.isArray(entry.shortdef) && entry.shortdef.length > 0) {
+    const firstDef = entry.shortdef.find((d: any) => typeof d === 'string' && d.trim());
+    if (firstDef) {
+      definition = cleanMwMarkup(firstDef);
+    }
+  }
+  if (!definition && entry.def) {
+    const sseqs = entry.def.flatMap((d: any) => d.sseq || []) || [];
+    for (const group of sseqs) {
+      for (const item of group) {
+        if (item[0] === 'sense' && item[1]?.dt) {
+          const textItem = item[1].dt.find((d: any) => d[0] === 'text');
+          if (textItem && textItem[1]) {
+            definition = cleanMwMarkup(textItem[1]);
+            if (definition) break;
+          }
+        }
+      }
+      if (definition) break;
+    }
+  }
+
+  if (!definition) return null;
+
+  // 4. Real example extracted from API or internal fallback
+  let example = findExampleInEntry(entry);
+  if (!example) {
+    for (const other of data) {
+      example = findExampleInEntry(other);
+      if (example) break;
+    }
+  }
+  if (!example) {
+    example = generateInternalFallbackExample(word, partOfSpeech);
+  }
+
+  // 5. Audio and phonetics from official Merriam-Webster CDN
+  let phonetic: string | undefined;
+  let audio: string | undefined;
+  if (entry.hwi) {
+    if (Array.isArray(entry.hwi.prs) && entry.hwi.prs.length > 0) {
+      const pr = entry.hwi.prs[0];
+      phonetic = pr.ipa || pr.mw;
+      if (pr.sound?.audio) {
+        const a = pr.sound.audio;
+        let sub = a.charAt(0);
+        if (a.startsWith('bix')) sub = 'bix';
+        else if (a.startsWith('gg')) sub = 'gg';
+        else if (/^[^a-zA-Z]/.test(a)) sub = 'number';
+        audio = `https://media.merriam-webster.com/audio/prons/en/us/mp3/${sub}/${a}.mp3`;
+      }
+    }
+  }
+
+  return {
+    word,
+    partOfSpeech,
+    definitionEn: definition,
+    exampleSentenceEn: example,
+    phonetic,
+    audio,
+    source: 'merriam-webster',
+    notFound: false,
+  };
+}
+
+let activeMwReference = process.env.MERRIAM_WEBSTER_REF || 'learners';
+const mwCache = new Map<string, any>();
+
+async function queryMerriamWebsterApi(wordToLookup: string): Promise<any> {
+  if (!MERRIAM_WEBSTER_API_KEY) return null;
+  const referencesToTry = [
+    activeMwReference,
+    activeMwReference === 'learners' ? 'collegiate' : 'learners',
+  ];
+
+  for (const ref of referencesToTry) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7000);
+      const url = `https://www.dictionaryapi.com/api/v3/references/${ref}/json/${encodeURIComponent(wordToLookup)}?key=${MERRIAM_WEBSTER_API_KEY}`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!res.ok) continue;
+
+      const text = await res.text();
+      if (text.includes('Not subscribed for this reference') || text.includes('Invalid API key')) {
+        continue;
+      }
+
+      const json = JSON.parse(text);
+      if (Array.isArray(json)) {
+        activeMwReference = ref;
+        return json;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// 2.2 Dictionary Lookup Endpoint (Official Merriam-Webster with structured fallback)
+app.all('/api/dictionary/define', async (req, res) => {
+  const rawWord = (req.body?.word || req.query?.word || '') as string;
+  if (!rawWord || typeof rawWord !== 'string') {
+    return res.status(400).json({ error: 'Word is required' });
+  }
+
+  const cleanWord = rawWord.trim();
+  const lowerWord = cleanWord.toLowerCase();
+  const cacheKey = lowerWord;
+
+  if (mwCache.has(cacheKey)) {
+    return res.json(mwCache.get(cacheKey));
+  }
+
+  // 1. Query official Merriam-Webster API
+  try {
+    const mwData = await queryMerriamWebsterApi(lowerWord);
+    if (mwData) {
+      const mapped = mapMerriamWebsterResponse(mwData, cleanWord);
+      if (mapped) {
+        mwCache.set(cacheKey, mapped);
+        return res.json(mapped);
+      }
+    }
+
+    // Try without trailing punctuation or plural trailing 's' if not found initially
+    if (/[.,!?;:]$/.test(cleanWord) || lowerWord.endsWith('s')) {
+      const strippedWord = cleanWord.replace(/[.,!?;:]+$/, '');
+      const secondaryData = await queryMerriamWebsterApi(strippedWord);
+      if (secondaryData) {
+        const mapped = mapMerriamWebsterResponse(secondaryData, strippedWord);
+        if (mapped) {
+          mwCache.set(cacheKey, mapped);
+          return res.json(mapped);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Merriam-Webster query error:', err);
+  }
+
+  // 2. Secondary fallback to Free Dictionary API if Merriam-Webster has no entry
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const apiRes = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lowerWord)}`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeout);
+
+    if (apiRes.ok) {
+      const data = (await apiRes.json()) as any[];
+      if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].meanings) && data[0].meanings.length > 0) {
+        const entry = data[0];
+        const firstMeaning = entry.meanings[0];
+        const pos = firstMeaning.partOfSpeech || 'word';
+        const firstDefObj = firstMeaning.definitions?.[0];
+        const def = firstDefObj?.definition?.trim() || '';
+
+        let example = firstDefObj?.example?.trim() || '';
+        if (!example && Array.isArray(firstMeaning.definitions)) {
+          const defWithEx = firstMeaning.definitions.find((d: any) => d.example && d.example.trim());
+          if (defWithEx) example = defWithEx.example.trim();
+        }
+        if (!example) {
+          for (const m of entry.meanings) {
+            if (Array.isArray(m.definitions)) {
+              const dEx = m.definitions.find((d: any) => d.example && d.example.trim());
+              if (dEx) {
+                example = dEx.example.trim();
+                break;
+              }
+            }
+          }
+        }
+
+        if (def) {
+          const result = {
+            word: entry.word || cleanWord,
+            partOfSpeech: pos,
+            definitionEn: def,
+            exampleSentenceEn: example ? formatExampleSentence(example) : generateInternalFallbackExample(cleanWord, pos),
+            phonetic: entry.phonetic || entry.phonetics?.find((p: any) => p.text)?.text,
+            audio: entry.phonetics?.find((p: any) => p.audio && p.audio.startsWith('http'))?.audio,
+            source: 'api',
+            notFound: false,
+          };
+          mwCache.set(cacheKey, result);
+          return res.json(result);
+        }
+      }
+    }
+  } catch {
+    // Secondary fallback error
+  }
+
+  // 3. Offline curated dictionary check before notFound
+  const offlineEntry = getDictionaryDefinition(cleanWord);
+  if (offlineEntry && offlineEntry.definitionEn) {
+    const offlineResult = {
+      word: offlineEntry.word || cleanWord,
+      partOfSpeech: offlineEntry.partOfSpeech || 'word',
+      definitionEn: offlineEntry.definitionEn,
+      exampleSentenceEn: formatExampleSentence(offlineEntry.exampleSentenceEn || generateInternalFallbackExample(cleanWord, offlineEntry.partOfSpeech || '')),
+      phonetic: offlineEntry.phonetic,
+      source: 'offline_dict',
+      notFound: false,
+    };
+    mwCache.set(cacheKey, offlineResult);
+    return res.json(offlineResult);
+  }
+
+  // 4. Clean notFound response
+  const notFoundResult = {
+    word: cleanWord,
+    partOfSpeech: '',
+    definitionEn: '',
+    exampleSentenceEn: '',
+    source: 'not_found',
+    notFound: true,
+    errorMessage: 'Palavra não localizada no dicionário oficial.',
+  };
+  return res.json(notFoundResult);
+});
+
+// Internal helper to lookup word definition & examples for pedagogical engine
+async function lookupServerDictionaryWord(cleanWord: string): Promise<{
+  word: string;
+  definitionEn: string;
+  exampleSentenceEn: string;
+  translationPt: string;
+}> {
+  const trimmed = cleanWord.trim();
+  const lower = trimmed.toLowerCase();
+
+  // 1. Offline curated routine dictionary
+  const offline = getDictionaryDefinition(trimmed);
+  if (offline && offline.definitionEn && offline.definitionEn.trim()) {
+    return {
+      word: trimmed,
+      definitionEn: offline.definitionEn.trim(),
+      exampleSentenceEn: offline.exampleSentenceEn?.trim() || `I practice using "${trimmed}" in my daily routine.`,
+      translationPt: offline.translationPt?.trim() || trimmed,
+    };
+  }
+
+  // 2. Merriam-Webster cache
+  if (mwCache.has(lower)) {
+    const cached = mwCache.get(lower);
+    if (cached && !cached.notFound && cached.definitionEn) {
+      return {
+        word: trimmed,
+        definitionEn: cached.definitionEn,
+        exampleSentenceEn: cached.exampleSentenceEn || `I practice using "${trimmed}" in my daily activities.`,
+        translationPt: (cached as any).translationPt || trimmed,
+      };
+    }
+  }
+
+  // 3. Merriam-Webster live query
+  try {
+    const mwData = await queryMerriamWebsterApi(lower);
+    if (mwData) {
+      const mapped = mapMerriamWebsterResponse(mwData, trimmed);
+      if (mapped && mapped.definitionEn) {
+        mwCache.set(lower, mapped);
+        return {
+          word: trimmed,
+          definitionEn: mapped.definitionEn,
+          exampleSentenceEn: mapped.exampleSentenceEn || `I practice using "${trimmed}" in my everyday conversations.`,
+          translationPt: (mapped as any).translationPt || trimmed,
+        };
+      }
+    }
+  } catch {}
+
+  // 4. Free Dictionary API fallback
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lower)}`, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      const data = (await res.json()) as any[];
+      if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].meanings) && data[0].meanings.length > 0) {
+        const firstMeaning = data[0].meanings[0];
+        const def = firstMeaning.definitions?.[0]?.definition?.trim() || '';
+        let ex = firstMeaning.definitions?.[0]?.example?.trim() || '';
+        if (!ex && Array.isArray(firstMeaning.definitions)) {
+          const found = firstMeaning.definitions.find((d: any) => d.example?.trim());
+          if (found) ex = found.example.trim();
+        }
+        if (def) {
+          return {
+            word: trimmed,
+            definitionEn: def,
+            exampleSentenceEn: ex || `I use "${trimmed}" naturally in my daily routine.`,
+            translationPt: trimmed,
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // 5. Default structured vocabulary entry
+  return {
+    word: trimmed,
+    definitionEn: `Essential vocabulary term learned during weekly English immersion.`,
+    exampleSentenceEn: `I practice using "${trimmed}" naturally in my daily conversations.`,
+    translationPt: trimmed,
+  };
+}
+
+// 3. Meet Settings & Teacher Settings Endpoints
+app.get(['/api/meet-settings', '/api/teacher-settings'], async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  const db = readDb();
+  const teacherEmail = ((req.query.teacherEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = (req.query.uid as string) || '';
+  const role = req.query.role as string;
+
+  if (role === 'admin' || teacherEmail === 'adm.itissimple@gmail.com') {
+    const settings = { ...db.meetSettings, ...db.teacherSettings };
+    return res.json(settings);
+  }
+
+  if (teacherEmail || uid) {
+    let specific =
+      (teacherEmail ? (db.meetSettings[teacherEmail] || db.teacherSettings[teacherEmail]) : null) ||
+      (uid ? (db.meetSettings[uid] || db.teacherSettings[uid]) : null) ||
+      null;
+
+    // Check tutor match from db.tutorsList
+    const tutorMatch = (db.tutorsList || []).find(
+      (t: any) =>
+        (teacherEmail && (t.email || '').toLowerCase().trim() === teacherEmail) ||
+        (uid && t.uid === uid)
+    );
+
+    // If specific is not yet found or missing availability, attempt to retrieve from Firestore
+    if (!specific || (!specific.availability && !specific.availableHoursByDay)) {
+      try {
+        const firestoreData = await fetchTeacherAvailabilityFromFirestore(uid || teacherEmail);
+        if (firestoreData) {
+          specific = {
+            ...(specific || {}),
+            ...firestoreData,
+          };
+          if (teacherEmail) {
+            db.meetSettings[teacherEmail] = specific;
+            db.teacherSettings[teacherEmail] = specific;
+          }
+          if (uid) {
+            db.meetSettings[uid] = specific;
+            db.teacherSettings[uid] = specific;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not read teacher availability from Firestore:', err);
+      }
+    }
+
+    const finalResult = {
+      ...(specific || {}),
+      teacherEmail: teacherEmail || specific?.teacherEmail || tutorMatch?.email || '',
+      uid: uid || specific?.uid || tutorMatch?.uid || '',
+    };
+
+    // If meet link is missing, fallback to tutor profile meetUrl
+    if (!finalResult.meetLink && tutorMatch) {
+      finalResult.meetLink = tutorMatch.meetUrl || tutorMatch.meetLink || '';
+    }
+
+    // If availability was stored on tutorMatch, merge it
+    if (!finalResult.availability && tutorMatch?.availability) {
+      finalResult.availability = tutorMatch.availability;
+    }
+    if (!finalResult.availableHoursByDay && tutorMatch?.availableHoursByDay) {
+      finalResult.availableHoursByDay = tutorMatch.availableHoursByDay;
+    }
+    if (!finalResult.availableDays && tutorMatch?.availableDays) {
+      finalResult.availableDays = tutorMatch.availableDays;
+    }
+
+    return res.json(finalResult);
+  }
+
+  // Return all known meet settings
+  res.json({ ...db.meetSettings, ...db.teacherSettings });
+});
+
+app.post(['/api/meet-settings', '/api/teacher-settings'], async (req, res) => {
+  const db = readDb();
+  const settings = req.body.settings || req.body;
+  const teacherEmail = req.body.teacherEmail || settings.teacherEmail;
+  const uid = req.body.uid || settings.uid;
+  if (!teacherEmail || !settings) {
+    return res.status(400).json({ error: 'Missing teacherEmail or settings' });
+  }
+  const cleanEmail = teacherEmail.toLowerCase().trim();
+
+  // Normalize granular availability maps
+  const availability = settings.availability || settings.availableHoursByDay || {};
+  const availableHoursByDay = settings.availableHoursByDay || settings.availability || {};
+
+  const entry = {
+    ...settings,
+    teacherEmail: cleanEmail,
+    ...(uid ? { uid } : {}),
+    availability,
+    availableHoursByDay,
+    updatedAt: new Date().toISOString(),
+  };
+
+  db.meetSettings[cleanEmail] = entry;
+  db.teacherSettings[cleanEmail] = entry;
+  if (uid) {
+    db.meetSettings[uid] = entry;
+    db.teacherSettings[uid] = entry;
+  }
+
+  // Also update corresponding tutor in tutorsList if present
+  if (db.tutorsList && Array.isArray(db.tutorsList)) {
+    const tutorIdx = db.tutorsList.findIndex(
+      (t: any) => (t.email || '').toLowerCase().trim() === cleanEmail || (uid && t.uid === uid)
+    );
+    if (tutorIdx >= 0) {
+      db.tutorsList[tutorIdx] = {
+        ...db.tutorsList[tutorIdx],
+        meetUrl: entry.meetLink || db.tutorsList[tutorIdx].meetUrl,
+        meetLink: entry.meetLink || db.tutorsList[tutorIdx].meetLink,
+        availableDays: entry.availableDays || db.tutorsList[tutorIdx].availableDays,
+        availableHours: entry.availableHours || db.tutorsList[tutorIdx].availableHours,
+        availability: entry.availability || db.tutorsList[tutorIdx].availability,
+        availableHoursByDay: entry.availableHoursByDay || db.tutorsList[tutorIdx].availableHoursByDay,
+        timezone: entry.timezone || db.tutorsList[tutorIdx].timezone,
+      };
+    }
+  }
+
+  await writeDbSync(db);
+
+  // Directly persist to Firestore linked to teacher UID / Email in teacher_availability collection
+  if (uid || cleanEmail) {
+    saveTeacherAvailabilityToFirestore(uid || cleanEmail, entry).catch((err) => {
+      console.warn('Background Firestore teacher availability save failed:', err);
+    });
+  }
+
+  res.json({
+    success: true,
+    settings: entry,
+    meetSettings: db.meetSettings,
+    teacherSettings: db.teacherSettings,
+  });
+});
+
+// 4. Students & Enrollments Endpoints
+app.get('/api/students', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  const db = readDb();
+  const requesterEmail = (
+    (req.query.email as string) ||
+    (req.query.teacherEmail as string) ||
+    (req.query.studentEmail as string) ||
+    ''
+  ).toLowerCase().trim();
+  const role = req.query.role as string;
+  const uid = (req.query.uid as string) || '';
+
+  const adminEmails = [
+    'adm.itissimple@gmail.com',
+    'estilobeeforkids@gmail.com',
+    'adm.itssimple@gmail.com',
+    'estilobeeadm@gmail.com',
+  ];
+
+  const isTeacherAlias = (tEmail: string, searchEmail: string) => {
+    const t = (tEmail || '').toLowerCase().trim();
+    const s = (searchEmail || '').toLowerCase().trim();
+    if (!t || !s) return false;
+    if (t === s) return true;
+    if (adminEmails.includes(t) && adminEmails.includes(s)) return true;
+    return false;
+  };
+
+  // Only return raw all students if explicitly requested with all=true by admin
+  if ((role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') && req.query.all === 'true') {
+    return res.json(db.students || []);
+  }
+
+  if (role === 'teacher' || role === 'admin' || req.query.teacherEmail || requesterEmail) {
+    const studentMap = new Map<string, any>();
+
+    // 1. From db.students where teacherEmail matches and subscription is not cancelled
+    (db.students || []).forEach((s: any) => {
+      const sTeacher = (s.teacherEmail || '').toLowerCase().trim();
+      const sTeacherUid = s.teacherUid || '';
+      const sTeacherName = (s.teacherName || '').toLowerCase().trim();
+      const sStatus = s.status || s.enrollmentStatus;
+
+      // Filter out cancelled or not enrolled students
+      if (sStatus === 'cancelled' || sStatus === 'not_enrolled') {
+        return;
+      }
+
+      const matchesTeacher =
+        isTeacherAlias(sTeacher, requesterEmail) ||
+        (uid && sTeacherUid === uid) ||
+        (adminEmails.includes(requesterEmail) && sTeacherName.includes('simple'));
+
+      if (matchesTeacher) {
+        const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
+        // Check if student profile was transferred or cancelled
+        const p = db.userProfiles?.[sEmail];
+        if (p) {
+          const pTeacher = (p.teacherEmail || '').toLowerCase().trim();
+          if (pTeacher && !isTeacherAlias(pTeacher, requesterEmail)) return;
+          if (p.enrollmentStatus === 'cancelled' || p.enrollmentStatus === 'not_enrolled') return;
+        }
+        if (sEmail) {
+          studentMap.set(sEmail, {
+            ...s,
+            email: sEmail,
+            studentEmail: sEmail,
+            name: s.name || s.studentName || sEmail.split('@')[0],
+            studentName: s.name || s.studentName || sEmail.split('@')[0],
+            status: s.status || 'active',
+          });
+        }
+      }
+    });
+
+    // 2. From db.userProfiles where teacherEmail matches and enrollment is active
+    Object.entries(db.userProfiles || {}).forEach(([pEmail, profile]: [string, any]) => {
+      const cleanPEmail = pEmail.toLowerCase().trim();
+      const pTeacher = (profile.teacherEmail || '').toLowerCase().trim();
+      const pTeacherName = (profile.teacherName || '').toLowerCase().trim();
+      const matchesTeacher =
+        isTeacherAlias(pTeacher, requesterEmail) ||
+        (adminEmails.includes(requesterEmail) && pTeacherName.includes('simple'));
+
+      if (matchesTeacher && profile.role !== 'teacher' && profile.role !== 'admin') {
+        if (profile.enrollmentStatus === 'cancelled' || profile.enrollmentStatus === 'not_enrolled' || profile.status === 'cancelled') {
+          return;
+        }
+        if (!studentMap.has(cleanPEmail)) {
+          studentMap.set(cleanPEmail, {
+            id: profile.id || `st-${cleanPEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: profile.name || cleanPEmail.split('@')[0],
+            studentName: profile.name || cleanPEmail.split('@')[0],
+            email: cleanPEmail,
+            studentEmail: cleanPEmail,
+            level: profile.level || 'iniciante',
+            studentLevel: profile.level || 'iniciante',
+            goal: profile.learningGoal || 'English for everyday life & work',
+            learningGoal: profile.learningGoal || 'English for everyday life & work',
+            teacherEmail: requesterEmail,
+            teacherName: profile.teacherName || '',
+            contractedLessons: Number(profile.contractedLessons ?? db.contractedLessons?.[cleanPEmail] ?? 0),
+            completedLessonsCount: Number(profile.completedLessonsCount || 0),
+            picture: profile.avatar || profile.picture || '',
+            avatar: profile.avatar || profile.picture || '',
+            status: 'active',
+            enrolledAt: profile.createdAt || new Date().toISOString(),
+          });
+        }
+      }
+    });
+
+    // 3. From db.liveLessons where teacherEmail matches and lesson is scheduled/active
+    (db.liveLessons || []).forEach((l: any) => {
+      const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+      if (isTeacherAlias(lTeacher, requesterEmail) && l.status === 'scheduled') {
+        const sEmail = (l.studentEmail || '').toLowerCase().trim();
+        const p = db.userProfiles?.[sEmail];
+        const st = (db.students || []).find((s: any) => (s.email || s.studentEmail || '').toLowerCase().trim() === sEmail);
+        // Exclude if student is known to be cancelled or not enrolled
+        if (p?.enrollmentStatus === 'cancelled' || p?.enrollmentStatus === 'not_enrolled' || p?.status === 'cancelled') return;
+        if (st?.status === 'cancelled' || st?.status === 'not_enrolled' || st?.enrollmentStatus === 'not_enrolled') return;
+        if (sEmail && !studentMap.has(sEmail)) {
+          studentMap.set(sEmail, {
+            id: `st-${sEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: l.studentName || sEmail.split('@')[0],
+            studentName: l.studentName || sEmail.split('@')[0],
+            email: sEmail,
+            studentEmail: sEmail,
+            level: 'iniciante',
+            studentLevel: 'iniciante',
+            goal: 'English for everyday life & work',
+            learningGoal: 'English for everyday life & work',
+            teacherEmail: requesterEmail,
+            teacherName: l.teacherName || '',
+            status: 'active',
+          });
+        }
+      }
+    });
+
+    return res.json(Array.from(studentMap.values()));
+  }
+
+  if (role === 'student' || req.query.studentEmail) {
+    const list = (db.students || []).filter((s: any) =>
+      (s.email || s.studentEmail || '').toLowerCase() === requesterEmail ||
+      (s.uid && s.uid === uid)
+    );
+    return res.json(list);
+  }
+
+  // If unauthenticated or no matching filter, return empty array to prevent data leaks
+  res.json([]);
+});
+
+app.post('/api/students', (req, res) => {
+  const db = readDb();
+  const enrollment = req.body;
+  const email = enrollment.email || enrollment.studentEmail;
+  if (!enrollment || !email) {
+    return res.status(400).json({ error: 'Invalid student data' });
+  }
+  const cleanEmail = email.toLowerCase().trim();
+  const idx = db.students.findIndex((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+  if (idx >= 0) {
+    db.students[idx] = { ...db.students[idx], ...enrollment, email: cleanEmail, studentEmail: cleanEmail };
+  } else {
+    db.students.push({
+      id: enrollment.id || `st-${Date.now()}`,
+      ...enrollment,
+      email: cleanEmail,
+      studentEmail: cleanEmail,
+    });
+  }
+  writeDb(db);
+  res.json(db.students);
+});
+
+app.delete('/api/students/:identifier', async (req, res) => {
+  const db = readDb();
+  const rawId = req.params.identifier;
+  if (!rawId) {
+    return res.status(400).json({ error: 'Identifier is required' });
+  }
+
+  const clean = decodeURIComponent(rawId).toLowerCase().trim();
+  console.log(`[DELETE /api/students] Request to delete student: ${clean}`);
+
+  let targetEmail = clean.includes('@') ? clean : '';
+  const matchingStudent = (db.students || []).find((s: any) => {
+    const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
+    const sId = (s.id || '').toLowerCase().trim();
+    return sEmail === clean || sId === clean;
+  });
+
+  if (matchingStudent) {
+    targetEmail = (matchingStudent.email || matchingStudent.studentEmail || targetEmail).toLowerCase().trim();
+  }
+
+  // Remove from students array
+  db.students = (db.students || []).filter((s: any) => {
+    const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
+    const sId = (s.id || '').toLowerCase().trim();
+    return sEmail !== clean && sId !== clean && (!targetEmail || sEmail !== targetEmail);
+  });
+
+  // Remove from userProfiles
+  if (targetEmail && db.userProfiles?.[targetEmail]) {
+    delete db.userProfiles[targetEmail];
+  }
+
+  // Remove from contractedLessons
+  if (targetEmail && db.contractedLessons?.[targetEmail] !== undefined) {
+    delete db.contractedLessons[targetEmail];
+  }
+
+  // Remove from authUsers
+  if (targetEmail && db.authUsers?.[targetEmail]?.role === 'student') {
+    delete db.authUsers[targetEmail];
+  }
+
+  // Remove from studentRoutinesMap
+  if (targetEmail && db.studentRoutinesMap?.[targetEmail]) {
+    delete db.studentRoutinesMap[targetEmail];
+  }
+
+  // Track permanently in deletedStudentEmails
+  if (!Array.isArray(db.deletedStudentEmails)) {
+    db.deletedStudentEmails = [];
+  }
+  if (targetEmail && !db.deletedStudentEmails.includes(targetEmail)) {
+    db.deletedStudentEmails.push(targetEmail);
+  }
+
+  await writeDbSync(db);
+
+  // Clean from Firestore users collection if present
+  const firestoreDb = getFirestoreDb();
+  if (firestoreDb && targetEmail) {
+    try {
+      const { deleteDoc, doc, getDocs, collection } = await import('firebase/firestore');
+      const usersSnap = await getDocs(collection(firestoreDb, 'users'));
+      for (const d of usersSnap.docs) {
+        const u = d.data();
+        if ((u.email || '').toLowerCase().trim() === targetEmail || d.id.toLowerCase() === targetEmail) {
+          await deleteDoc(doc(firestoreDb, 'users', d.id));
+        }
+      }
+    } catch (e) {
+      console.warn('Could not delete user from Firestore users collection:', e);
+    }
+  }
+
+  res.json({ success: true, message: 'Student profile deleted successfully', email: targetEmail });
+});
+
+app.post('/api/students/profile', (req, res) => {
+  const db = readDb();
+  const { profile, picture } = req.body;
+  if (!profile || !profile.email) {
+    return res.status(400).json({ error: 'Profile email is required' });
+  }
+  const cleanEmail = profile.email.toLowerCase().trim();
+  if (!db.userProfiles) db.userProfiles = {};
+  const existingProfile = db.userProfiles[cleanEmail] || {};
+
+  db.userProfiles[cleanEmail] = {
+    ...existingProfile,
+    ...profile,
+    email: cleanEmail,
+    name: profile.name || existingProfile.name,
+    level: profile.level || existingProfile.level,
+    learningGoal: profile.learningGoal || existingProfile.learningGoal,
+    dailyGoalMinutes: profile.dailyGoalMinutes ?? existingProfile.dailyGoalMinutes ?? 30,
+    avatar: picture || profile.avatar || existingProfile.avatar,
+    picture: picture || profile.picture || existingProfile.picture,
+    // Preserve core counters
+    contractedLessons: existingProfile.contractedLessons ?? db.contractedLessons?.[cleanEmail] ?? 5,
+    completedLessonsCount: existingProfile.completedLessonsCount ?? 0,
+    routineVideoTime: profile.routineVideoTime || existingProfile.routineVideoTime || '09:00',
+    routineAudioTime: profile.routineAudioTime || existingProfile.routineAudioTime || '14:00',
+    dailyPhraseTime: profile.dailyPhraseTime || existingProfile.dailyPhraseTime || '20:00',
+    teacherEmail: profile.teacherEmail !== undefined ? profile.teacherEmail : existingProfile.teacherEmail,
+    teacherName: profile.teacherName !== undefined ? profile.teacherName : existingProfile.teacherName,
+  };
+
+  const idx = db.students.findIndex((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+  if (idx >= 0) {
+    db.students[idx] = {
+      ...db.students[idx],
+      name: profile.name || db.students[idx].name,
+      studentName: profile.name || db.students[idx].studentName,
+      level: profile.level || db.students[idx].level,
+      studentLevel: profile.level || db.students[idx].studentLevel,
+      goal: profile.learningGoal || db.students[idx].goal,
+      learningGoal: profile.learningGoal || db.students[idx].learningGoal,
+      picture: picture || profile.avatar || db.students[idx].picture,
+      avatar: picture || profile.avatar || db.students[idx].avatar,
+      routineVideoTime: profile.routineVideoTime || db.students[idx].routineVideoTime || '09:00',
+      routineAudioTime: profile.routineAudioTime || db.students[idx].routineAudioTime || '14:00',
+      dailyPhraseTime: profile.dailyPhraseTime || db.students[idx].dailyPhraseTime || '20:00',
+    };
+  }
+
+  writeDb(db);
+  res.json({ success: true, profile: db.userProfiles[cleanEmail] });
+});
+
+app.get('/api/user-profile', (req, res) => {
+  const db = readDb();
+  const rawEmail = ((req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const resolved = resolveStudentIdentifiers(db, rawEmail, uid);
+  const email = resolved.email || rawEmail;
+  if (!email && !uid) {
+    return res.status(400).json({ error: 'Email or UID parameter is required' });
+  }
+
+  // If user is a teacher / Native Friend, return their tutor profile directly
+  const isTeacherUser =
+    db.authUsers?.[email]?.role === 'teacher' ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === email) ||
+    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === email && t.role === 'teacher');
+
+  if (isTeacherUser) {
+    const tutor =
+      (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === email) ||
+      (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === email) ||
+      db.authUsers?.[email];
+    return res.json({
+      success: true,
+      role: 'teacher',
+      isTeacher: true,
+      tutor: tutor || null,
+      message: 'Native Friend profile retrieved successfully',
+    });
+  }
+
+  let profile = db.userProfiles?.[email] || null;
+  const student = (db.students || []).find(
+    (s) => (s.email || s.studentEmail || '').toLowerCase() === email
+  );
+
+  if (profile && student) {
+    // Fill in any missing fields from student without overwriting existing profile data
+    profile = {
+      ...profile,
+      name: profile.name || student.name || student.studentName,
+      level: profile.level || student.level || student.studentLevel,
+      learningGoal: profile.learningGoal || student.goal || student.learningGoal,
+      routineVideoTime: profile.routineVideoTime || student.routineVideoTime || '09:00',
+      routineAudioTime: profile.routineAudioTime || student.routineAudioTime || '14:00',
+      dailyPhraseTime: profile.dailyPhraseTime || student.dailyPhraseTime || '20:00',
+      contractedLessons: profile.contractedLessons ?? student.contractedLessons ?? db.contractedLessons?.[email] ?? 5,
+      completedLessonsCount: profile.completedLessonsCount ?? student.completedLessonsCount ?? 0,
+      teacherEmail: profile.teacherEmail || student.teacherEmail,
+      teacherName: profile.teacherName || student.teacherName,
+    };
+    db.userProfiles[email] = profile;
+    writeDb(db);
+  } else if (!profile && student) {
+    profile = {
+      id: student.id || `usr-${Date.now()}`,
+      name: student.name || student.studentName,
+      email,
+      level: student.level || student.studentLevel || 'iniciante',
+      teacherEmail: student.teacherEmail,
+      teacherName: student.teacherName,
+      routineVideoTime: student.routineVideoTime || '09:00',
+      routineAudioTime: student.routineAudioTime || '14:00',
+      dailyPhraseTime: student.dailyPhraseTime || '20:00',
+      enrollmentStatus: student.status || 'active',
+      learningGoal: student.goal || student.learningGoal || 'English for everyday life & work',
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: student.contractedLessons ?? db.contractedLessons?.[email] ?? 5,
+      completedLessonsCount: student.completedLessonsCount ?? 0,
+      createdAt: student.createdAt || new Date().toISOString(),
+      avatar: student.avatar || student.picture,
+      picture: student.picture || student.avatar,
+    };
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[email] = profile;
+    writeDb(db);
+  } else if (!profile && !student) {
+    const defaultName = (req.query.name as string) || email.split('@')[0];
+    profile = {
+      id: `usr-${Date.now()}`,
+      name: defaultName.charAt(0).toUpperCase() + defaultName.slice(1),
+      email,
+      level: 'iniciante',
+      routineVideoTime: '09:00',
+      routineAudioTime: '14:00',
+      dailyPhraseTime: '20:00',
+      enrollmentStatus: 'not_enrolled',
+      learningGoal: 'English for everyday life & work',
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: db.contractedLessons?.[email] ?? 0,
+      completedLessonsCount: 0,
+      teacherEmail: null,
+      teacherName: null,
+      createdAt: new Date().toISOString(),
+    };
+    if (!db.userProfiles) db.userProfiles = {};
+    db.userProfiles[email] = profile;
+    writeDb(db);
+  }
+
+  if (profile) {
+    const studentPlanDays =
+      (db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+        ? db.weeklyStudyDays[email]
+        : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+        ? db.weeklyStudyDays[uid]
+        : profile.weeklyStudyDays || profile.selectedStudyDays || undefined;
+    if (studentPlanDays) {
+      profile.weeklyStudyDays = studentPlanDays;
+      profile.selectedStudyDays = studentPlanDays;
+    }
+    const studyTarget =
+      (db.weeklyStudyDaysTargets?.[email] !== undefined)
+        ? db.weeklyStudyDaysTargets[email]
+        : (uid && db.weeklyStudyDaysTargets?.[uid] !== undefined)
+        ? db.weeklyStudyDaysTargets[uid]
+        : profile.weeklyStudyDaysTarget || undefined;
+    if (studyTarget !== undefined) {
+      profile.weeklyStudyDaysTarget = studyTarget;
+    }
+    const journalEntries =
+      (email && db.studentActivityJournal?.[email]) ||
+      (uid && db.studentActivityJournal?.[uid]) ||
+      profile.studentJournal ||
+      [];
+    profile.studentJournal = journalEntries;
+  }
+
+  res.json({ success: true, profile });
+});
+
+app.post('/api/user-profile', async (req, res) => {
+  const db = readDb();
+  const rawProfile = req.body.profile || req.body;
+  const email = (req.body.email || rawProfile.email || '').toLowerCase().trim();
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  const isTeacherUser =
+    db.authUsers?.[email]?.role === 'teacher' ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === email) ||
+    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === email && t.role !== 'admin');
+
+  if (isTeacherUser) {
+    const tutorIdx = (db.tutorsList || []).findIndex((t: any) => (t.email || '').toLowerCase() === email);
+    if (tutorIdx >= 0) {
+      db.tutorsList[tutorIdx] = {
+        ...db.tutorsList[tutorIdx],
+        ...rawProfile,
+        email,
+        role: 'teacher',
+      };
+    }
+    if (db.userProfiles?.[email]) {
+      delete db.userProfiles[email];
+    }
+    writeDb(db);
+    return res.json({
+      success: true,
+      role: 'teacher',
+      isTeacher: true,
+      tutor: tutorIdx >= 0 ? db.tutorsList[tutorIdx] : rawProfile,
+      profile: null,
+    });
+  }
+
+  if (!db.userProfiles) db.userProfiles = {};
+  const existing = db.userProfiles[email] || {};
+
+  const updatedTeacherEmail =
+    rawProfile.teacherEmail !== undefined ? (rawProfile.teacherEmail || null) : (existing.teacherEmail ?? null);
+  const updatedTeacherName =
+    rawProfile.teacherName !== undefined ? (rawProfile.teacherName || null) : (existing.teacherName ?? null);
+
+  const oldLevelKey = normalizeStudentLevel(existing.level).key;
+  const newLevelKey = normalizeStudentLevel(rawProfile.level || existing.level).key;
+
+  db.userProfiles[email] = {
+    ...existing,
+    ...rawProfile,
+    email,
+    name: rawProfile.name || existing.name,
+    level: rawProfile.level || existing.level,
+    learningGoal: rawProfile.learningGoal || existing.learningGoal,
+    dailyGoalMinutes: rawProfile.dailyGoalMinutes ?? existing.dailyGoalMinutes ?? 30,
+    contractedLessons: rawProfile.contractedLessons ?? existing.contractedLessons ?? db.contractedLessons?.[email] ?? 0,
+    completedLessonsCount: existing.completedLessonsCount ?? rawProfile.completedLessonsCount ?? 0,
+    teacherEmail: updatedTeacherEmail,
+    teacherName: updatedTeacherName,
+    enrollmentStatus: rawProfile.enrollmentStatus || existing.enrollmentStatus || (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+    studentJournal: rawProfile.studentJournal || existing.studentJournal || db.studentActivityJournal?.[email] || [],
+  };
+
+  const studentIdx = (db.students || []).findIndex(
+    (s) => (s.email || s.studentEmail || '').toLowerCase() === email
+  );
+  if (studentIdx >= 0) {
+    db.students[studentIdx] = {
+      ...db.students[studentIdx],
+      name: rawProfile.name || db.students[studentIdx].name,
+      studentName: rawProfile.name || db.students[studentIdx].studentName,
+      level: rawProfile.level || db.students[studentIdx].level,
+      studentLevel: rawProfile.level || db.students[studentIdx].studentLevel,
+      goal: rawProfile.learningGoal || db.students[studentIdx].goal,
+      learningGoal: rawProfile.learningGoal || db.students[studentIdx].learningGoal,
+      picture: rawProfile.avatar || rawProfile.picture || db.students[studentIdx].picture,
+      avatar: rawProfile.avatar || rawProfile.picture || db.students[studentIdx].avatar,
+      teacherEmail: updatedTeacherEmail,
+      teacherName: updatedTeacherName,
+      status: db.userProfiles[email].enrollmentStatus === 'cancelled' ? 'cancelled' : (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+    };
+  } else {
+    if (!db.students) db.students = [];
+    const studentName = rawProfile.name || existing.name || email.split('@')[0];
+    db.students.push({
+      id: `st-${Date.now()}`,
+      name: studentName,
+      studentName: studentName,
+      email,
+      studentEmail: email,
+      level: rawProfile.level || 'iniciante',
+      studentLevel: rawProfile.level || 'iniciante',
+      goal: rawProfile.learningGoal || 'English for everyday life & work',
+      learningGoal: rawProfile.learningGoal || 'English for everyday life & work',
+      contractedLessons: Number(rawProfile.contractedLessons ?? db.contractedLessons?.[email] ?? 0),
+      completedLessonsCount: 0,
+      teacherEmail: updatedTeacherEmail,
+      teacherName: updatedTeacherName,
+      status: db.userProfiles[email].enrollmentStatus === 'cancelled' ? 'cancelled' : (updatedTeacherEmail ? 'active' : 'not_enrolled'),
+      activeSince: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // If student level changed, redistribute Spotify and YouTube tracks to match the new level
+  if (oldLevelKey !== newLevelKey || !db.studentSpotifyAssignments?.[email]) {
+    const studentPlanDays: string[] =
+      db.userProfiles[email]?.weeklyStudyDays ||
+      db.userProfiles[email]?.selectedStudyDays ||
+      DAYS_SEQUENCE;
+    const resolvedUid = db.userProfiles[email]?.uid || '';
+    distributeWeeklySpotifyForStudent(db, email, resolvedUid, newLevelKey, undefined, undefined, studentPlanDays);
+    distributeWeeklyYouTubeForStudent(db, email, resolvedUid, newLevelKey, undefined, undefined, studentPlanDays);
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, profile: db.userProfiles[email] });
+});
+
+// Purchase Lesson Package with a specific Native Friend (binds tutor as fixed + adds lessons)
+app.post('/api/students/purchase-package', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, teacherEmail, teacherName, packageLessons, packageName, packagePriceBrl, packagePriceUsd, paymentMethod } = req.body;
+  const cleanStudentEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanTeacherEmail = (teacherEmail || '').toLowerCase().trim();
+
+  if (!cleanStudentEmail || !cleanTeacherEmail) {
+    return res.status(400).json({ error: 'studentEmail and teacherEmail are required' });
+  }
+
+  const lessonsToAdd = Number(packageLessons) > 0 ? Number(packageLessons) : 5;
+
+  // Find teacher name if not provided
+  let finalTeacherName = teacherName;
+  if (!finalTeacherName) {
+    const tutorMatch = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanTeacherEmail);
+    const teacherMatch = (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === cleanTeacherEmail);
+    finalTeacherName = tutorMatch?.name || teacherMatch?.name || cleanTeacherEmail.split('@')[0];
+  }
+
+  // Update contracted lessons count
+  if (!db.contractedLessons) db.contractedLessons = {};
+  const currentContracted = Number(db.contractedLessons[cleanStudentEmail] || 0);
+  const newTotal = currentContracted + lessonsToAdd;
+  db.contractedLessons[cleanStudentEmail] = newTotal;
+
+  // Update student in db.students
+  let studentFound = false;
+  db.students = (db.students || []).map((s: any) => {
+    if ((s.email || s.studentEmail || '').toLowerCase() === cleanStudentEmail) {
+      studentFound = true;
+      return {
+        ...s,
+        teacherEmail: cleanTeacherEmail,
+        teacherName: finalTeacherName,
+        contractedLessons: newTotal,
+        status: 'active',
+      };
+    }
+    return s;
+  });
+
+  if (!studentFound) {
+    db.students.push({
+      id: `st-${Date.now()}`,
+      name: cleanStudentEmail.split('@')[0],
+      studentName: cleanStudentEmail.split('@')[0],
+      email: cleanStudentEmail,
+      studentEmail: cleanStudentEmail,
+      level: 'iniciante',
+      studentLevel: 'iniciante',
+      goal: 'English for everyday life & work',
+      learningGoal: 'English for everyday life & work',
+      contractedLessons: newTotal,
+      completedLessonsCount: 0,
+      teacherEmail: cleanTeacherEmail,
+      teacherName: finalTeacherName,
+      routineVideoTime: '09:00',
+      routineAudioTime: '14:00',
+      dailyPhraseTime: '20:00',
+      status: 'active',
+      activeSince: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // Update db.userProfiles
+  if (!db.userProfiles) db.userProfiles = {};
+  const existingProfile = db.userProfiles[cleanStudentEmail] || {};
+  db.userProfiles[cleanStudentEmail] = {
+    ...existingProfile,
+    id: existingProfile.id || `usr-${Date.now()}`,
+    email: cleanStudentEmail,
+    name: existingProfile.name || cleanStudentEmail.split('@')[0],
+    level: existingProfile.level || 'iniciante',
+    teacherEmail: cleanTeacherEmail,
+    teacherName: finalTeacherName,
+    enrollmentStatus: 'active',
+    contractedLessons: newTotal,
+    completedLessonsCount: existingProfile.completedLessonsCount || 0,
+  };
+
+  // Record transaction
+  if (!db.transactions) db.transactions = [];
+  const transaction = {
+    id: `tx-${Date.now()}`,
+    studentEmail: cleanStudentEmail,
+    teacherEmail: cleanTeacherEmail,
+    teacherName: finalTeacherName,
+    packageLessons: lessonsToAdd,
+    packageName: packageName || `${lessonsToAdd} Aulas`,
+    packagePriceBrl: packagePriceBrl || lessonsToAdd * 90,
+    packagePriceUsd: packagePriceUsd || lessonsToAdd * 16,
+    paymentMethod: paymentMethod || 'credit_card',
+    timestamp: new Date().toISOString(),
+    status: 'completed',
+  };
+  db.transactions.unshift(transaction);
+
+  await writeDbSync(db);
+
+  res.json({
+    success: true,
+    message: 'Package purchased successfully and Native Friend assigned',
+    contractedLessons: newTotal,
+    profile: db.userProfiles[cleanStudentEmail],
+    transaction,
+  });
+});
+
+app.post('/api/students/contract', (req, res) => {
+  const db = readDb();
+  const { email, studentEmail, count } = req.body;
+  const cleanEmail = (email || studentEmail || '').toLowerCase().trim();
+  if (cleanEmail && count !== undefined) {
+    db.contractedLessons[cleanEmail] = Number(count);
+    db.students = db.students.map((s) =>
+      (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+        ? { ...s, contractedLessons: Number(count) }
+        : s
+    );
+    writeDb(db);
+  }
+  res.json({ success: true, contractedLessons: db.contractedLessons });
+});
+
+app.post('/api/students/cancel', (req, res) => {
+  const db = readDb();
+  const { studentEmail, email, cancelledBy } = req.body;
+  const cleanEmail = (studentEmail || email || '').toLowerCase().trim();
+  db.students = db.students.map((s) =>
+    (s.studentEmail || s.email || '').toLowerCase() === cleanEmail
+      ? { ...s, status: 'cancelled', cancelledAt: new Date().toISOString(), cancelledBy: cancelledBy || 'teacher' }
+      : s
+  );
+  writeDb(db);
+  res.json({ success: true, students: db.students });
+});
+
+// Helper to resolve student email and UID bi-directionally
+const GENERIC_PLACEHOLDER_EMAILS = new Set([
+  'aluno@itssimple.com',
+  'student@itssimple.com',
+  'user@example.com',
+  'test@example.com',
+  'student@example.com',
+]);
+
+function resolveStudentIdentifiers(
+  db: AppDb,
+  emailOrUid?: string | null,
+  explicitUid?: string | null
+): { email: string; uid: string } {
+  let email = (emailOrUid && emailOrUid.includes('@') ? emailOrUid : '').toLowerCase().trim();
+  let uid = (explicitUid || (!emailOrUid?.includes('@') ? (emailOrUid || '') : '')).trim();
+
+  // If explicit uid is known, verify and prioritize genuine email mapped to this UID
+  if (uid) {
+    const student = (db.students || []).find((s: any) => s.uid === uid || s.id === uid);
+    if (student?.email || student?.studentEmail) {
+      email = (student.email || student.studentEmail).toLowerCase().trim();
+    } else {
+      const authUser = Object.values(db.authUsers || {}).find((u: any) => u.uid === uid);
+      if (authUser?.email) {
+        email = authUser.email.toLowerCase().trim();
+      }
+    }
+  }
+
+  // If email is known but uid is not, resolve uid from students, userProfiles, or authUsers
+  if (email && !uid && !GENERIC_PLACEHOLDER_EMAILS.has(email)) {
+    const student = (db.students || []).find((s: any) =>
+      ((s.email || s.studentEmail || '').toLowerCase().trim() === email)
+    );
+    if (student?.uid || student?.id) uid = (student.uid || student.id).trim();
+
+    if (!uid) {
+      const authUser = Object.values(db.authUsers || {}).find((u: any) => (u.email || '').toLowerCase().trim() === email);
+      if (authUser?.uid) uid = authUser.uid.trim();
+    }
+    if (!uid && db.userProfiles?.[email]?.uid) {
+      uid = db.userProfiles[email].uid.trim();
+    }
+  }
+
+  // If email is a generic placeholder, clear it so it never acts as a shared key across students
+  if (GENERIC_PLACEHOLDER_EMAILS.has(email)) {
+    email = '';
+  }
+
+  return { email, uid };
+}
+
+// Helper to resolve student level for playlist mapping
+function resolveStudentLevel(db: AppDb, email?: string, uid?: string): string {
+  if (email && db.userProfiles?.[email]?.level) return db.userProfiles[email].level;
+  if (uid) {
+    const student = (db.students || []).find((s: any) => s.uid === uid || s.id === uid);
+    if (student?.level || student?.studentLevel) return student.level || student.studentLevel;
+    const profile = Object.values(db.userProfiles || {}).find((p: any) => p.uid === uid);
+    if (profile?.level) return profile.level;
+  }
+  if (email) {
+    const student = (db.students || []).find(
+      (s: any) => (s.email || s.studentEmail || '').toLowerCase().trim() === email.toLowerCase().trim()
+    );
+    if (student?.level || student?.studentLevel) return student.level || student.studentLevel;
+  }
+  return 'beginner';
+}
+
+/**
+ * Ensures strict sequential 7-day exclusive track assignment for a student across all days (Monday to Sunday)
+ * Each day receives one unique track from the curated level playlist, completely preventing repetitions.
+ */
+function distributeWeeklySpotifyForStudent(
+  db: AppDb,
+  email: string,
+  uid: string,
+  rawLevel?: string,
+  teacherUid?: string,
+  teacherEmail?: string,
+  activeDays?: string[]
+): any[] {
+  const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
+  const dbSpotifyPlaylists = db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
+  const levelPlaylist = dbSpotifyPlaylists[normLevel] || dbSpotifyPlaylists.beginner || SPOTIFY_LEVEL_PLAYLISTS[normLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+
+  const targetKeys = Array.from(new Set([email, uid].filter(Boolean) as string[]));
+  if (targetKeys.length === 0) return [];
+
+  if (!db.studentSpotifyAssignments) db.studentSpotifyAssignments = {};
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+
+  let studentRoutines =
+    (email && db.studentRoutinesMap[email]) ||
+    (uid && db.studentRoutinesMap[uid]) ||
+    null;
+
+  if (!studentRoutines || typeof studentRoutines !== 'object' || Object.keys(studentRoutines).length === 0) {
+    studentRoutines = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+  } else {
+    // Ensure all 7 days exist
+    DAYS_SEQUENCE.forEach((d) => {
+      if (!studentRoutines[d] || !Array.isArray(studentRoutines[d]) || studentRoutines[d].length === 0) {
+        studentRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay?.[d] || defaultRoutinesByDay[d] || []));
+      }
+    });
+  }
+
+  // Resolve active study days for this student
+  const studentConfiguredDays: string[] =
+    (activeDays && Array.isArray(activeDays) && activeDays.length > 0)
+      ? activeDays
+      : (email && db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+      ? db.weeklyStudyDays[email]
+      : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+      ? db.weeklyStudyDays[uid]
+      : (email && db.userProfiles?.[email]?.weeklyStudyDays && db.userProfiles[email].weeklyStudyDays.length > 0)
+      ? db.userProfiles[email].weeklyStudyDays
+      : (email && db.userProfiles?.[email]?.selectedStudyDays && db.userProfiles[email].selectedStudyDays.length > 0)
+      ? db.userProfiles[email].selectedStudyDays
+      : DAYS_SEQUENCE;
+
+  const targetDays = DAYS_SEQUENCE.filter((d) => studentConfiguredDays.includes(d));
+  const daysToDistribute = targetDays.length > 0 ? targetDays : DAYS_SEQUENCE;
+
+  // Consumed tracks: already listened by this student OR in studentJournal (Single Source of Truth)
+  const consumedTrackIds = new Set<string>();
+  targetKeys.forEach((k) => {
+    const listened = db.studentListenedTracks?.[k] || [];
+    listened.forEach((id: string) => {
+      const cid = extractSpotifyTrackId(id);
+      if (cid) consumedTrackIds.add(cid);
+    });
+
+    const journalEntries = [
+      ...((db.studentActivityJournal?.[k]) || []),
+      ...((db.userProfiles?.[k]?.studentJournal) || []),
+    ];
+    journalEntries.forEach((entry: any) => {
+      if (entry && entry.type === 'audio' && entry.id) {
+        const cid = extractSpotifyTrackId(entry.id);
+        if (cid) consumedTrackIds.add(cid);
+        if (entry.url) {
+          const urlCid = extractSpotifyTrackId(entry.url);
+          if (urlCid) consumedTrackIds.add(urlCid);
+        }
+      }
+    });
+  });
+
+  const assignedRecords: any[] = [];
+  const assignedInWeekTrackIds = new Set<string>();
+
+  // All tracks from the level playlist in order, including extended track pool for multi-week cycles
+  const allTracks = [
+    ...DAYS_SEQUENCE.map((d, i) => ({
+      day: d,
+      index: i + 1,
+      ...levelPlaylist.tracks[d],
+    })),
+    ...(levelPlaylist.pool || []).map((p: any, i: number) => ({
+      day: p.dayOfWeek || 'monday',
+      index: 8 + i,
+      ...p,
+    })),
+  ];
+
+  daysToDistribute.forEach((dayKey, idx) => {
+    const designatedTrack = levelPlaylist.tracks[dayKey];
+    let chosenTrack = designatedTrack;
+    const designatedTrackId = extractSpotifyTrackId(designatedTrack?.url || (designatedTrack as any)?.trackId);
+
+    // Anti-repetition check:
+    // If designated track was already listened OR already assigned to an earlier day this week:
+    if (!designatedTrackId || consumedTrackIds.has(designatedTrackId) || assignedInWeekTrackIds.has(designatedTrackId)) {
+      // Find next unseen track in the level playlist
+      const unseenCandidate = allTracks.find((t) => {
+        const tid = extractSpotifyTrackId(t.url || (t as any).trackId);
+        return tid && !consumedTrackIds.has(tid) && !assignedInWeekTrackIds.has(tid);
+      });
+
+      if (unseenCandidate) {
+        chosenTrack = unseenCandidate;
+      } else {
+        // If all consumed, pick one not yet assigned in this specific week
+        const unassignedThisWeek = allTracks.find((t) => {
+          const tid = extractSpotifyTrackId(t.url || (t as any).trackId);
+          return tid && !assignedInWeekTrackIds.has(tid);
+        });
+        chosenTrack = unassignedThisWeek || designatedTrack;
+      }
+    }
+
+    const trackId = extractSpotifyTrackId(chosenTrack.url) || (chosenTrack as any).trackId || `track-${idx}`;
+    assignedInWeekTrackIds.add(trackId);
+
+    const canonicalUrl = `https://open.spotify.com/track/${trackId}`;
+    const embedUrl = chosenTrack.embedUrl || `https://open.spotify.com/embed/track/${trackId}?utm_source=generator&theme=0`;
+
+    const trackObj = {
+      id: `sp-${dayKey}-${Date.now()}-${idx}`,
+      url: canonicalUrl,
+      trackId,
+      title: chosenTrack.title,
+      artistOrHost: chosenTrack.artist,
+      duration: (chosenTrack as any)?.duration || '3-4 min',
+      instructions: chosenTrack.teacherTipPt || 'Sugestão diária do Teacher: Ouça com atenção e pratique a compreensão auditiva.',
+      type: 'music' as const,
+      addedAt: new Date().toISOString(),
+      level: normLevel,
+      playlistId: levelPlaylist.playlistId,
+      playlistTitle: levelPlaylist.playlistTitle,
+      trackIndex: idx + 1,
+    };
+
+    const assignmentRecord = {
+      id: `spot-assign-${dayKey}-${Date.now()}-${idx}`,
+      activityId: `act-${dayKey}-2`,
+      studentEmail: email,
+      studentUid: uid,
+      teacherUid: (teacherUid || '').trim(),
+      teacherEmail: (teacherEmail || '').trim(),
+      day: dayKey,
+      trackId,
+      trackTitle: chosenTrack.title,
+      trackUrl: canonicalUrl,
+      embedUrl,
+      title: chosenTrack.title,
+      artistOrHost: chosenTrack.artist,
+      type: 'music' as const,
+      instructions: trackObj.instructions,
+      assignedAt: new Date().toISOString(),
+      level: normLevel,
+      playlistId: levelPlaylist.playlistId,
+      playlistTitle: levelPlaylist.playlistTitle,
+      trackIndex: idx + 1,
+    };
+
+    assignedRecords.push(assignmentRecord);
+
+    if (studentRoutines && studentRoutines[dayKey]) {
+      let matched = false;
+      studentRoutines[dayKey] = studentRoutines[dayKey].map((item: any) => {
+        const isTarget =
+          item.id?.endsWith('2') ||
+          item.activityName?.toLowerCase().includes('podcast') ||
+          item.activityName?.toLowerCase().includes('áudio') ||
+          item.activityName?.toLowerCase().includes('audio');
+        if (isTarget) {
+          matched = true;
+          return { ...item, teacherSpotify: trackObj };
+        }
+        return item;
+      });
+      if (!matched && studentRoutines[dayKey].length > 0) {
+        studentRoutines[dayKey][0] = {
+          ...studentRoutines[dayKey][0],
+          teacherSpotify: trackObj,
+        };
+      }
+    }
+  });
+
+  targetKeys.forEach((key) => {
+    db.studentSpotifyAssignments![key] = assignedRecords;
+    db.studentRoutinesMap[key] = studentRoutines;
+  });
+
+  if (uid) {
+    saveStudentAssignmentsByUid(uid, {
+      uid,
+      email,
+      level: normLevel,
+      spotifyAssignments: assignedRecords,
+      videoAssignments: db.studentVideoAssignments?.[uid] || db.studentVideoAssignments?.[email] || [],
+      routines: studentRoutines,
+      updatedAt: new Date().toISOString(),
+    }).catch((err) => console.warn('Firestore saveStudentAssignmentsByUid (Spotify) notice:', err));
+  }
+
+  return assignedRecords;
+}
+
+/**
+ * Ensures strict sequential 7-day exclusive YouTube video assignment for a student across all days (Monday to Sunday)
+ * Each day receives one unique video from the curated level curriculum (YOUTUBE_LEVEL_PLAYLISTS + pool), completely preventing repetitions.
+ */
+function distributeWeeklyYouTubeForStudent(
+  db: AppDb,
+  email: string,
+  uid: string,
+  rawLevel?: string,
+  teacherUid?: string,
+  teacherEmail?: string,
+  activeDays?: string[],
+  extraWatchedIds?: string[]
+): any[] {
+  const normLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, email, uid)).key;
+  const levelPlaylist = YOUTUBE_LEVEL_PLAYLISTS[normLevel] || YOUTUBE_LEVEL_PLAYLISTS.beginner;
+
+  const targetKeys = Array.from(new Set([email, uid].filter(Boolean) as string[]));
+  if (targetKeys.length === 0) return [];
+
+  if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+
+  let studentRoutines =
+    (email && db.studentRoutinesMap[email]) ||
+    (uid && db.studentRoutinesMap[uid]) ||
+    null;
+
+  if (!studentRoutines || typeof studentRoutines !== 'object' || Object.keys(studentRoutines).length === 0) {
+    studentRoutines = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+  } else {
+    DAYS_SEQUENCE.forEach((d) => {
+      if (!studentRoutines[d] || !Array.isArray(studentRoutines[d]) || studentRoutines[d].length === 0) {
+        studentRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay?.[d] || defaultRoutinesByDay[d] || []));
+      }
+    });
+  }
+
+  // Resolve active study days for this student
+  const studentConfiguredDays: string[] =
+    (activeDays && Array.isArray(activeDays) && activeDays.length > 0)
+      ? activeDays
+      : (email && db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+      ? db.weeklyStudyDays[email]
+      : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+      ? db.weeklyStudyDays[uid]
+      : (email && db.userProfiles?.[email]?.weeklyStudyDays && db.userProfiles[email].weeklyStudyDays.length > 0)
+      ? db.userProfiles[email].weeklyStudyDays
+      : (email && db.userProfiles?.[email]?.selectedStudyDays && db.userProfiles[email].selectedStudyDays.length > 0)
+      ? db.userProfiles[email].selectedStudyDays
+      : DAYS_SEQUENCE;
+
+  const targetDays = DAYS_SEQUENCE.filter((d) => studentConfiguredDays.includes(d));
+  const daysToDistribute = targetDays.length > 0 ? targetDays : DAYS_SEQUENCE;
+
+  // Consumed videos: already watched by this student (from watched history AND studentJournal)
+  const consumedVideoIds = new Set<string>();
+  targetKeys.forEach((k) => {
+    const watched = db.studentWatchedVideos?.[k] || [];
+    watched.forEach((id: string) => {
+      const vid = extractServerYouTubeId(id);
+      if (vid) consumedVideoIds.add(vid);
+    });
+
+    const journalEntries = [
+      ...((db.studentActivityJournal?.[k]) || []),
+      ...((db.userProfiles?.[k]?.studentJournal) || []),
+    ];
+    journalEntries.forEach((entry: any) => {
+      if (entry && entry.type === 'video' && entry.id) {
+        const vid = extractServerYouTubeId(entry.id);
+        if (vid) consumedVideoIds.add(vid);
+        if (entry.url) {
+          const urlVid = extractServerYouTubeId(entry.url);
+          if (urlVid) consumedVideoIds.add(urlVid);
+        }
+      }
+    });
+  });
+
+  if (Array.isArray(extraWatchedIds)) {
+    extraWatchedIds.forEach((id: string) => {
+      const vid = extractServerYouTubeId(id);
+      if (vid) consumedVideoIds.add(vid);
+    });
+  }
+
+  const assignedRecords: any[] = [];
+  const assignedInWeekVideoIds = new Set<string>();
+
+  // Incorporate dynamic playlists from the YouTube channel as candidate pool
+  const channelPlaylistCandidates: any[] = [];
+  if (db.youtubePlaylists && Array.isArray(db.youtubePlaylists)) {
+    db.youtubePlaylists.forEach((pl: any) => {
+      if (Array.isArray(pl.videos)) {
+        pl.videos.forEach((v: any) => {
+          channelPlaylistCandidates.push({
+            ...v,
+            playlistId: pl.id,
+            playlistTitle: pl.title,
+            instructions: v.instructions || `Assista a esta aula sobre "${pl.title}".`,
+          });
+        });
+      }
+    });
+  }
+
+  // Full candidate pool for this level (7 designated days + curriculum pool + channel videos)
+  const allLevelCandidates: any[] = [
+    ...DAYS_SEQUENCE.map((d) => levelPlaylist.videos[d]),
+    ...(levelPlaylist.pool || []),
+    ...channelPlaylistCandidates,
+  ].filter(Boolean);
+
+  daysToDistribute.forEach((dayKey, idx) => {
+    const designatedVideo = levelPlaylist.videos[dayKey];
+    let chosenVideo = designatedVideo;
+    const designatedVidId = extractServerYouTubeId(designatedVideo?.videoId || designatedVideo?.url);
+
+    // Anti-repetition check:
+    // If designated video is already watched OR already assigned to an earlier day this week:
+    if (!designatedVidId || consumedVideoIds.has(designatedVidId) || assignedInWeekVideoIds.has(designatedVidId)) {
+      // Find next unseen candidate in the level curriculum
+      const unseenCandidate = allLevelCandidates.find((c) => {
+        const cid = extractServerYouTubeId(c.videoId || c.url);
+        return cid && !consumedVideoIds.has(cid) && !assignedInWeekVideoIds.has(cid);
+      });
+
+      if (unseenCandidate) {
+        chosenVideo = unseenCandidate;
+      } else {
+        // If all consumed, pick one not yet assigned in this specific week
+        const unassignedThisWeek = allLevelCandidates.find((c) => {
+          const cid = extractServerYouTubeId(c.videoId || c.url);
+          return cid && !assignedInWeekVideoIds.has(cid);
+        });
+        chosenVideo = unassignedThisWeek || designatedVideo;
+      }
+    }
+
+    const cleanVidId = extractServerYouTubeId(chosenVideo.videoId || chosenVideo.url) || `vid-${dayKey}`;
+    assignedInWeekVideoIds.add(cleanVidId);
+    consumedVideoIds.add(cleanVidId);
+
+    const canonicalUrl = `https://www.youtube.com/watch?v=${cleanVidId}`;
+    const embedUrl = chosenVideo.embedUrl || `https://www.youtube-nocookie.com/embed/${cleanVidId}?rel=0&modestbranding=1&enablejsapi=1`;
+
+    const videoObj = {
+      id: `vid-${dayKey}-${Date.now()}-${idx}`,
+      url: canonicalUrl,
+      videoId: cleanVidId,
+      title: chosenVideo.title,
+      channelOrCreator: chosenVideo.channelOrCreator || 'BBC Learning English',
+      duration: chosenVideo.duration || '6-8 min',
+      instructions: chosenVideo.teacherTipPt || 'Vídeo exclusivo do dia. Assista com atenção e anote novos vocabulários.',
+      addedAt: new Date().toISOString(),
+      playlistId: chosenVideo.playlistId || levelPlaylist.playlistId,
+      playlistTitle: chosenVideo.playlistTitle || levelPlaylist.playlistTitle,
+    };
+
+    const assignmentRecord = {
+      id: `assign-${dayKey}-${Date.now()}-${idx}`,
+      activityId: `act-${dayKey}-1`,
+      studentEmail: email,
+      studentUid: uid,
+      teacherUid: (teacherUid || '').trim(),
+      teacherEmail: (teacherEmail || '').trim(),
+      day: dayKey,
+      playlistId: videoObj.playlistId,
+      playlistTitle: videoObj.playlistTitle,
+      videoId: cleanVidId,
+      videoTitle: chosenVideo.title,
+      videoUrl: canonicalUrl,
+      embedUrl,
+      assignedAt: new Date().toISOString(),
+      level: normLevel,
+      instructions: videoObj.instructions,
+    };
+
+    assignedRecords.push(assignmentRecord);
+
+    if (studentRoutines && studentRoutines[dayKey]) {
+      let matched = false;
+      studentRoutines[dayKey] = studentRoutines[dayKey].map((item: any) => {
+        const isTarget =
+          item.id?.endsWith('1') ||
+          item.activityName?.toLowerCase().includes('vídeo') ||
+          item.activityName?.toLowerCase().includes('video') ||
+          (db.youtubePlaylists || []).some((pl: any) => pl.title?.toLowerCase() === item.activityName?.toLowerCase());
+        if (isTarget) {
+          matched = true;
+          return {
+            ...item,
+            activityName: videoObj.playlistTitle || item.activityName,
+            teacherVideos: [videoObj],
+            teacherNotes: videoObj.instructions,
+          };
+        }
+        return item;
+      });
+      if (!matched && studentRoutines[dayKey].length > 0) {
+        studentRoutines[dayKey][0] = {
+          ...studentRoutines[dayKey][0],
+          activityName: videoObj.playlistTitle || studentRoutines[dayKey][0].activityName,
+          teacherVideos: [videoObj],
+          teacherNotes: videoObj.instructions,
+        };
+      }
+    }
+  });
+
+  targetKeys.forEach((key) => {
+    db.studentVideoAssignments![key] = assignedRecords;
+    db.studentRoutinesMap[key] = studentRoutines;
+  });
+
+  if (uid) {
+    saveStudentAssignmentsByUid(uid, {
+      uid,
+      email,
+      level: normLevel,
+      videoAssignments: assignedRecords,
+      spotifyAssignments: db.studentSpotifyAssignments?.[uid] || db.studentSpotifyAssignments?.[email] || [],
+      routines: studentRoutines,
+      updatedAt: new Date().toISOString(),
+    }).catch((err) => console.warn('Firestore saveStudentAssignmentsByUid (YouTube) notice:', err));
+  }
+
+  return assignedRecords;
+}
+
+// Helper for server-side clean YouTube ID extraction
+function extractServerYouTubeId(urlOrId: string | null | undefined): string | null {
+  if (!urlOrId) return null;
+  const clean = urlOrId.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
+  const match = clean.match(
+    /(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i
+  );
+  return match && match[1] && match[1].length === 11 ? match[1] : null;
+}
+
+app.get('/api/student-routines', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const resolved = resolveStudentIdentifiers(db, studentEmail, uid);
+
+  let routines =
+    (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) ||
+    (resolved.email && db.studentRoutinesMap?.[resolved.email]) ||
+    (studentEmail && db.studentRoutinesMap?.[studentEmail]) ||
+    null;
+
+  const targetKeys = [resolved.uid, resolved.email, studentEmail].filter(Boolean) as string[];
+
+  // Auto-distribute if video or spotify assignments are missing or have repeating duplicates
+  let videoAssigns: any[] = [];
+  let spotifyAssigns: any[] = [];
+
+  for (const k of targetKeys) {
+    if (db.studentVideoAssignments?.[k] && Array.isArray(db.studentVideoAssignments[k])) {
+      videoAssigns = db.studentVideoAssignments[k];
+      if (videoAssigns.length > 0) break;
+    }
+  }
+  for (const k of targetKeys) {
+    if (db.studentSpotifyAssignments?.[k] && Array.isArray(db.studentSpotifyAssignments[k])) {
+      spotifyAssigns = db.studentSpotifyAssignments[k];
+      if (spotifyAssigns.length > 0) break;
+    }
+  }
+
+  const uniqueVideoIds = new Set(
+    videoAssigns.map((a) => extractServerYouTubeId(a.videoId || a.videoUrl)).filter(Boolean)
+  );
+  const hasRepeatingVideoBug = videoAssigns.length > 1 && uniqueVideoIds.size === 1;
+
+  const uniqueTrackIds = new Set(
+    spotifyAssigns.map((a) => extractSpotifyTrackId(a.trackId || a.url || a.trackUrl)).filter(Boolean)
+  );
+  const hasRepeatingSpotifyBug = spotifyAssigns.length > 1 && uniqueTrackIds.size === 1;
+
+  let dbChanged = false;
+  if (resolved.email || resolved.uid) {
+    const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, resolved.email, resolved.uid)).key;
+    const studentPlanDays: string[] =
+      (resolved.email && db.weeklyStudyDays?.[resolved.email] && db.weeklyStudyDays[resolved.email].length > 0)
+        ? db.weeklyStudyDays[resolved.email]
+        : (resolved.uid && db.weeklyStudyDays?.[resolved.uid] && db.weeklyStudyDays[resolved.uid].length > 0)
+        ? db.weeklyStudyDays[resolved.uid]
+        : (resolved.email && db.userProfiles?.[resolved.email]?.weeklyStudyDays && db.userProfiles[resolved.email].weeklyStudyDays.length > 0)
+        ? db.userProfiles[resolved.email].weeklyStudyDays
+        : (resolved.email && db.userProfiles?.[resolved.email]?.selectedStudyDays && db.userProfiles[resolved.email].selectedStudyDays.length > 0)
+        ? db.userProfiles[resolved.email].selectedStudyDays
+        : DAYS_SEQUENCE;
+    const expectedDaysCount = Math.max(1, studentPlanDays.length);
+
+    const isAwaitingTopicSelection = Boolean(
+      (resolved.email && db.studentAwaitingTopicSelection?.[resolved.email]) ||
+      (resolved.uid && db.studentAwaitingTopicSelection?.[resolved.uid])
+    );
+
+    const hasSpotifyLevelMismatch = spotifyAssigns.length > 0 && spotifyAssigns.some((a) => {
+      const aNorm = normalizeStudentLevel(a.level || a.playlistTitle).key;
+      return aNorm !== studentLevel || (a.playlistId && a.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[studentLevel].playlistId);
+    });
+
+    if ((videoAssigns.length < expectedDaysCount || hasRepeatingVideoBug) && !isAwaitingTopicSelection) {
+      distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
+      dbChanged = true;
+    }
+    if (spotifyAssigns.length < expectedDaysCount || hasRepeatingSpotifyBug || hasSpotifyLevelMismatch) {
+      distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
+      dbChanged = true;
+    }
+    if (dbChanged) {
+      writeDb(db);
+      routines = (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) || (resolved.email && db.studentRoutinesMap?.[resolved.email]) || routines;
+    }
+  }
+
+  if (routines && typeof routines === 'object' && Object.keys(routines).length > 0) {
+    const base = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+    const merged = { ...base, ...routines };
+    return res.json(merged);
+  }
+  res.json(db.routinesByDay || defaultRoutinesByDay);
+});
+
+/**
+ * Weekly Cycle Intelligence & Progression:
+ * Advances the student to a new weekly cycle ("Start New Week" / "Iniciar Nova Semana").
+ * - Registers all current week's videos and Spotify tracks in consumed history (watchedVideos / listenedTracks).
+ * - Generates 7 brand-new, non-repeating YouTube videos and Spotify tracks matching student level.
+ * - Resets weekly activity checklist for the fresh cycle.
+ * - Persists full state linked to student UID in Firestore and local db.
+ */
+app.post(['/api/student-routines/start-new-week', '/api/student/reset-week'], async (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.body.studentEmail as string) || (req.body.email as string) || '').toLowerCase().trim();
+  const uid = ((req.body.uid as string) || (req.body.studentUid as string) || '').trim();
+  const rawLevel = (req.body.level as string) || '';
+  const weeklyStudyDaysTarget =
+    typeof req.body.weeklyStudyDaysTarget === 'number' && req.body.weeklyStudyDaysTarget >= 1 && req.body.weeklyStudyDaysTarget <= 7
+      ? req.body.weeklyStudyDaysTarget
+      : undefined;
+  const weeklyStudyDays = Array.isArray(req.body.weeklyStudyDays) ? req.body.weeklyStudyDays : undefined;
+
+  const resolved = resolveStudentIdentifiers(db, studentEmail, uid);
+  const targetKeys = Array.from(new Set([resolved.uid, resolved.email, studentEmail, uid].filter(Boolean) as string[]));
+
+  if (targetKeys.length === 0) {
+    return res.status(400).json({ error: 'Missing student identifier (email or uid)' });
+  }
+
+  // Persist weeklyStudyDaysTarget and weeklyStudyDays if provided
+  if (!db.weeklyStudyDaysTargets) db.weeklyStudyDaysTargets = {};
+  if (!db.weeklyStudyDays) db.weeklyStudyDays = {};
+  targetKeys.forEach((k) => {
+    if (weeklyStudyDaysTarget) db.weeklyStudyDaysTargets[k] = weeklyStudyDaysTarget;
+    if (weeklyStudyDays) db.weeklyStudyDays[k] = weeklyStudyDays;
+  });
+
+  if (resolved.email && db.userProfiles?.[resolved.email]) {
+    if (weeklyStudyDaysTarget) db.userProfiles[resolved.email].weeklyStudyDaysTarget = weeklyStudyDaysTarget;
+    if (weeklyStudyDays) db.userProfiles[resolved.email].weeklyStudyDays = weeklyStudyDays;
+  }
+
+  // 1. Move all currently assigned videos and tracks to consumed history, merging global watched history
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+
+  const clientWatchedHistory: string[] = Array.isArray(req.body.watchedVideosHistory)
+    ? req.body.watchedVideosHistory
+    : [];
+
+  targetKeys.forEach((k) => {
+    if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
+
+    // Merge global watched history from client Firestore
+    clientWatchedHistory.forEach((id: string) => {
+      const vid = extractServerYouTubeId(id);
+      if (vid && !db.studentWatchedVideos[k].includes(vid)) {
+        db.studentWatchedVideos[k].push(vid);
+      }
+    });
+
+    const existingVideos = db.studentVideoAssignments?.[k] || [];
+    if (Array.isArray(existingVideos)) {
+      existingVideos.forEach((v: any) => {
+        const vid = extractServerYouTubeId(v.videoId || v.videoUrl);
+        if (vid && !db.studentWatchedVideos[k].includes(vid)) {
+          db.studentWatchedVideos[k].push(vid);
+        }
+      });
+    }
+
+    const existingTracks = db.studentSpotifyAssignments?.[k] || [];
+    if (Array.isArray(existingTracks)) {
+      if (!db.studentListenedTracks[k]) db.studentListenedTracks[k] = [];
+      existingTracks.forEach((t: any) => {
+        const tid = extractSpotifyTrackId(t.trackId || t.url || t.trackUrl);
+        if (tid && !db.studentListenedTracks[k].includes(tid)) {
+          db.studentListenedTracks[k].push(tid);
+        }
+      });
+    }
+
+    // Clear current assignments so fresh generation is applied
+    if (db.studentVideoAssignments?.[k]) {
+      db.studentVideoAssignments[k] = [];
+    }
+    if (db.studentSpotifyAssignments?.[k]) {
+      db.studentSpotifyAssignments[k] = [];
+    }
+  });
+
+  // 2. Advance student weekly cycle count
+  const currentCycle =
+    db.userProfiles?.[resolved.email]?.weeklyCycle ||
+    db.students?.find((s: any) => s.email?.toLowerCase() === resolved.email || (resolved.uid && s.uid === resolved.uid))?.weeklyCycle ||
+    1;
+  const nextCycle = currentCycle + 1;
+
+  if (resolved.email && db.userProfiles?.[resolved.email]) {
+    db.userProfiles[resolved.email].weeklyCycle = nextCycle;
+  }
+  if (db.students) {
+    db.students = db.students.map((s: any) => {
+      if (s.email?.toLowerCase() === resolved.email || (resolved.uid && s.uid === resolved.uid)) {
+        return {
+          ...s,
+          weeklyCycle: nextCycle,
+          weeklyStudyDaysTarget: weeklyStudyDaysTarget || s.weeklyStudyDaysTarget,
+          weeklyStudyDays: weeklyStudyDays || s.weeklyStudyDays,
+        };
+      }
+      return s;
+    });
+  }
+
+  // 3. Reset weekly activity checks and reset routine completion/repeat flags for the new week
+  if (!db.studentWeeklyChecks) db.studentWeeklyChecks = {};
+  if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
+
+  targetKeys.forEach((k) => {
+    db.studentWeeklyChecks[k] = {};
+    db.studentAwaitingTopicSelection[k] = true;
+    db.studentVideoAssignments[k] = [];
+
+    if (db.studentRoutinesMap?.[k]) {
+      Object.keys(db.studentRoutinesMap[k]).forEach((dayKey) => {
+        const dayActs = db.studentRoutinesMap[k][dayKey];
+        if (Array.isArray(dayActs)) {
+          dayActs.forEach((act: any) => {
+            act.completed = false;
+            act.completedToday = false;
+            act.isRepeatVideo = false;
+            act.repeatVideo = false;
+            const isVideoAct =
+              act.id?.endsWith('1') ||
+              act.activityName?.toLowerCase().includes('vídeo') ||
+              act.activityName?.toLowerCase().includes('video');
+            if (isVideoAct) {
+              act.activityName = 'Video of the Day';
+              act.playlistId = '';
+              act.playlistTitle = '';
+              act.teacherVideos = [];
+            }
+          });
+        }
+      });
+    }
+  });
+
+  // Reset global default routines completion and repeat flags
+  if (db.routinesByDay) {
+    Object.keys(db.routinesByDay).forEach((dayKey) => {
+      const dayActs = db.routinesByDay[dayKey];
+      if (Array.isArray(dayActs)) {
+        dayActs.forEach((act: any) => {
+          act.completed = false;
+          act.completedToday = false;
+          act.isRepeatVideo = false;
+          act.repeatVideo = false;
+        });
+      }
+    });
+  }
+
+  // 4. Ingest past listened tracks history from client to guarantee anti-repetition exclusivity
+  const clientListenedHistory: string[] = Array.isArray(req.body.listenedTracksHistory)
+    ? req.body.listenedTracksHistory
+    : [];
+
+  targetKeys.forEach((k) => {
+    if (!db.studentListenedTracks) db.studentListenedTracks = {};
+    if (!db.studentListenedTracks[k]) db.studentListenedTracks[k] = [];
+    clientListenedHistory.forEach((id: string) => {
+      const tid = extractSpotifyTrackId(id);
+      if (tid && !db.studentListenedTracks[k].includes(tid)) {
+        db.studentListenedTracks[k].push(tid);
+      }
+    });
+  });
+
+  // Distribute new weekly Spotify tracks with guaranteed anti-repetition.
+  const studentLevel = normalizeStudentLevel(rawLevel || resolveStudentLevel(db, resolved.email, resolved.uid)).key;
+  const weeklyStudyDaysList: DayOfWeek[] | undefined = Array.isArray(req.body.weeklyStudyDays)
+    ? req.body.weeklyStudyDays
+    : undefined;
+  const newTracks = distributeWeeklySpotifyForStudent(
+    db,
+    resolved.email,
+    resolved.uid,
+    studentLevel,
+    undefined,
+    undefined,
+    weeklyStudyDaysList
+  );
+
+  // 5. Ingest new client-assigned videos or distribute fresh unseen videos sequentially
+  const clientAssignedVideos: any[] = Array.isArray(req.body.newAssignedVideos)
+    ? req.body.newAssignedVideos
+    : [];
+
+  let newVideos: any[] = [];
+  if (clientAssignedVideos.length > 0) {
+    newVideos = clientAssignedVideos.map((v: any, idx: number) => {
+      const vidId = extractServerYouTubeId(v.videoId || v.url) || v.videoId;
+      return {
+        id: `assign-${v.day}-${Date.now()}-${idx}`,
+        activityId: `act-${v.day}-1`,
+        studentEmail: resolved.email,
+        studentUid: resolved.uid,
+        day: v.day,
+        playlistId: v.playlistId,
+        playlistTitle: v.playlistTitle,
+        videoId: vidId,
+        title: v.videoTitle || v.title || 'Daily Video Practice',
+        videoTitle: v.videoTitle || v.title || 'Daily Video Practice',
+        videoUrl: v.url || `https://www.youtube.com/watch?v=${vidId}`,
+        embedUrl: `https://www.youtube-nocookie.com/embed/${vidId}?rel=0&modestbranding=1&enablejsapi=1`,
+        assignedAt: new Date().toISOString(),
+        duration: v.duration || '6-10 min',
+        instructions: v.instructions || 'Daily Video Practice',
+      };
+    });
+
+    targetKeys.forEach((k) => {
+      db.studentVideoAssignments[k] = newVideos;
+      if (!db.studentRoutinesMap[k]) {
+        db.studentRoutinesMap[k] = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+      }
+      newVideos.forEach((v: any) => {
+        const d = v.day;
+        if (d && db.studentRoutinesMap[k][d]) {
+          db.studentRoutinesMap[k][d] = db.studentRoutinesMap[k][d].map((act: any) => {
+            const isVideoAct =
+              act.id?.endsWith('1') ||
+              act.activityName?.toLowerCase().includes('vídeo') ||
+              act.activityName?.toLowerCase().includes('video') ||
+              (act.teacherVideos && act.teacherVideos.length > 0);
+            if (isVideoAct) {
+              return {
+                ...act,
+                activityName: v.playlistTitle || act.activityName || 'Daily Video Practice',
+                teacherVideos: [
+                  {
+                    id: `vid-${d}-${v.videoId}`,
+                    videoId: v.videoId,
+                    title: v.videoTitle || v.title || 'Daily Video Practice',
+                    videoTitle: v.videoTitle || v.title || 'Daily Video Practice',
+                    url: v.videoUrl,
+                    duration: v.duration || '6-10 min',
+                    playlistId: v.playlistId,
+                    playlistTitle: v.playlistTitle,
+                  },
+                ],
+                isRepeatVideo: false,
+                repeatVideo: false,
+                completed: false,
+                completedToday: false,
+              };
+            }
+            return act;
+          });
+        }
+      });
+    });
+  } else if (!req.body.resetTopicsToChooseTopic && req.body.autoAssignVideos) {
+    newVideos = distributeWeeklyYouTubeForStudent(
+      db,
+      resolved.email,
+      resolved.uid,
+      studentLevel,
+      undefined,
+      undefined,
+      weeklyStudyDays,
+      clientWatchedHistory
+    );
+  } else {
+    // Default for starting a new week: all days start clean with "Choose a Topic"
+    newVideos = [];
+  }
+
+  writeDb(db);
+
+  const rawRoutines =
+    (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) ||
+    (resolved.email && db.studentRoutinesMap?.[resolved.email]) ||
+    db.routinesByDay ||
+    defaultRoutinesByDay;
+
+  const routines: any = {};
+  Object.keys(rawRoutines).forEach((d) => {
+    routines[d] = (rawRoutines[d] || []).map((act: any) => {
+      const isVideoAct =
+        act.id?.endsWith('1') ||
+        act.activityName?.toLowerCase().includes('vídeo') ||
+        act.activityName?.toLowerCase().includes('video') ||
+        (act.teacherVideos && act.teacherVideos.length > 0);
+      const shouldResetVideo = isVideoAct && (!req.body.autoAssignVideos || req.body.resetTopicsToChooseTopic);
+      return {
+        ...act,
+        completed: false,
+        completedToday: false,
+        isRepeatVideo: false,
+        repeatVideo: false,
+        ...(shouldResetVideo ? {
+          activityName: 'Video of the Day',
+          playlistId: '',
+          playlistTitle: '',
+          teacherVideos: [],
+        } : {}),
+      };
+    });
+  });
+
+  // 5. Cloud Firestore synchronization linked to UID
+  if (resolved.uid) {
+    resetRepeatFlagsSubcollection(resolved.uid).catch(() => {});
+    const watched = db.studentWatchedVideos[resolved.uid] || [];
+    watched.forEach((vidId: string) => {
+      addWatchedVideoToUserDoc(resolved.uid, vidId).catch(() => {});
+    });
+
+    saveStudentAssignmentsByUid(resolved.uid, {
+      uid: resolved.uid,
+      email: resolved.email,
+      level: studentLevel,
+      weeklyCycle: nextCycle,
+      weeklyStudyDaysTarget: weeklyStudyDaysTarget || db.weeklyStudyDaysTargets?.[resolved.uid] || 7,
+      weeklyStudyDays: weeklyStudyDays || db.weeklyStudyDays?.[resolved.uid] || [],
+      videoAssignments: newVideos,
+      spotifyAssignments: newTracks,
+      routines,
+      watchedVideos: db.studentWatchedVideos[resolved.uid] || [],
+      listenedTracks: db.studentListenedTracks[resolved.uid] || [],
+      updatedAt: new Date().toISOString(),
+    }).catch((e) => console.warn('Firestore sync notice for student assignments:', e));
+  }
+  saveAppStateToFirestore(db).catch(() => {});
+
+  res.json({
+    success: true,
+    weeklyCycle: nextCycle,
+    weeklyStudyDaysTarget: weeklyStudyDaysTarget || db.weeklyStudyDaysTargets?.[resolved.email] || 7,
+    weeklyStudyDays: weeklyStudyDays || db.weeklyStudyDays?.[resolved.email] || [],
+    message: 'New weekly cycle activated successfully',
+    routines,
+    videoAssignments: newVideos,
+    spotifyAssignments: newTracks,
+  });
+});
+
+// Real-time Current Routine & Spotify Track Mirroring Endpoints
+app.post('/api/routines/current-routine', (req, res) => {
+  const { studentUid, weekId, currentSpotifyTrack, studentEmail, nativeFriendUid, nativeFriendEmail } = req.body;
+  if (!studentUid) {
+    return res.status(400).json({ error: 'studentUid is required' });
+  }
+
+  const db = readDb();
+  if (!(db as any).studentCurrentRoutines) {
+    (db as any).studentCurrentRoutines = {};
+  }
+
+  const cleanUid = String(studentUid).toLowerCase().trim();
+  const safeWeekId = weekId || 'week-1';
+  const key = `${cleanUid}:${safeWeekId}`;
+  const weekDataKey = `${cleanUid}:weekData`;
+
+  const existing = (db as any).studentCurrentRoutines[key] || {};
+  const updatedDoc = {
+    ...existing,
+    studentUid: cleanUid,
+    weekId: safeWeekId,
+    currentSpotifyTrack: currentSpotifyTrack !== undefined ? currentSpotifyTrack : existing.currentSpotifyTrack,
+    studentEmail: studentEmail || existing.studentEmail,
+    nativeFriendUid: nativeFriendUid || existing.nativeFriendUid,
+    nativeFriendEmail: nativeFriendEmail || existing.nativeFriendEmail,
+    updatedAt: new Date().toISOString(),
+  };
+
+  (db as any).studentCurrentRoutines[key] = updatedDoc;
+  (db as any).studentCurrentRoutines[weekDataKey] = {
+    ...((db as any).studentCurrentRoutines[weekDataKey] || {}),
+    ...updatedDoc,
+  };
+
+  writeDb(db);
+  res.json({ success: true, routine: updatedDoc });
+});
+
+app.get('/api/routines/current-routine', (req, res) => {
+  const studentUid = (req.query.studentUid as string || '').toLowerCase().trim();
+  const weekId = (req.query.weekId as string || 'week-1').trim();
+  if (!studentUid) {
+    return res.status(400).json({ error: 'studentUid is required' });
+  }
+
+  const db = readDb();
+  const routinesMap = (db as any).studentCurrentRoutines || {};
+
+  // Check weekData first, then requested weekId
+  let routine = routinesMap[`${studentUid}:weekData`] || routinesMap[`${studentUid}:${weekId}`] || null;
+
+  // Fallback: if routine is missing or track is null, search all cycles for this student
+  if (!routine || !routine.currentSpotifyTrack) {
+    const studentKeys = Object.keys(routinesMap).filter((k) => k.startsWith(`${studentUid}:`));
+    const matching = studentKeys
+      .map((k) => routinesMap[k])
+      .filter((r) => r && r.currentSpotifyTrack)
+      .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+    if (matching.length > 0) {
+      routine = matching[0];
+    }
+  }
+
+  res.json({ success: true, routine });
+});
+
+app.post('/api/routines/current-routine/feedback', (req, res) => {
+  const { studentUid, weekId, feedback } = req.body;
+  if (!studentUid || !feedback || !feedback.dayOfWeek) {
+    return res.status(400).json({ error: 'studentUid and feedback with dayOfWeek are required' });
+  }
+
+  const db = readDb();
+  if (!(db as any).studentCurrentRoutines) {
+    (db as any).studentCurrentRoutines = {};
+  }
+
+  const cleanUid = String(studentUid).toLowerCase().trim();
+  const safeWeekId = weekId || 'week-1';
+  const key = `${cleanUid}:${safeWeekId}`;
+  const weekDataKey = `${cleanUid}:weekData`;
+
+  const existing = (db as any).studentCurrentRoutines[key] || {
+    studentUid: cleanUid,
+    weekId: safeWeekId,
+  };
+
+  if (!existing.teacherFeedback) existing.teacherFeedback = {};
+  existing.teacherFeedback[feedback.dayOfWeek] = feedback;
+  existing.updatedAt = new Date().toISOString();
+
+  (db as any).studentCurrentRoutines[key] = existing;
+
+  const existingWeekData = (db as any).studentCurrentRoutines[weekDataKey] || {
+    studentUid: cleanUid,
+    weekId: safeWeekId,
+  };
+  if (!existingWeekData.teacherFeedback) existingWeekData.teacherFeedback = {};
+  existingWeekData.teacherFeedback[feedback.dayOfWeek] = feedback;
+  existingWeekData.updatedAt = new Date().toISOString();
+  (db as any).studentCurrentRoutines[weekDataKey] = existingWeekData;
+
+  writeDb(db);
+  res.json({ success: true, routine: existing });
+});
+
+// 5. Live Lessons Endpoints
+app.get(['/api/lessons', '/api/live-lessons'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  const db = readDb();
+  const requesterEmail = (
+    (req.query.email as string) ||
+    (req.query.userEmail as string) ||
+    (req.query.studentEmail as string) ||
+    (req.query.teacherEmail as string) ||
+    ''
+  ).toLowerCase().trim();
+  const role = req.query.role as string;
+  const uid = (req.query.uid as string) || '';
+
+  if (role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') {
+    return res.json(db.liveLessons || []);
+  }
+
+  if (role === 'teacher' || req.query.teacherEmail) {
+    const list = (db.liveLessons || []).filter((l: any) =>
+      (l.teacherEmail || '').toLowerCase() === requesterEmail ||
+      (l.tutorEmail || '').toLowerCase() === requesterEmail ||
+      (l.teacherUid && l.teacherUid === uid) ||
+      (l.tutorUid && l.tutorUid === uid)
+    );
+    return res.json(list);
+  }
+
+  if (role === 'student' || req.query.studentEmail) {
+    const list = (db.liveLessons || []).filter((l: any) => {
+      const lEmail = (l.studentEmail || '').toLowerCase().trim();
+      const lName = (l.studentName || '').toLowerCase().trim();
+      return (
+        lEmail === requesterEmail ||
+        (l.studentUid && l.studentUid === uid) ||
+        (!lEmail && requesterEmail.includes('vinicius') && lName.includes('vinicius')) ||
+        (!lEmail && requesterEmail.includes('regina') && lName.includes('regina'))
+      );
+    });
+    return res.json(list);
+  }
+
+  if (requesterEmail || uid) {
+    const list = (db.liveLessons || []).filter((l: any) => {
+      const lEmail = (l.studentEmail || '').toLowerCase().trim();
+      const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+      const lName = (l.studentName || '').toLowerCase().trim();
+      return (
+        lEmail === requesterEmail ||
+        lTeacher === requesterEmail ||
+        (l.studentUid && l.studentUid === uid) ||
+        (l.teacherUid && l.teacherUid === uid) ||
+        (!lEmail && requesterEmail.includes('vinicius') && lName.includes('vinicius')) ||
+        (!lEmail && requesterEmail.includes('regina') && lName.includes('regina'))
+      );
+    });
+    return res.json(list);
+  }
+
+  // Anonymous / unauthenticated: return empty list to protect privacy
+  res.json([]);
+});
+
+app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
+  const db = readDb();
+  const { lesson, lessons } = req.body;
+  const newLesson = lesson || (req.body.id ? req.body : null);
+  if (Array.isArray(lessons)) {
+    db.liveLessons = lessons;
+  } else if (newLesson && newLesson.id) {
+    // Auto-resolve studentEmail if blank
+    if (!newLesson.studentEmail || newLesson.studentEmail.trim() === '') {
+      if (req.query.email || req.query.studentEmail) {
+        newLesson.studentEmail = ((req.query.email || req.query.studentEmail) as string).toLowerCase().trim();
+      } else if (newLesson.studentUid) {
+        const allUsers = Object.values(db.authUsers || {});
+        const allProfiles = Object.values(db.userProfiles || {});
+        const foundUser = (allUsers as any[]).find((u: any) => u.uid === newLesson.studentUid || u.id === newLesson.studentUid)
+          || (allProfiles as any[]).find((p: any) => p.uid === newLesson.studentUid || p.id === newLesson.studentUid)
+          || (db.students || []).find((s: any) => s.studentUid === newLesson.studentUid || s.id === newLesson.studentUid);
+        if (foundUser?.email) {
+          newLesson.studentEmail = foundUser.email.toLowerCase().trim();
+        }
+      }
+    }
+
+    // Auto-resolve studentUid and teacherUid to individualize activity between the two UIDs
+    if (!newLesson.studentUid && newLesson.studentEmail) {
+      const sEmail = newLesson.studentEmail.toLowerCase().trim();
+      const allUsers = Object.values(db.authUsers || {});
+      const allProfiles = Object.values(db.userProfiles || {});
+      const foundUser = (allUsers as any[]).find((u: any) => (u.email || '').toLowerCase().trim() === sEmail)
+        || (allProfiles as any[]).find((p: any) => (p.email || '').toLowerCase().trim() === sEmail)
+        || (db.students || []).find((s: any) => (s.email || '').toLowerCase().trim() === sEmail);
+      newLesson.studentUid = foundUser?.uid || foundUser?.id || `usr-${sEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    }
+    if (!newLesson.teacherUid) {
+      const tEmail = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
+      const allUsers = Object.values(db.authUsers || {});
+      const foundTutor = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase().trim() === tEmail)
+        || (allUsers as any[]).find((u: any) => (u.email || '').toLowerCase().trim() === tEmail)
+        || (db.teachers || []).find((t: any) => (t.email || '').toLowerCase().trim() === tEmail);
+      newLesson.teacherUid = foundTutor?.uid || foundTutor?.id || (tEmail ? `usr-${tEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+    }
+
+    // Conflict Check (Strict Anti-Duplicity Rule - Individualized by teacher and student UIDs/emails)
+    const proposedTeacher = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
+    const proposedTeacherUid = (newLesson.teacherUid || newLesson.tutorUid || '').trim();
+    const proposedStudent = (newLesson.studentEmail || '').toLowerCase().trim();
+    const proposedStudentUid = (newLesson.studentUid || '').trim();
+
+    if ((proposedTeacher || proposedTeacherUid) && newLesson.startDateTime && newLesson.endDateTime && newLesson.status === 'scheduled' && !newLesson.cancelledAt) {
+      const pStart = new Date(newLesson.startDateTime).getTime();
+      const pEnd = new Date(newLesson.endDateTime).getTime();
+      const conflict = (db.liveLessons || []).find((l: any) => {
+        if (l.id === newLesson.id) return false;
+        if (l.status === 'cancelled' || l.status === 'canceled' || Boolean(l.cancelledAt)) return false;
+        if (l.status && l.status !== 'scheduled') return false;
+
+        const lTeacher = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+        const lTeacherUid = (l.teacherUid || l.tutorUid || '').trim();
+        const lStudent = (l.studentEmail || '').toLowerCase().trim();
+        const lStudentUid = (l.studentUid || '').trim();
+
+        // Check if teacher has an active conflict
+        const isSameTeacher = (proposedTeacherUid && lTeacherUid && proposedTeacherUid === lTeacherUid) ||
+                              (proposedTeacher && lTeacher && proposedTeacher === lTeacher);
+
+        // Check if student has an active conflict
+        const isSameStudent = (proposedStudentUid && lStudentUid && proposedStudentUid === lStudentUid) ||
+                              (proposedStudent && lStudent && proposedStudent === lStudent);
+
+        if (!isSameTeacher && !isSameStudent) return false;
+        if (!l.startDateTime || !l.endDateTime) return false;
+        const lStart = new Date(l.startDateTime).getTime();
+        const lEnd = new Date(l.endDateTime).getTime();
+        return lStart < pEnd && lEnd > pStart;
+      });
+      if (conflict) {
+        return res.status(409).json({
+          error: 'Conflito de Horário: Já existe uma aula agendada neste horário para este Amigo Nativo ou Aluno.',
+          conflict,
+        });
+      }
+    }
+
+    const idx = (db.liveLessons || []).findIndex((l: any) => l.id === newLesson.id);
+    if (idx >= 0) {
+      db.liveLessons[idx] = newLesson;
+    } else {
+      if (!db.liveLessons) db.liveLessons = [];
+      db.liveLessons.unshift(newLesson);
+    }
+
+    // Bidirectional sync: ensure student is linked to this teacher in db.students if unassigned
+    const cleanStudentEmail = (newLesson.studentEmail || '').toLowerCase().trim();
+    const cleanTeacherEmail = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
+    const cleanTeacherName = newLesson.teacherName || newLesson.tutorName || '';
+    if (cleanStudentEmail && cleanTeacherEmail) {
+      const studentIdx = (db.students || []).findIndex(
+        (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanStudentEmail
+      );
+      if (studentIdx >= 0) {
+        const existingTeacher = (db.students[studentIdx].teacherEmail || '').toLowerCase().trim();
+        const shouldUpdateTeacher = !existingTeacher || existingTeacher === cleanTeacherEmail;
+        db.students[studentIdx] = {
+          ...db.students[studentIdx],
+          teacherEmail: shouldUpdateTeacher ? cleanTeacherEmail : db.students[studentIdx].teacherEmail,
+          teacherName: shouldUpdateTeacher ? (cleanTeacherName || db.students[studentIdx].teacherName) : db.students[studentIdx].teacherName,
+          teacherUid: shouldUpdateTeacher ? (newLesson.teacherUid || db.students[studentIdx].teacherUid) : db.students[studentIdx].teacherUid,
+          studentUid: newLesson.studentUid || db.students[studentIdx].studentUid || db.students[studentIdx].uid,
+          status: 'active',
+        };
+      } else {
+        if (!db.students) db.students = [];
+        db.students.push({
+          id: `st-${Date.now()}`,
+          name: newLesson.studentName || cleanStudentEmail.split('@')[0],
+          studentName: newLesson.studentName || cleanStudentEmail.split('@')[0],
+          email: cleanStudentEmail,
+          studentEmail: cleanStudentEmail,
+          studentUid: newLesson.studentUid,
+          level: 'iniciante',
+          studentLevel: 'iniciante',
+          goal: 'English for everyday life & work',
+          learningGoal: 'English for everyday life & work',
+          teacherEmail: cleanTeacherEmail,
+          teacherName: cleanTeacherName,
+          teacherUid: newLesson.teacherUid,
+          status: 'active',
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      // Also ensure student profile has their assigned teacher and active enrollment
+      if (db.userProfiles) {
+        if (!db.userProfiles[cleanStudentEmail]) {
+          db.userProfiles[cleanStudentEmail] = {
+            id: newLesson.studentUid || `usr-${cleanStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: newLesson.studentName || cleanStudentEmail.split('@')[0],
+            email: cleanStudentEmail,
+            teacherEmail: cleanTeacherEmail,
+            teacherName: cleanTeacherName,
+            teacherUid: newLesson.teacherUid,
+            enrollmentStatus: 'active',
+            contractedLessons: Math.max(db.contractedLessons?.[cleanStudentEmail] || 0, 1),
+            createdAt: new Date().toISOString(),
+          };
+        } else {
+          db.userProfiles[cleanStudentEmail] = {
+            ...db.userProfiles[cleanStudentEmail],
+            teacherEmail: cleanTeacherEmail,
+            teacherName: cleanTeacherName || db.userProfiles[cleanStudentEmail].teacherName,
+            teacherUid: newLesson.teacherUid || db.userProfiles[cleanStudentEmail].teacherUid,
+            enrollmentStatus: 'active',
+            contractedLessons: Math.max(db.userProfiles[cleanStudentEmail].contractedLessons || 0, 1),
+          };
+        }
+      }
+    }
+  }
+  await writeDbSync(db);
+  res.json(db.liveLessons);
+});
+
+app.post('/api/lessons/:id/complete', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  db.liveLessons = db.liveLessons.map((l) => (l.id === id ? { ...l, status: 'completed' } : l));
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/not-completed', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  const { responsible, reason } = req.body;
+  db.liveLessons = db.liveLessons.map((l) =>
+    l.id === id
+      ? {
+          ...l,
+          status: 'not_completed',
+          notCompletedResponsible: responsible,
+          notCompletedReason: reason,
+        }
+      : l
+  );
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/reschedule', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  const { newStartIso, newEndIso, reason, proposedBy } = req.body;
+  const isTeacher = proposedBy === 'teacher';
+  db.liveLessons = db.liveLessons.map((l) =>
+    l.id === id
+      ? {
+          ...l,
+          proposedNewStartDateTime: newStartIso,
+          proposedNewEndDateTime: newEndIso,
+          rescheduleNotes: reason,
+          proposedBy: isTeacher ? 'teacher' : 'student',
+          proposalStatus: isTeacher
+            ? 'pending_student_reschedule'
+            : 'pending_teacher_reschedule',
+          proposedAt: new Date().toISOString(),
+        }
+      : l
+  );
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/accept-reschedule', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  db.liveLessons = db.liveLessons.map((l) => {
+    if (l.id === id && l.proposedNewStartDateTime) {
+      return {
+        ...l,
+        startDateTime: l.proposedNewStartDateTime,
+        endDateTime: l.proposedNewEndDateTime || l.endDateTime,
+        rescheduledFrom: {
+          startDateTime: l.startDateTime,
+          endDateTime: l.endDateTime,
+        },
+        rescheduledAt: new Date().toISOString(),
+        rescheduledBy: l.proposedBy,
+        rescheduledReason: l.rescheduleNotes,
+        proposedNewStartDateTime: undefined,
+        proposedNewEndDateTime: undefined,
+        proposalStatus: undefined,
+      };
+    }
+    return l;
+  });
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/decline-reschedule', (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  db.liveLessons = db.liveLessons.map((l) =>
+    l.id === id
+      ? {
+          ...l,
+          proposedNewStartDateTime: undefined,
+          proposedNewEndDateTime: undefined,
+          proposalStatus: undefined,
+        }
+      : l
+  );
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+app.post('/api/lessons/:id/cancel', async (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  const { cancelledBy, reason } = req.body || {};
+  const target = (db.liveLessons || []).find((l: any) => l.id === id);
+  db.liveLessons = (db.liveLessons || []).map((l: any) =>
+    l.id === id ||
+    (target &&
+      target.studentEmail &&
+      (l.studentEmail || '').toLowerCase() === target.studentEmail.toLowerCase() &&
+      l.startDateTime === target.startDateTime)
+      ? {
+          ...l,
+          status: 'cancelled',
+          cancelledAt: l.cancelledAt || new Date().toISOString(),
+          cancelledBy: cancelledBy || l.cancelledBy || 'user',
+          cancellationReason: reason || l.cancellationReason || 'Cancelled by user',
+          proposalStatus: undefined,
+          proposedNewStartDateTime: undefined,
+          proposedNewEndDateTime: undefined,
+        }
+      : l
+  );
+  await writeDbSync(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+// Save live lesson notes & automatically migrate vocabulary to student's personal dictionary
+app.post('/api/lessons/:id/notes', async (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  const { topic, liveNotes, recommendations, pronunciationNotes, grammarAndPhrasing, vocabularyNotes } = req.body || {};
+
+  let targetStudentEmail = (req.body?.studentEmail || '').toLowerCase().trim();
+  let targetStudentUid = req.body?.studentUid || '';
+  let teacherName = req.body?.teacherName || '';
+  let teacherEmail = (req.body?.teacherEmail || '').toLowerCase().trim();
+
+  db.liveLessons = (db.liveLessons || []).map((l: any) => {
+    if (l.id === id) {
+      if (!targetStudentEmail && l.studentEmail) targetStudentEmail = (l.studentEmail || '').toLowerCase().trim();
+      if (!targetStudentUid && l.studentUid) targetStudentUid = l.studentUid || '';
+      if (!teacherName && (l.teacherName || l.tutorName)) teacherName = l.teacherName || l.tutorName || '';
+      if (!teacherEmail && (l.teacherEmail || l.tutorEmail)) teacherEmail = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+      return {
+        ...l,
+        title: topic || l.title,
+        liveNotes,
+        recommendations,
+        pronunciationNotes,
+        grammarAndPhrasing,
+        vocabularyNotes: Array.isArray(vocabularyNotes) ? vocabularyNotes : l.vocabularyNotes,
+        notesLastSavedAt: new Date().toISOString(),
+      };
+    }
+    return l;
+  });
+
+  // Automatically migrate vocabulary words to student's personal dictionary (isolated by student UID and email)
+  if (Array.isArray(vocabularyNotes) && vocabularyNotes.length > 0 && (targetStudentEmail || targetStudentUid)) {
+    if (!db.studentDictionaryMap) db.studentDictionaryMap = {};
+    const existingList: any[] =
+      (targetStudentEmail && db.studentDictionaryMap[targetStudentEmail]) ||
+      (targetStudentUid && db.studentDictionaryMap[targetStudentUid]) ||
+      [];
+
+    const dictMap = new Map<string, any>();
+    existingList.forEach((entry: any) => {
+      const w = (entry.word || '').toLowerCase().trim();
+      if (w) dictMap.set(w, entry);
+    });
+
+    vocabularyNotes.forEach((vn: any) => {
+      const w = (vn.word || '').trim();
+      if (!w) return;
+      const lower = w.toLowerCase();
+      dictMap.set(lower, {
+        id: vn.id || `dict_live_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        word: w,
+        partOfSpeech: vn.partOfSpeech || '',
+        definitionEn: vn.meaningOrTip || '',
+        exampleSentenceEn: vn.exampleSentence || '',
+        phonetic: vn.phonetic,
+        audio: vn.audioUrl,
+        learnedAt: new Date().toISOString(),
+        source: vn.source || 'api',
+        sourceActivityName: `Live Session with ${teacherName || 'Native Friend'}`,
+        teacherEmail,
+        teacherName,
+        studentEmail: targetStudentEmail,
+        studentUid: targetStudentUid,
+      });
+    });
+
+    const updatedDict = Array.from(dictMap.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
+    if (targetStudentEmail) db.studentDictionaryMap[targetStudentEmail] = updatedDict;
+    if (targetStudentUid) db.studentDictionaryMap[targetStudentUid] = updatedDict;
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+// Student Personal Dictionary Endpoints (isolated by student UID and email)
+app.get('/api/student-dictionary', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = (req.query.uid as string) || '';
+  const role = (req.query.role as string) || '';
+
+  if (role === 'admin' && !studentEmail && !uid) {
+    return res.json(db.studentDictionaryMap || {});
+  }
+
+  if (studentEmail || uid) {
+    const fromEmail: any[] = (studentEmail && db.studentDictionaryMap?.[studentEmail]) || [];
+    const fromUid: any[] = (uid && db.studentDictionaryMap?.[uid]) || [];
+    const map = new Map<string, any>();
+    [...fromEmail, ...fromUid].forEach((entry: any) => {
+      const w = (entry.word || '').toLowerCase().trim();
+      if (w) map.set(w, entry);
+    });
+    const list = Array.from(map.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
+    return res.json(list);
+  }
+
+  res.json([]);
+});
+
+app.post('/api/student-dictionary', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, teacherEmail, teacherName, entries, entry } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  if (!cleanEmail && !studentUid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  if (!db.studentDictionaryMap) db.studentDictionaryMap = {};
+  const currentList: any[] =
+    (cleanEmail && db.studentDictionaryMap[cleanEmail]) ||
+    (studentUid && db.studentDictionaryMap[studentUid]) ||
+    [];
+
+  const dictMap = new Map<string, any>();
+  currentList.forEach((e: any) => {
+    const w = (e.word || '').toLowerCase().trim();
+    if (w) dictMap.set(w, e);
+  });
+
+  const itemsToAdd = Array.isArray(entries) ? entries : (entry ? [entry] : []);
+  itemsToAdd.forEach((item: any) => {
+    const w = (item.word || '').trim();
+    if (!w) return;
+    const lower = w.toLowerCase();
+    dictMap.set(lower, {
+      id: item.id || `dict_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      word: w,
+      partOfSpeech: item.partOfSpeech || '',
+      definitionEn: item.definitionEn || item.meaningOrTip || '',
+      exampleSentenceEn: item.exampleSentenceEn || item.exampleSentence || '',
+      phonetic: item.phonetic,
+      audio: item.audio || item.audioUrl,
+      learnedAt: item.learnedAt || new Date().toISOString(),
+      source: item.source || 'api',
+      sourceActivityName: item.sourceActivityName || (teacherName ? `Live Session with ${teacherName}` : 'Personal Dictionary'),
+      teacherEmail: teacherEmail || item.teacherEmail,
+      teacherName: teacherName || item.teacherName,
+      studentEmail: cleanEmail,
+      studentUid,
+    });
+  });
+
+  const updated = Array.from(dictMap.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
+  if (cleanEmail) db.studentDictionaryMap[cleanEmail] = updated;
+  if (studentUid) db.studentDictionaryMap[studentUid] = updated;
+
+  await writeDbSync(db);
+  res.json({ success: true, dictionary: updated });
+});
+
+// Endpoint: Get student journal entries
+app.get('/api/student-journal', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = (req.query.uid as string) || '';
+
+  if (studentEmail || uid) {
+    const fromEmail = (studentEmail && db.studentJournalMap?.[studentEmail]) || [];
+    const fromUid = (uid && db.studentJournalMap?.[uid]) || [];
+    const map = new Map<string, any>();
+    [...fromEmail, ...fromUid].forEach((entry: any) => {
+      if (entry?.id) map.set(entry.id, entry);
+    });
+    const list = Array.from(map.values()).sort((a, b) => {
+      const tA = new Date(a.createdAt || a.date).getTime();
+      const tB = new Date(b.createdAt || b.date).getTime();
+      return tB - tA;
+    });
+    return res.json(list);
+  }
+  res.json([]);
+});
+
+// Endpoint: Save student journal entry
+app.post('/api/student-journal', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, entry } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  if (!cleanEmail && !studentUid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  if (!db.studentJournalMap) db.studentJournalMap = {};
+  const currentList: any[] =
+    (cleanEmail && db.studentJournalMap[cleanEmail]) ||
+    (studentUid && db.studentJournalMap[studentUid]) ||
+    [];
+
+  const filtered = currentList.filter((e: any) => e.id !== entry.id);
+  const updated = [entry, ...filtered];
+
+  if (cleanEmail) db.studentJournalMap[cleanEmail] = updated;
+  if (studentUid) db.studentJournalMap[studentUid] = updated;
+
+  await writeDbSync(db);
+  res.json({ success: true, journal: updated });
+});
+
+// Endpoint: Student Journal Activity Log (Multi-device cloud synchronization for video, audio, memorization, lesson)
+app.get('/api/student-journal/activity', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.studentUid as string) || (req.query.uid as string) || '').trim();
+
+  if (!db.studentActivityJournal) db.studentActivityJournal = {};
+  const fromEmail = (studentEmail && db.studentActivityJournal[studentEmail]) || [];
+  const fromUid = (uid && db.studentActivityJournal[uid]) || [];
+  const map = new Map<string, any>();
+  [...fromEmail, ...fromUid].forEach((e: any) => {
+    if (e?.id) map.set(e.id, e);
+  });
+  const list = Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  res.json({ success: true, entries: list });
+});
+
+app.post('/api/student-journal/activity', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, entry } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = (studentUid || '').trim();
+
+  if (!entry || (!cleanEmail && !cleanUid)) {
+    return res.status(400).json({ error: 'entry and studentEmail or studentUid are required' });
+  }
+
+  if (!db.studentActivityJournal) db.studentActivityJournal = {};
+  const current = (cleanEmail && db.studentActivityJournal[cleanEmail]) || (cleanUid && db.studentActivityJournal[cleanUid]) || [];
+  const filtered = current.filter((e: any) => {
+    if (e.id === entry.id) return false;
+    if (
+      e.type === entry.type &&
+      e.week === entry.week &&
+      e.dayOfWeek &&
+      entry.dayOfWeek &&
+      e.dayOfWeek === entry.dayOfWeek
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const updated = [entry, ...filtered];
+  if (cleanEmail) db.studentActivityJournal[cleanEmail] = updated;
+  if (cleanUid) db.studentActivityJournal[cleanUid] = updated;
+
+  if (cleanEmail && db.userProfiles?.[cleanEmail]) {
+    db.userProfiles[cleanEmail].studentJournal = updated;
+  }
+  if (cleanUid && db.userProfiles?.[cleanUid]) {
+    db.userProfiles[cleanUid].studentJournal = updated;
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, entries: updated });
+});
+
+app.delete('/api/student-journal/activity', async (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, type, dayOfWeek, week } = req.body || {};
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = (studentUid || '').trim();
+
+  if (!db.studentActivityJournal) db.studentActivityJournal = {};
+  const current = (cleanEmail && db.studentActivityJournal[cleanEmail]) || (cleanUid && db.studentActivityJournal[cleanUid]) || [];
+  const updated = current.filter((e: any) => !(e.type === type && e.dayOfWeek === dayOfWeek && e.week === week));
+
+  if (cleanEmail) db.studentActivityJournal[cleanEmail] = updated;
+  if (cleanUid) db.studentActivityJournal[cleanUid] = updated;
+
+  if (cleanEmail && db.userProfiles?.[cleanEmail]) {
+    db.userProfiles[cleanEmail].studentJournal = updated;
+  }
+  if (cleanUid && db.userProfiles?.[cleanUid]) {
+    db.userProfiles[cleanUid].studentJournal = updated;
+  }
+
+  await writeDbSync(db);
+  res.json({ success: true, entries: updated });
+});
+
+// Endpoint: Strict UID correlation verification between Student and Native Friend
+app.get('/api/students/verify-link', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const db = readDb();
+  const studentUid = ((req.query.studentUid as string) || '').trim();
+  const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
+  const teacherUid = ((req.query.teacherUid as string) || '').trim();
+  const teacherEmail = ((req.query.teacherEmail as string) || '').toLowerCase().trim();
+
+  const adminEmails = [
+    'adm.itissimple@gmail.com',
+    'estilobeeforkids@gmail.com',
+    'adm.itssimple@gmail.com',
+    'estilobeeadm@gmail.com',
+  ];
+
+  if (
+    teacherUid === 'admin' ||
+    adminEmails.includes(teacherEmail) ||
+    teacherEmail.includes('admin')
+  ) {
+    return res.json({ isLinked: true, reason: 'admin' });
+  }
+
+  if (!teacherUid && !teacherEmail) {
+    return res.json({ isLinked: true, reason: 'self' });
+  }
+
+  // Find student in db.students
+  const student = (db.students || []).find((s: any) => {
+    const sUid = (s.uid || s.id || '').trim();
+    const sEmail = (s.email || s.studentEmail || '').toLowerCase().trim();
+    return (studentUid && sUid === studentUid) || (studentEmail && sEmail === studentEmail);
+  });
+
+  if (student) {
+    const sTeacherUid = (student.teacherUid || (student as any).assignedTeacherId || '').trim();
+    const sTeacherEmail = (student.teacherEmail || '').toLowerCase().trim();
+    if (
+      (teacherUid && sTeacherUid && teacherUid === sTeacherUid) ||
+      (teacherEmail && sTeacherEmail && teacherEmail === sTeacherEmail) ||
+      (teacherUid && sTeacherEmail && teacherUid.toLowerCase().includes(sTeacherEmail))
+    ) {
+      return res.json({ isLinked: true, reason: 'assigned_student' });
+    }
+  }
+
+  // Check scheduled lessons
+  const hasLesson = (db.liveLessons || []).some((l: any) => {
+    const lStudentEmail = (l.studentEmail || '').toLowerCase().trim();
+    const lStudentUid = (l.studentUid || '').trim();
+    const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
+    const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
+
+    const studentMatches = (studentEmail && lStudentEmail === studentEmail) || (studentUid && lStudentUid === studentUid);
+    const teacherMatches = (teacherEmail && lTeacherEmail === teacherEmail) || (teacherUid && lTeacherUid === teacherUid);
+    return studentMatches && teacherMatches && l.status !== 'cancelled';
+  });
+
+  if (hasLesson) {
+    return res.json({ isLinked: true, reason: 'active_lesson' });
+  }
+
+  return res.json({ isLinked: false, reason: 'unauthorized_uid_pair' });
+});
+
+app.delete(['/api/lessons/:id', '/api/live-lessons/:id'], (req, res) => {
+  const db = readDb();
+  const id = decodeURIComponent(req.params.id);
+  db.liveLessons = db.liveLessons.filter((l) => l.id !== id);
+  writeDb(db);
+  res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+// 6. Chat Messages Endpoints
+app.get('/api/chat-messages', (req, res) => {
+  const db = readDb();
+  res.json({ messages: db.chatMessages || [] });
+});
+
+app.post('/api/chat-messages', (req, res) => {
+  const db = readDb();
+  const { message, messages } = req.body;
+  if (Array.isArray(messages)) {
+    db.chatMessages = messages;
+  } else if (message && message.id) {
+    const idx = db.chatMessages.findIndex((m) => m.id === message.id);
+    if (idx >= 0) {
+      db.chatMessages[idx] = message;
+    } else {
+      db.chatMessages.push(message);
+    }
+  }
+  writeDb(db);
+  res.json({ success: true, messages: db.chatMessages });
+});
+
+app.delete('/api/chat-messages', (req, res) => {
+  const db = readDb();
+  db.chatMessages = [];
+  writeDb(db);
+  res.json({ success: true, messages: [] });
+});
+
+// 7. Routines Endpoints
+app.get('/api/routines', (req, res) => {
+  const db = readDb();
+  if (Object.keys(db.routinesByDay || {}).length === 0) {
+    return res.json({});
+  }
+  res.json(db.routinesByDay);
+});
+
+app.post('/api/routines', (req, res) => {
+  const db = readDb();
+  const routinesByDay = req.body.routinesByDay || req.body;
+  const studentEmail = req.body.studentEmail;
+  const studentUid = req.body.studentUid || req.body.uid;
+  if (routinesByDay && typeof routinesByDay === 'object') {
+    db.routinesByDay = routinesByDay;
+    if (studentEmail || studentUid) {
+      if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+      const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+      if (email) db.studentRoutinesMap[email] = routinesByDay;
+      if (uid) db.studentRoutinesMap[uid] = routinesByDay;
+    }
+    writeDb(db);
+  }
+  res.json(db.routinesByDay);
+});
+
+app.post('/api/routines/words', (req, res) => {
+  const db = readDb();
+  const { day, activityId, words } = req.body;
+  if (db.routinesByDay && db.routinesByDay[day]) {
+    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) =>
+      item.id === activityId ? { ...item, learnedWords: words } : item
+    );
+    writeDb(db);
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/routines/toggle', (req, res) => {
+  const db = readDb();
+  const { day, activityId, studentEmail, studentUid, videoId } = req.body;
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const targetKeys = Array.from(new Set([email, uid].filter(Boolean) as string[]));
+
+  let becameCompleted = false;
+
+  if (db.routinesByDay && db.routinesByDay[day]) {
+    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) => {
+      if (item.id === activityId) {
+        const nextState = !item.completedToday;
+        if (nextState) becameCompleted = true;
+        return { ...item, completedToday: nextState, completed: nextState };
+      }
+      return item;
+    });
+  }
+
+  targetKeys.forEach((k) => {
+    if (db.studentRoutinesMap?.[k]?.[day]) {
+      db.studentRoutinesMap[k][day] = db.studentRoutinesMap[k][day].map((item: any) => {
+        if (item.id === activityId) {
+          const nextState = !item.completedToday;
+          if (nextState) becameCompleted = true;
+          return { ...item, completedToday: nextState, completed: nextState };
+        }
+        return item;
+      });
+    }
+
+    if (becameCompleted && videoId) {
+      const cleanVid = extractServerYouTubeId(videoId);
+      if (cleanVid) {
+        if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+        if (!db.studentWatchedVideos[k]) db.studentWatchedVideos[k] = [];
+        if (!db.studentWatchedVideos[k].includes(cleanVid)) {
+          db.studentWatchedVideos[k].push(cleanVid);
+        }
+      }
+    }
+  });
+
+  writeDb(db);
+  res.json({ success: true });
+});
+
+app.post('/api/routines/teacher-video', (req, res) => {
+  const db = readDb();
+  const {
+    activityId,
+    activityName,
+    playlistTitle,
+    playlistId,
+    videos,
+    teacherNotes,
+    days,
+    day,
+    studentEmail,
+    studentUid,
+    teacherUid,
+    teacherEmail,
+  } = req.body;
+
+  const targetDays: string[] = Array.isArray(days) && days.length > 0
+    ? days
+    : day
+    ? [day]
+    : Object.keys(db.routinesByDay || {});
+
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const resolvedTopicTitle = activityName || playlistTitle || videos?.[0]?.playlistTitle;
+
+  // 1. Update global db.routinesByDay for fallback
+  targetDays.forEach((d: string) => {
+    if (db.routinesByDay && db.routinesByDay[d]) {
+      db.routinesByDay[d] = db.routinesByDay[d].map((item: any) =>
+        item.id === activityId || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')
+          ? {
+              ...item,
+              activityName: resolvedTopicTitle || item.activityName,
+              teacherVideos: videos,
+              teacherNotes: teacherNotes || item.teacherNotes,
+            }
+          : item
+      );
+    }
+  });
+
+  // 2. If student is identified, persist to studentRoutinesMap and studentVideoAssignments
+  if (email || uid) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+
+    let existingRoutines =
+      (email && db.studentRoutinesMap[email]) ||
+      (uid && db.studentRoutinesMap[uid]) ||
+      null;
+
+    if (!existingRoutines || typeof existingRoutines !== 'object' || Object.keys(existingRoutines).length === 0) {
+      existingRoutines = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    } else {
+      const defaultDays = Object.keys(db.routinesByDay || {});
+      defaultDays.forEach((d) => {
+        if (!existingRoutines[d] || !Array.isArray(existingRoutines[d]) || existingRoutines[d].length === 0) {
+          existingRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay[d] || []));
+        }
+      });
+    }
+
+    targetDays.forEach((d: string) => {
+      if (existingRoutines && existingRoutines[d]) {
+        let matched = false;
+        existingRoutines[d] = existingRoutines[d].map((item: any) => {
+          const match = activityId
+            ? item.id === activityId
+            : item.id?.endsWith('1') || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo');
+          if (match) {
+            matched = true;
+            return {
+              ...item,
+              activityName: resolvedTopicTitle || item.activityName,
+              teacherVideos: videos,
+              teacherNotes: teacherNotes || item.teacherNotes,
+            };
+          }
+          return item;
+        });
+        if (!matched && existingRoutines[d].length > 0) {
+          existingRoutines[d][0] = {
+            ...existingRoutines[d][0],
+            activityName: resolvedTopicTitle || existingRoutines[d][0].activityName,
+            teacherVideos: videos,
+            teacherNotes: teacherNotes || existingRoutines[d][0].teacherNotes,
+          };
+        }
+      }
+
+      // Record in studentVideoAssignments for anti-repetition history
+      const keysToUpdate = [email, uid].filter(Boolean) as string[];
+      keysToUpdate.forEach((key) => {
+        if (!db.studentVideoAssignments[key]) db.studentVideoAssignments[key] = [];
+        db.studentVideoAssignments[key] = db.studentVideoAssignments[key].filter(
+          (a: any) => a.day !== d
+        );
+
+        if (Array.isArray(videos) && videos.length > 0 && videos[0]?.url) {
+          const validVidId = extractServerYouTubeId(videos[0].videoId || videos[0].url) || '';
+          const newAssignment = {
+            id: `assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            activityId: activityId || 'act-1',
+            studentEmail: email,
+            studentUid: uid,
+            teacherUid: (teacherUid || '').trim(),
+            teacherEmail: (teacherEmail || '').trim(),
+            day: d,
+            playlistId: videos[0].playlistId || 'custom-teacher-url',
+            playlistTitle: videos[0].playlistTitle || 'Teacher Assigned Custom Video',
+            videoId: validVidId,
+            videoTitle: videos[0].title || 'Teacher Assigned Video',
+            videoUrl: videos[0].url,
+            assignedAt: new Date().toISOString(),
+          };
+          db.studentVideoAssignments[key].push(newAssignment);
+        }
+      });
+    });
+
+    if (email) db.studentRoutinesMap[email] = existingRoutines;
+    if (uid) db.studentRoutinesMap[uid] = existingRoutines;
+  }
+
+  writeDb(db);
+  res.json({ success: true, updatedDays: targetDays, studentEmail: email, studentUid: uid });
+});
+
+app.post('/api/routines/teacher-spotify', (req, res) => {
+  const db = readDb();
+  const {
+    activityId,
+    spotify,
+    teacherNotes,
+    days,
+    day,
+    studentEmail,
+    studentUid,
+    teacherUid,
+    teacherEmail,
+  } = req.body;
+
+  // Strict validation and sanitization of Spotify URL
+  if (spotify && spotify.url) {
+    const spotifyValidation = parseSpotifyUrl(spotify.url);
+    if (!spotifyValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: spotifyValidation.errorMessage || 'URL do Spotify inválida ou incompleta. Utilize um link válido de /track/, /episode/ ou /show/.',
+      });
+    }
+    spotify.url = spotifyValidation.canonicalUrl;
+    spotify.type = spotifyValidation.contentType;
+  }
+
+  const targetDays: string[] = Array.isArray(days) && days.length > 0
+    ? days
+    : day
+    ? [day]
+    : Object.keys(db.routinesByDay || {});
+
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  targetDays.forEach((d: string) => {
+    if (db.routinesByDay && db.routinesByDay[d]) {
+      db.routinesByDay[d] = db.routinesByDay[d].map((item: any) =>
+        item.id === activityId || item.activityName?.toLowerCase().includes('podcast') || item.activityName?.toLowerCase().includes('áudio')
+          ? { ...item, teacherSpotify: spotify, teacherNotes: teacherNotes || item.teacherNotes }
+          : item
+      );
+    }
+  });
+
+  if (email || uid) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentSpotifyAssignments) db.studentSpotifyAssignments = {};
+
+    let existingRoutines =
+      (email && db.studentRoutinesMap[email]) ||
+      (uid && db.studentRoutinesMap[uid]) ||
+      null;
+
+    if (!existingRoutines || typeof existingRoutines !== 'object' || Object.keys(existingRoutines).length === 0) {
+      existingRoutines = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    } else {
+      const defaultDays = Object.keys(db.routinesByDay || {});
+      defaultDays.forEach((d) => {
+        if (!existingRoutines[d] || !Array.isArray(existingRoutines[d]) || existingRoutines[d].length === 0) {
+          existingRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay[d] || []));
+        }
+      });
+    }
+
+    targetDays.forEach((d: string) => {
+      if (existingRoutines && existingRoutines[d]) {
+        let matched = false;
+        existingRoutines[d] = existingRoutines[d].map((item: any) => {
+          const match = activityId
+            ? item.id === activityId
+            : item.id?.endsWith('2') || item.activityName?.toLowerCase().includes('podcast') || item.activityName?.toLowerCase().includes('áudio');
+          if (match) {
+            matched = true;
+            return {
+              ...item,
+              teacherSpotify: spotify,
+              teacherNotes: teacherNotes || item.teacherNotes,
+            };
+          }
+          return item;
+        });
+        if (!matched && existingRoutines[d].length > 0) {
+          existingRoutines[d][0] = {
+            ...existingRoutines[d][0],
+            teacherSpotify: spotify,
+            teacherNotes: teacherNotes || existingRoutines[d][0].teacherNotes,
+          };
+        }
+      }
+
+      // Record in studentSpotifyAssignments for strict UID/email persistence and auditing
+      const keysToUpdate = [email, uid].filter(Boolean) as string[];
+      keysToUpdate.forEach((key) => {
+        if (!db.studentSpotifyAssignments![key]) db.studentSpotifyAssignments![key] = [];
+        db.studentSpotifyAssignments![key] = db.studentSpotifyAssignments![key].filter(
+          (a: any) => a.day !== d
+        );
+
+        if (spotify && spotify.url) {
+          const newAssignment = {
+            id: spotify.id || `spot-assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            activityId: activityId || 'act-2',
+            studentEmail: email,
+            studentUid: uid,
+            teacherUid: (teacherUid || '').trim(),
+            teacherEmail: (teacherEmail || '').trim(),
+            day: d,
+            url: spotify.url,
+            title: spotify.title || 'Teacher Recommended Audio',
+            artistOrHost: spotify.artistOrHost,
+            type: spotify.type || 'music',
+            instructions: spotify.instructions || teacherNotes,
+            assignedAt: spotify.addedAt || new Date().toISOString(),
+          };
+          db.studentSpotifyAssignments![key].push(newAssignment);
+        }
+      });
+    });
+
+    if (email) db.studentRoutinesMap[email] = existingRoutines;
+    if (uid) db.studentRoutinesMap[uid] = existingRoutines;
+  }
+
+  writeDb(db);
+  res.json({ success: true, updatedDays: targetDays, studentEmail: email, studentUid: uid });
+});
+
+// Endpoint to validate Spotify link format and return canonical metadata (supports GET & POST)
+const handleSpotifyValidate = (req: express.Request, res: express.Response) => {
+  const rawUrl = (((req.query.url as string) || (req.body && req.body.url) || '') as string).trim();
+  const parsed = parseSpotifyUrl(rawUrl);
+  res.json({
+    success: parsed.isValid,
+    isValid: parsed.isValid,
+    ...parsed,
+  });
+};
+
+app.get('/api/spotify/validate-link', handleSpotifyValidate);
+app.post('/api/spotify/validate-link', handleSpotifyValidate);
+
+// Endpoint to retrieve individual student Spotify assignments by UID or email with auto-distribution and listened history
+app.get('/api/student-spotify-assignments', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const { email, uid: resolvedUid } = resolveStudentIdentifiers(db, studentEmail, uid);
+
+  const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, email, resolvedUid)).key;
+  const keysToLookup = [resolvedUid, email].filter(Boolean) as string[];
+
+  let assignments: any[] = [];
+  for (const k of keysToLookup) {
+    if (db.studentSpotifyAssignments?.[k] && Array.isArray(db.studentSpotifyAssignments[k])) {
+      assignments = db.studentSpotifyAssignments[k];
+      if (assignments.length > 0) break;
+    }
+  }
+
+  // Check if assignments are missing, corrupted with duplicate track IDs, or level mismatched
+  const uniqueTrackIds = new Set(
+    assignments.map((a) => extractSpotifyTrackId(a.trackId || a.url || a.trackUrl)).filter(Boolean)
+  );
+  const hasRepeatingBug = assignments.length > 1 && uniqueTrackIds.size === 1;
+  const levelMismatch = assignments.length > 0 && assignments.some((a) => {
+    const aNorm = normalizeStudentLevel(a.level || a.playlistTitle).key;
+    return aNorm !== studentLevel || (a.playlistId && a.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[studentLevel].playlistId);
+  });
+
+  if (assignments.length < 7 || hasRepeatingBug || levelMismatch) {
+    if (email || resolvedUid) {
+      assignments = distributeWeeklySpotifyForStudent(db, email, resolvedUid, studentLevel);
+      writeDb(db);
+    }
+  }
+
+  const listenedKey = resolvedUid && db.studentListenedTracks?.[resolvedUid] ? resolvedUid : email;
+  const listened = (listenedKey && db.studentListenedTracks?.[listenedKey]) || [];
+
+  res.json({
+    success: true,
+    assignments,
+    listened,
+    studentEmail: email,
+    studentUid: resolvedUid,
+    studentLevel,
+  });
+});
+
+// Endpoint for Spotify anti-repetition exclusive track assignment (Parity with YouTube video assignment engine)
+app.post('/api/student-spotify-assignments/assign', (req, res) => {
+  const db = readDb();
+  const {
+    studentEmail,
+    studentUid,
+    teacherUid,
+    teacherEmail,
+    day,
+    level,
+    playlistId,
+    trackUrl,
+    title,
+    artistOrHost,
+    teacherNotes,
+    trackType,
+    activityId,
+  } = req.body;
+
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required to assign Spotify track' });
+  }
+
+  const studentLevel = normalizeStudentLevel(level || resolveStudentLevel(db, cleanEmail, uid)).key;
+  const levelPlaylist = SPOTIFY_LEVEL_PLAYLISTS[studentLevel] || SPOTIFY_LEVEL_PLAYLISTS.beginner;
+  const targetDay = (day && DAYS_SEQUENCE.includes(day.toLowerCase()) ? day.toLowerCase() : 'monday') as any;
+
+  if (!db.studentSpotifyAssignments) db.studentSpotifyAssignments = {};
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+
+  const userAssignments: any[] =
+    (uid && db.studentSpotifyAssignments[uid]) ||
+    (cleanEmail && db.studentSpotifyAssignments[cleanEmail]) ||
+    [];
+
+  const userListened: string[] =
+    (uid && db.studentListenedTracks[uid]) ||
+    (cleanEmail && db.studentListenedTracks[cleanEmail]) ||
+    [];
+
+  // Consumed track IDs: already listened OR already assigned to another day in the student's routine
+  const consumedTrackIds = new Set<string>();
+  userListened.forEach((id: string) => {
+    const cid = extractSpotifyTrackId(id);
+    if (cid) consumedTrackIds.add(cid);
+  });
+  userAssignments.forEach((assign: any) => {
+    if (assign.day !== targetDay) {
+      const cid = extractSpotifyTrackId(assign.trackId || assign.url || assign.trackUrl);
+      if (cid) consumedTrackIds.add(cid);
+    }
+  });
+
+  const playlistTracks = DAYS_SEQUENCE.map((d, i) => ({
+    day: d,
+    index: i + 1,
+    ...levelPlaylist.tracks[d],
+  }));
+
+  let chosenTrack: any = null;
+  let customUrl = (trackUrl || '').trim();
+
+  if (customUrl) {
+    const parsed = parseSpotifyUrl(customUrl);
+    if (!parsed.isValid) {
+      return res.status(400).json({
+        error: parsed.errorMessage || 'Link do Spotify inválido. Utilize um link válido do open.spotify.com.',
+      });
+    }
+    const trackId = parsed.id || `custom-${Date.now()}`;
+    chosenTrack = {
+      day: targetDay,
+      index: 1,
+      trackId,
+      title: title || 'Faixa Selecionada pelo Professor',
+      artist: artistOrHost || 'Artista / Podcast',
+      url: parsed.canonicalUrl || customUrl,
+      embedUrl: parsed.embedUrl,
+      duration: '3-4 min',
+      teacherTipPt: teacherNotes || 'Ouça com atenção e pratique a compreensão auditiva.',
+      type: trackType || parsed.contentType || 'music',
+    };
+  } else {
+    // Sequential Progression & Anti-Repetition Selection:
+    // 1st priority: The day's designated track in the curriculum playlist if not consumed
+    const dayDesignatedTrack = playlistTracks.find((t) => t.day === targetDay);
+    const dayTrackId = dayDesignatedTrack ? extractSpotifyTrackId(dayDesignatedTrack.url) : null;
+
+    if (dayDesignatedTrack && dayTrackId && !consumedTrackIds.has(dayTrackId)) {
+      chosenTrack = dayDesignatedTrack;
+    } else {
+      // 2nd priority: Next unseen track in the playlist
+      chosenTrack = playlistTracks.find((t) => {
+        const tid = extractSpotifyTrackId(t.url);
+        return tid && !consumedTrackIds.has(tid);
+      });
+    }
+
+    // 3rd priority: If all consumed, recycle to designated track
+    if (!chosenTrack) {
+      chosenTrack = dayDesignatedTrack || playlistTracks[0];
+    }
+  }
+
+  const chosenId = extractSpotifyTrackId(chosenTrack.url) || chosenTrack.trackId || `sp-${Date.now()}`;
+  const canonicalUrl = `https://open.spotify.com/track/${chosenId}`;
+  const embedUrl = chosenTrack.embedUrl || `https://open.spotify.com/embed/track/${chosenId}?utm_source=generator&theme=0`;
+
+  const assignedTrackObj = {
+    id: `sp-${targetDay}-${Date.now()}`,
+    url: canonicalUrl,
+    trackId: chosenId,
+    title: title || chosenTrack.title,
+    artistOrHost: artistOrHost || chosenTrack.artist || chosenTrack.artistOrHost || 'Native Friend',
+    duration: chosenTrack.duration || '3-4 min',
+    instructions:
+      teacherNotes ||
+      chosenTrack.teacherTipPt ||
+      'Sugestão diária do Teacher: Ouça com atenção e pratique a compreensão auditiva.',
+    type: trackType || chosenTrack.type || 'music',
+    addedAt: new Date().toISOString(),
+    level: studentLevel,
+    playlistId: levelPlaylist.playlistId,
+    playlistTitle: levelPlaylist.playlistTitle,
+    trackIndex: chosenTrack.index || 1,
+  };
+
+  const newAssignment = {
+    id: `spot-assign-${targetDay}-${Date.now()}`,
+    activityId: activityId || `act-${targetDay}-2`,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    teacherUid: (teacherUid || '').trim(),
+    teacherEmail: (teacherEmail || '').trim(),
+    day: targetDay,
+    trackId: chosenId,
+    trackTitle: assignedTrackObj.title,
+    trackUrl: canonicalUrl,
+    embedUrl,
+    title: assignedTrackObj.title,
+    artistOrHost: assignedTrackObj.artistOrHost,
+    type: assignedTrackObj.type,
+    instructions: assignedTrackObj.instructions,
+    assignedAt: new Date().toISOString(),
+    level: studentLevel,
+    playlistId: levelPlaylist.playlistId,
+    playlistTitle: levelPlaylist.playlistTitle,
+    trackIndex: assignedTrackObj.trackIndex,
+  };
+
+  // Persist to studentSpotifyAssignments under both email and uid
+  const targetKeys = Array.from(new Set([cleanEmail, uid].filter(Boolean) as string[]));
+  targetKeys.forEach((k) => {
+    if (!db.studentSpotifyAssignments![k]) db.studentSpotifyAssignments![k] = [];
+    db.studentSpotifyAssignments![k] = db.studentSpotifyAssignments![k].filter(
+      (a: any) => a.day !== targetDay
+    );
+    db.studentSpotifyAssignments![k].push(newAssignment);
+  });
+
+  // Update student routines in studentRoutinesMap
+  targetKeys.forEach((k) => {
+    let studentRoutine = db.studentRoutinesMap?.[k];
+    if (!studentRoutine) {
+      studentRoutine = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+    }
+    if (studentRoutine && studentRoutine[targetDay]) {
+      let matched = false;
+      studentRoutine[targetDay] = studentRoutine[targetDay].map((item: any) => {
+        const isTarget =
+          item.id?.endsWith('2') ||
+          item.activityName?.toLowerCase().includes('podcast') ||
+          item.activityName?.toLowerCase().includes('áudio') ||
+          item.activityName?.toLowerCase().includes('audio');
+        if (isTarget) {
+          matched = true;
+          return {
+            ...item,
+            teacherSpotify: assignedTrackObj,
+            teacherNotes: teacherNotes || item.teacherNotes,
+          };
+        }
+        return item;
+      });
+      if (!matched && studentRoutine[targetDay].length > 0) {
+        studentRoutine[targetDay][0] = {
+          ...studentRoutine[targetDay][0],
+          teacherSpotify: assignedTrackObj,
+          teacherNotes: teacherNotes || studentRoutine[targetDay][0].teacherNotes,
+        };
+      }
+    }
+    db.studentRoutinesMap![k] = studentRoutine;
+  });
+
+  // Calculate remaining unseen tracks in playlist
+  const remainingUnseen = playlistTracks.filter((t) => {
+    const tid = extractSpotifyTrackId(t.url);
+    return tid && !consumedTrackIds.has(tid) && tid !== chosenId;
+  }).length;
+
+  writeDb(db);
+
+  if (uid) {
+    saveStudentAssignmentsByUid(uid, {
+      uid,
+      email: cleanEmail,
+      level: studentLevel,
+      spotifyAssignments: db.studentSpotifyAssignments?.[uid] || db.studentSpotifyAssignments?.[cleanEmail] || [],
+      videoAssignments: db.studentVideoAssignments?.[uid] || db.studentVideoAssignments?.[cleanEmail] || [],
+      routines: db.studentRoutinesMap?.[uid] || db.studentRoutinesMap?.[cleanEmail],
+      updatedAt: new Date().toISOString(),
+    }).catch((err) => console.warn('Firestore saveStudentAssignmentsByUid (Spotify assign) notice:', err));
+  }
+
+  res.json({
+    success: true,
+    track: assignedTrackObj,
+    assignment: newAssignment,
+    playlistTitle: levelPlaylist.playlistTitle,
+    remainingUnseen,
+    totalTracks: 7,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    message: `Faixa "${assignedTrackObj.title}" atribuída com sucesso para ${targetDay}.`,
+  });
+});
+
+// Endpoint to distribute exclusive sequential tracks for student active days (or Monday to Sunday)
+app.post('/api/student-spotify-assignments/distribute-week', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, teacherUid, teacherEmail, level, days } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  const assignments = distributeWeeklySpotifyForStudent(
+    db,
+    cleanEmail,
+    uid,
+    level,
+    teacherUid,
+    teacherEmail,
+    Array.isArray(days) ? days : undefined
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    assignments,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    message: `Semana de ${assignments.length} faixas exclusivas do Spotify distribuída com sucesso!`,
+  });
+});
+
+// Endpoint to record a track as listened by a student (parallel to studentWatchedVideos)
+app.post('/api/student-spotify-assignments/listen', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, trackId, trackUrl } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  const cleanTrackId = extractSpotifyTrackId(trackId || trackUrl);
+  if (!cleanTrackId) {
+    return res.status(400).json({ error: 'trackId or trackUrl is required' });
+  }
+
+  if (!db.studentListenedTracks) db.studentListenedTracks = {};
+
+  const targetKeys = Array.from(new Set([cleanEmail, uid].filter(Boolean) as string[]));
+  targetKeys.forEach((key) => {
+    if (!db.studentListenedTracks![key]) db.studentListenedTracks![key] = [];
+    if (!db.studentListenedTracks![key].includes(cleanTrackId)) {
+      db.studentListenedTracks![key].push(cleanTrackId);
+    }
+  });
+
+  writeDb(db);
+
+  const activeListened = (uid && db.studentListenedTracks[uid]) || (cleanEmail && db.studentListenedTracks[cleanEmail]) || [];
+  res.json({
+    success: true,
+    listened: activeListened,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+  });
+});
+
+// Endpoint to verify live Spotify Web API connection with the official token
+app.get('/api/spotify/verify', async (req, res) => {
+  const token = (req.query.token as string) || process.env.SPOTIFY_TOKEN || SPOTIFY_BEARER_TOKEN || '';
+  if (!token) {
+    return res.status(400).json({ connected: false, error: 'Spotify token not configured' });
+  }
+
+  try {
+    const userRes = await fetch('https://api.spotify.com/v1/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const userData = await userRes.json();
+
+    const playlistsRes = await fetch('https://api.spotify.com/v1/me/playlists?limit=20', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const playlistsData = await playlistsRes.json();
+
+    const topTracksRes = await fetch('https://api.spotify.com/v1/me/top/tracks?time_range=long_term&limit=5', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const topTracksData = await topTracksRes.json();
+
+    res.json({
+      connected: userRes.ok,
+      user: userData,
+      playlistsCount: playlistsData?.items?.length || 0,
+      playlists: (playlistsData?.items || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        totalTracks: p.items?.total || p.tracks?.total || 7,
+        url: p.external_urls?.spotify,
+      })),
+      topTracksCount: topTracksData?.items?.length || 0,
+      topTracks: topTracksData?.items || [],
+      tokenStatus: userRes.ok ? 'valid' : 'expired_or_invalid',
+    });
+  } catch (err: any) {
+    res.status(500).json({ connected: false, error: err?.message || 'Failed to verify Spotify' });
+  }
+});
+
+// 7.0 YouTube & Spotify Dynamic Playlist Synchronization & Anti-Repetition Video Assignments
+
+let lastYouTubeSyncTime = 0;
+const YOUTUBE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+
+async function syncYouTubePlaylistsFromApi(force = false): Promise<any[]> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  const channelId = 'UCdimJysdxd2Hu9YmlVHB98A';
+  const db = readDb();
+
+  if (!apiKey) {
+    return db.youtubePlaylists || [];
+  }
+
+  if (!force && lastYouTubeSyncTime && Date.now() - lastYouTubeSyncTime < YOUTUBE_CACHE_TTL_MS) {
+    if (db.youtubePlaylists && db.youtubePlaylists.length > 0) {
+      return db.youtubePlaylists;
+    }
+  }
+
+  try {
+    const plUrl = `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&channelId=${channelId}&maxResults=50&key=${apiKey}`;
+    const plRes = await fetch(plUrl);
+    if (!plRes.ok) {
+      console.warn('YouTube API playlists fetch status:', plRes.status);
+      return db.youtubePlaylists || [];
+    }
+
+    const plData = (await plRes.json()) as any;
+    const items = plData.items || [];
+    if (items.length === 0) {
+      return db.youtubePlaylists || [];
+    }
+
+    const syncedPlaylists: any[] = [];
+    for (const pl of items) {
+      const plId = pl.id;
+      const title = pl.snippet?.title || 'English Practice';
+      const description = pl.snippet?.description || '';
+      const thumbnailUrl =
+        pl.snippet?.thumbnails?.high?.url ||
+        pl.snippet?.thumbnails?.medium?.url ||
+        pl.snippet?.thumbnails?.default?.url ||
+        '';
+      const itemCount = pl.contentDetails?.itemCount || 0;
+
+      const itemsUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${plId}&maxResults=50&key=${apiKey}`;
+      const itemsRes = await fetch(itemsUrl);
+      let videos: any[] = [];
+
+      if (itemsRes.ok) {
+        const itemsData = (await itemsRes.json()) as any;
+        const rawItems = itemsData.items || [];
+        videos = rawItems
+          .filter(
+            (v: any) =>
+              v.snippet?.resourceId?.videoId &&
+              v.snippet?.title !== 'Private video' &&
+              v.snippet?.title !== 'Deleted video'
+          )
+          .map((v: any) => {
+            const vidId = v.snippet.resourceId.videoId;
+            return {
+              id: `vid-${vidId}`,
+              videoId: vidId,
+              title: v.snippet.title,
+              description: v.snippet.description || '',
+              thumbnailUrl:
+                v.snippet?.thumbnails?.high?.url ||
+                v.snippet?.thumbnails?.medium?.url ||
+                `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+              url: `https://www.youtube.com/watch?v=${vidId}`,
+              playlistId: plId,
+              playlistTitle: title,
+              instructions: `Assista a esta aula sobre "${title}" e anote 3 expressões novas.`,
+              duration: '6 min',
+            };
+          });
+      }
+
+      // Preserve fallback videos if sub-request didn't return any
+      if (videos.length === 0 && db.youtubePlaylists) {
+        const existingPl = db.youtubePlaylists.find((p: any) => p.id === plId);
+        if (existingPl?.videos?.length) {
+          videos = existingPl.videos;
+        }
+      }
+
+      syncedPlaylists.push({
+        id: plId,
+        title,
+        description,
+        thumbnailUrl,
+        channelId,
+        channelTitle: pl.snippet?.channelTitle || 'Adm Itissimple',
+        itemCount: itemCount || videos.length,
+        updatedAt: new Date().toISOString(),
+        isPublic: true,
+        videos,
+      });
+    }
+
+    if (syncedPlaylists.length > 0) {
+      db.youtubePlaylists = syncedPlaylists;
+      writeDb(db);
+      lastYouTubeSyncTime = Date.now();
+      return syncedPlaylists;
+    }
+  } catch (err) {
+    console.warn('Error fetching YouTube playlists:', err);
+  }
+
+  return db.youtubePlaylists || [];
+}
+
+let lastSpotifySyncTime = 0;
+const SPOTIFY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
+  const token = process.env.SPOTIFY_TOKEN || SPOTIFY_BEARER_TOKEN;
+  const db = readDb();
+
+  // Invalidate cached playlists if they still reference old playlist IDs
+  if (
+    db.spotifyPlaylists &&
+    (db.spotifyPlaylists.beginner?.playlistId !== '5MMU9H5oXDd7FCWr0gkzHE' ||
+     db.spotifyPlaylists.intermediate?.playlistId !== '34E52K1dEJO5CzZRPkIR4I' ||
+     db.spotifyPlaylists.advanced?.playlistId !== '6ScLXNefp8JFohezoJve2Z')
+  ) {
+    delete db.spotifyPlaylists;
+    writeDb(db);
+    lastSpotifySyncTime = 0;
+  }
+
+  if (!token) {
+    return db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
+  }
+
+  if (!force && lastSpotifySyncTime && Date.now() - lastSpotifySyncTime < SPOTIFY_CACHE_TTL_MS) {
+    if (
+      db.spotifyPlaylists &&
+      db.spotifyPlaylists.beginner?.playlistId === '5MMU9H5oXDd7FCWr0gkzHE' &&
+      db.spotifyPlaylists.intermediate?.playlistId === '34E52K1dEJO5CzZRPkIR4I' &&
+      db.spotifyPlaylists.advanced?.playlistId === '6ScLXNefp8JFohezoJve2Z'
+    ) {
+      return db.spotifyPlaylists;
+    }
+  }
+
+  const playlistMap: Record<string, { level: 'beginner' | 'intermediate' | 'advanced'; title: string }> = {
+    '5MMU9H5oXDd7FCWr0gkzHE': { level: 'beginner', title: "Beginner • It's simple" },
+    '34E52K1dEJO5CzZRPkIR4I': { level: 'intermediate', title: "Intermediate • It's simple" },
+    '6ScLXNefp8JFohezoJve2Z': { level: 'advanced', title: "Advanced • It's simple" },
+  };
+
+  try {
+    const updatedPlaylists: Record<string, any> = JSON.parse(
+      JSON.stringify(db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS)
+    );
+
+    for (const [playlistId, meta] of Object.entries(playlistMap)) {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        const items = data.items || [];
+        const dynamicTracks = items
+          .filter((item: any) => item.track && item.track.id)
+          .map((item: any) => {
+            const t = item.track;
+            const artistNames = t.artists?.map((a: any) => a.name).join(', ') || 'Adm Itissimple';
+            return {
+              trackId: t.id,
+              title: t.name,
+              artist: artistNames,
+              url: t.external_urls?.spotify || `https://open.spotify.com/track/${t.id}`,
+              embedUrl: `https://open.spotify.com/embed/track/${t.id}?utm_source=generator&theme=0`,
+              duration: Math.round((t.duration_ms || 180000) / 1000),
+              playlistId,
+              playlistTitle: meta.title,
+              teacherTipPt: `Prática de listening com "${t.name}" (${artistNames}). Preste atenção na dicção e conectividade das palavras.`,
+              teacherTipEn: `Active listening practice with "${t.name}" (${artistNames}). Notice rhythm, diction, and connected speech.`,
+            };
+          });
+
+        if (dynamicTracks.length > 0) {
+          if (!updatedPlaylists[meta.level]) {
+            updatedPlaylists[meta.level] = { ...SPOTIFY_LEVEL_PLAYLISTS[meta.level] };
+          }
+          DAYS_SEQUENCE.forEach((d, i) => {
+            if (dynamicTracks[i]) {
+              updatedPlaylists[meta.level].tracks[d] = {
+                ...updatedPlaylists[meta.level].tracks[d],
+                ...dynamicTracks[i],
+                dayOfWeek: d,
+                dayLabelPt: SPOTIFY_LEVEL_PLAYLISTS[meta.level]?.tracks[d]?.dayLabelPt || d,
+                dayLabelEn: SPOTIFY_LEVEL_PLAYLISTS[meta.level]?.tracks[d]?.dayLabelEn || d,
+              };
+            }
+          });
+          if (dynamicTracks.length > 7) {
+            updatedPlaylists[meta.level].pool = dynamicTracks.slice(7);
+          }
+        }
+      }
+    }
+
+    db.spotifyPlaylists = updatedPlaylists;
+    writeDb(db);
+    lastSpotifySyncTime = Date.now();
+    return updatedPlaylists;
+  } catch (err) {
+    console.warn('Error syncing Spotify playlists:', err);
+  }
+
+  return db.spotifyPlaylists || SPOTIFY_LEVEL_PLAYLISTS;
+}
+
+app.get('/api/youtube-playlists', async (req, res) => {
+  const force = req.query.refresh === 'true' || req.query.force === 'true';
+  const playlists = await syncYouTubePlaylistsFromApi(force);
+  const sortedPlaylists = [...playlists].sort((a, b) =>
+    (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+  );
+  res.json(sortedPlaylists);
+});
+
+app.post('/api/youtube-playlists/sync', async (req, res) => {
+  const playlists = await syncYouTubePlaylistsFromApi(true);
+  res.json({ success: true, count: playlists.length, playlists });
+});
+
+app.get('/api/spotify-playlists', async (req, res) => {
+  const force = req.query.refresh === 'true' || req.query.force === 'true';
+  const playlists = await syncSpotifyPlaylistsFromApi(force);
+  res.json(playlists);
+});
+
+app.post('/api/spotify-playlists/sync', async (req, res) => {
+  const playlists = await syncSpotifyPlaylistsFromApi(true);
+  res.json({ success: true, playlists });
+});
+
+app.get('/api/student-video-assignments', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
+  const { email, uid: resolvedUid } = resolveStudentIdentifiers(db, studentEmail, uid);
+
+  const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, email, resolvedUid)).key;
+  const keysToLookup = [resolvedUid, email].filter(Boolean) as string[];
+
+  let assignments: any[] = [];
+  for (const k of keysToLookup) {
+    if (db.studentVideoAssignments?.[k] && Array.isArray(db.studentVideoAssignments[k])) {
+      assignments = db.studentVideoAssignments[k];
+      if (assignments.length > 0) break;
+    }
+  }
+
+  // Check if assignments are missing or corrupted with duplicate video IDs across days
+  const uniqueVideoIds = new Set(
+    assignments.map((a) => extractServerYouTubeId(a.videoId || a.videoUrl)).filter(Boolean)
+  );
+  const hasRepeatingBug = assignments.length > 1 && uniqueVideoIds.size === 1;
+
+  const studentPlanDays: string[] =
+    (email && db.weeklyStudyDays?.[email] && db.weeklyStudyDays[email].length > 0)
+      ? db.weeklyStudyDays[email]
+      : (resolvedUid && db.weeklyStudyDays?.[resolvedUid] && db.weeklyStudyDays[resolvedUid].length > 0)
+      ? db.weeklyStudyDays[resolvedUid]
+      : (email && db.userProfiles?.[email]?.weeklyStudyDays && db.userProfiles[email].weeklyStudyDays.length > 0)
+      ? db.userProfiles[email].weeklyStudyDays
+      : (email && db.userProfiles?.[email]?.selectedStudyDays && db.userProfiles[email].selectedStudyDays.length > 0)
+      ? db.userProfiles[email].selectedStudyDays
+      : DAYS_SEQUENCE;
+  const expectedDaysCount = Math.max(1, studentPlanDays.length);
+
+  const isAwaitingTopicSelection = Boolean(
+    (email && db.studentAwaitingTopicSelection?.[email]) ||
+    (resolvedUid && db.studentAwaitingTopicSelection?.[resolvedUid])
+  );
+
+  if ((assignments.length < expectedDaysCount || hasRepeatingBug) && !isAwaitingTopicSelection) {
+    if (email || resolvedUid) {
+      assignments = distributeWeeklyYouTubeForStudent(db, email, resolvedUid, studentLevel, undefined, undefined, studentPlanDays);
+      writeDb(db);
+    }
+  }
+
+  const watchedKey = resolvedUid && db.studentWatchedVideos?.[resolvedUid] ? resolvedUid : email;
+  const watched = (watchedKey && db.studentWatchedVideos?.[watchedKey]) || [];
+
+  res.json({
+    success: true,
+    assignments,
+    watched,
+    studentEmail: email,
+    studentUid: resolvedUid,
+    studentLevel,
+  });
+});
+
+app.post('/api/student-video-assignments/assign', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, teacherUid, teacherEmail, playlistId, activityId, day, teacherNotes, videoUrl } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, cleanEmail, uid)).key;
+  const levelCurriculum = YOUTUBE_LEVEL_PLAYLISTS[studentLevel] || YOUTUBE_LEVEL_PLAYLISTS.beginner;
+
+  const playlists = db.youtubePlaylists || [];
+  const playlist = playlists.find((p: any) => p.id === playlistId) || playlists[0];
+
+  if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+
+  const targetKeys = [cleanEmail, uid].filter(Boolean) as string[];
+
+  let userAssignments: any[] = [];
+  for (const k of targetKeys) {
+    if (db.studentVideoAssignments[k] && Array.isArray(db.studentVideoAssignments[k])) {
+      userAssignments = db.studentVideoAssignments[k];
+      if (userAssignments.length > 0) break;
+    }
+  }
+
+  let userWatched: string[] = [];
+  for (const k of targetKeys) {
+    if (db.studentWatchedVideos[k] && Array.isArray(db.studentWatchedVideos[k])) {
+      userWatched = db.studentWatchedVideos[k];
+      if (userWatched.length > 0) break;
+    }
+  }
+
+  const targetDay = day || 'monday';
+
+  // Consumed video IDs: already watched OR already assigned to other days of the week for this student OR recorded in studentJournal
+  const consumedVideoIds = new Set<string>();
+  userWatched.forEach((id: string) => {
+    const cid = extractServerYouTubeId(id);
+    if (cid) consumedVideoIds.add(cid);
+  });
+
+  const clientWatchedHistory: string[] = Array.isArray(req.body.watchedVideosHistory)
+    ? req.body.watchedVideosHistory
+    : [];
+  clientWatchedHistory.forEach((id: string) => {
+    const cid = extractServerYouTubeId(id);
+    if (cid) {
+      consumedVideoIds.add(cid);
+    }
+  });
+
+  // Query studentJournal from request body, in-memory DB, and profile to enforce 100% video exclusivity
+  const reqJournal: any[] = Array.isArray(req.body.studentJournal) ? req.body.studentJournal : [];
+  const dbJournalEntries = [
+    ...reqJournal,
+    ...((cleanEmail && db.studentActivityJournal?.[cleanEmail]) || []),
+    ...((uid && db.studentActivityJournal?.[uid]) || []),
+    ...((cleanEmail && db.userProfiles?.[cleanEmail]?.studentJournal) || []),
+    ...((uid && db.userProfiles?.[uid]?.studentJournal) || []),
+  ];
+  dbJournalEntries.forEach((entry: any) => {
+    if (entry && entry.type === 'video' && entry.id) {
+      const cid = extractServerYouTubeId(entry.id);
+      if (cid) consumedVideoIds.add(cid);
+      if (entry.url) {
+        const uCid = extractServerYouTubeId(entry.url);
+        if (uCid) consumedVideoIds.add(uCid);
+      }
+    }
+  });
+
+  userAssignments.forEach((assign: any) => {
+    if (assign.day !== targetDay) {
+      const cid = extractServerYouTubeId(assign.videoId || assign.videoUrl);
+      if (cid) consumedVideoIds.add(cid);
+    }
+  });
+
+  let chosenVideo: any = null;
+
+  // If requesting to repeat previous video
+  if (playlistId === 'repeat_previous_video') {
+    const calendarDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const studentPlanDays: string[] =
+      (cleanEmail && db.weeklyStudyDays?.[cleanEmail] && db.weeklyStudyDays[cleanEmail].length > 0)
+        ? db.weeklyStudyDays[cleanEmail]
+        : (uid && db.weeklyStudyDays?.[uid] && db.weeklyStudyDays[uid].length > 0)
+        ? db.weeklyStudyDays[uid]
+        : (cleanEmail && db.userProfiles?.[cleanEmail]?.weeklyStudyDays && db.userProfiles[cleanEmail].weeklyStudyDays.length > 0)
+        ? db.userProfiles[cleanEmail].weeklyStudyDays
+        : calendarDays;
+
+    const activeDaysInOrder = calendarDays.filter((d) => studentPlanDays.includes(d));
+    const effectiveActiveDays = activeDaysInOrder.length > 0 ? activeDaysInOrder : calendarDays;
+    const currentActiveIdx = effectiveActiveDays.indexOf(targetDay);
+
+    let targetPrevDay = targetDay;
+    if (currentActiveIdx > 0) {
+      targetPrevDay = effectiveActiveDays[currentActiveIdx - 1];
+    } else if (currentActiveIdx === 0 && effectiveActiveDays.length > 1) {
+      targetPrevDay = effectiveActiveDays[effectiveActiveDays.length - 1];
+    } else {
+      const currentCalIdx = calendarDays.indexOf(targetDay);
+      const preceding = effectiveActiveDays.filter((d) => calendarDays.indexOf(d) < currentCalIdx);
+      targetPrevDay = preceding.length > 0 ? preceding[preceding.length - 1] : (effectiveActiveDays[effectiveActiveDays.length - 1] || 'monday');
+    }
+
+    // 1. Search designated target previous active study day in assignments
+    const prevAssign = userAssignments.find((a: any) => a.day === targetPrevDay && (a.videoId || a.videoUrl));
+    if (prevAssign) {
+      const pVidId = extractServerYouTubeId(prevAssign.videoId || prevAssign.videoUrl);
+      chosenVideo = {
+        videoId: pVidId,
+        url: prevAssign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
+        title: prevAssign.videoTitle || prevAssign.title || `Repeated Video (${targetPrevDay})`,
+        duration: prevAssign.duration || '5-10 min',
+        instructions: `Repeated from ${targetPrevDay}`,
+      };
+    }
+
+    // 2. Search designated target previous active study day in routines
+    if (!chosenVideo) {
+      const routineObj =
+        (cleanEmail && db.studentRoutinesMap?.[cleanEmail]) ||
+        (uid && db.studentRoutinesMap?.[uid]) ||
+        db.routinesByDay ||
+        defaultRoutinesByDay;
+      const dayActs = routineObj[targetPrevDay] || [];
+      for (const act of dayActs) {
+        const v = act.teacherVideos?.[0];
+        if (v && (v.videoId || v.url)) {
+          const pVidId = extractServerYouTubeId(v.videoId || v.url);
+          chosenVideo = {
+            videoId: pVidId,
+            url: v.url || `https://www.youtube.com/watch?v=${pVidId}`,
+            title: v.title || `Repeated Video (${targetPrevDay})`,
+            duration: v.duration || '5-10 min',
+            instructions: `Repeated from ${targetPrevDay}`,
+          };
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback search across any remaining active days in reverse order
+    if (!chosenVideo) {
+      const otherActiveDays = [...effectiveActiveDays].filter((d) => d !== targetDay && d !== targetPrevDay).reverse();
+      for (const d of otherActiveDays) {
+        const assign = userAssignments.find((a: any) => a.day === d && (a.videoId || a.videoUrl));
+        if (assign) {
+          const pVidId = extractServerYouTubeId(assign.videoId || assign.videoUrl);
+          chosenVideo = {
+            videoId: pVidId,
+            url: assign.videoUrl || `https://www.youtube.com/watch?v=${pVidId}`,
+            title: assign.videoTitle || assign.title || `Repeated Video (${d})`,
+            duration: assign.duration || '5-10 min',
+            instructions: `Repeated from ${d}`,
+          };
+          break;
+        }
+      }
+    }
+
+    // 4. Fallback to userWatched last entry
+    if (!chosenVideo && userWatched.length > 0) {
+      const lastWatchedId = userWatched[userWatched.length - 1];
+      chosenVideo = {
+        videoId: lastWatchedId,
+        url: `https://www.youtube.com/watch?v=${lastWatchedId}`,
+        title: 'Repeated Previous Video',
+        duration: '5-10 min',
+        instructions: 'Repeated from watched history',
+      };
+    }
+
+    // 5. Fallback to curriculum of target previous active day
+    if (!chosenVideo) {
+      const fallbackVid = levelCurriculum.videos[targetPrevDay] || levelCurriculum.videos.monday;
+      if (fallbackVid) {
+        chosenVideo = {
+          videoId: fallbackVid.videoId,
+          url: fallbackVid.url,
+          title: fallbackVid.title,
+          duration: fallbackVid.duration || '5-10 min',
+          instructions: `Repeated from ${targetPrevDay}`,
+        };
+      }
+    }
+  }
+
+  // If a custom videoUrl was provided explicitly
+  if (videoUrl) {
+    const manualId = extractServerYouTubeId(videoUrl);
+    if (manualId) {
+      chosenVideo = {
+        videoId: manualId,
+        url: `https://www.youtube.com/watch?v=${manualId}`,
+        title: 'Teacher Selected Video',
+        duration: '5-10 min',
+      };
+    }
+  }
+
+  // Next: find next unseen video from the requested playlist
+  if (!chosenVideo && playlist && playlist.videos && playlist.videos.length > 0) {
+    chosenVideo = playlist.videos.find((v: any) => {
+      const vid = extractServerYouTubeId(v.videoId || v.url || v.id);
+      return vid && !consumedVideoIds.has(vid);
+    });
+  }
+
+  // Fallback: search in level curriculum
+  if (!chosenVideo) {
+    const pool = [
+      ...DAYS_SEQUENCE.map((d) => levelCurriculum.videos[d]),
+      ...(levelCurriculum.pool || []),
+    ].filter(Boolean);
+
+    chosenVideo = pool.find((v: any) => {
+      const vid = extractServerYouTubeId(v.videoId || v.url || v.id);
+      return vid && !consumedVideoIds.has(vid);
+    });
+  }
+
+  // Ultimate fallback: recycle designated day video
+  if (!chosenVideo) {
+    chosenVideo = levelCurriculum.videos[targetDay] || {
+      videoId: 'V1bFr2KGq1g',
+      url: 'https://www.youtube.com/watch?v=V1bFr2KGq1g',
+      title: 'Daily English Video Practice',
+      duration: '5-8 min',
+    };
+  }
+
+  const validVidId = extractServerYouTubeId(chosenVideo.videoId || chosenVideo.url || chosenVideo.id)!;
+  const cleanVideoUrl = `https://www.youtube.com/watch?v=${validVidId}`;
+
+  const assignedVideoObj = {
+    id: `vid-${targetDay}-${Date.now()}`,
+    url: cleanVideoUrl,
+    videoId: validVidId,
+    title: chosenVideo.title,
+    duration: chosenVideo.duration || '5-10 min',
+    instructions:
+      teacherNotes ||
+      chosenVideo.instructions ||
+      chosenVideo.teacherTipPt ||
+      `Vídeo exclusivo do dia. Assista com atenção e anote 5 novas palavras.`,
+    addedAt: new Date().toISOString(),
+    playlistId: playlistId === 'repeat_previous_video' ? 'repeat_previous_video' : (playlist?.id || levelCurriculum.playlistId),
+    playlistTitle: playlistId === 'repeat_previous_video' ? 'Repeat Previous Video' : (playlist?.title || levelCurriculum.playlistTitle),
+  };
+
+  const assignmentRecord = {
+    id: `assign-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    activityId: activityId || 'act-1',
+    studentEmail: cleanEmail,
+    studentUid: uid || '',
+    teacherUid: (teacherUid || '').trim(),
+    teacherEmail: (teacherEmail || '').trim(),
+    day: targetDay,
+    playlistId: assignedVideoObj.playlistId,
+    playlistTitle: assignedVideoObj.playlistTitle,
+    videoId: validVidId,
+    videoTitle: chosenVideo.title,
+    videoUrl: cleanVideoUrl,
+    assignedAt: new Date().toISOString(),
+  };
+
+  targetKeys.forEach((key) => {
+    if (!db.studentVideoAssignments[key]) {
+      db.studentVideoAssignments[key] = [];
+    }
+    db.studentVideoAssignments[key] = db.studentVideoAssignments[key].filter(
+      (a: any) => a.day !== targetDay
+    );
+    db.studentVideoAssignments[key].push(assignmentRecord);
+  });
+
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+  let studentRoutineObj =
+    (cleanEmail && db.studentRoutinesMap[cleanEmail]) ||
+    (uid && db.studentRoutinesMap[uid]) ||
+    null;
+
+  if (!studentRoutineObj || typeof studentRoutineObj !== 'object' || Object.keys(studentRoutineObj).length === 0) {
+    studentRoutineObj = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+  } else {
+    DAYS_SEQUENCE.forEach((d) => {
+      if (!studentRoutineObj[d] || !Array.isArray(studentRoutineObj[d]) || studentRoutineObj[d].length === 0) {
+        studentRoutineObj[d] = JSON.parse(JSON.stringify(db.routinesByDay?.[d] || defaultRoutinesByDay[d] || []));
+      }
+    });
+  }
+
+  if (studentRoutineObj?.[targetDay]) {
+    let matched = false;
+    studentRoutineObj[targetDay] = studentRoutineObj[targetDay].map((act: any) => {
+      const match = activityId
+        ? act.id === activityId
+        : act.id.endsWith('1') ||
+          act.activityName?.toLowerCase().includes('vídeo') ||
+          act.activityName?.toLowerCase().includes('video') ||
+          (db.youtubePlaylists || []).some((pl: any) => pl.title?.toLowerCase() === act.activityName?.toLowerCase());
+      if (match) {
+        matched = true;
+        return {
+          ...act,
+          activityName: assignedVideoObj.playlistTitle,
+          teacherVideos: [assignedVideoObj],
+          teacherNotes: assignedVideoObj.instructions,
+        };
+      }
+      return act;
+    });
+    if (!matched && studentRoutineObj[targetDay].length > 0) {
+      studentRoutineObj[targetDay][0] = {
+        ...studentRoutineObj[targetDay][0],
+        activityName: assignedVideoObj.playlistTitle,
+        teacherVideos: [assignedVideoObj],
+        teacherNotes: assignedVideoObj.instructions,
+      };
+    }
+  }
+
+  targetKeys.forEach((key) => {
+    db.studentRoutinesMap[key] = studentRoutineObj;
+    const assigns = db.studentVideoAssignments?.[key] || [];
+    if (assigns.length >= 7 && db.studentAwaitingTopicSelection) {
+      db.studentAwaitingTopicSelection[key] = false;
+    }
+  });
+
+  writeDb(db);
+
+  if (uid) {
+    saveRoutineVideoSubcollection(uid, targetDay, {
+      videoId: validVidId,
+      videoTitle: assignedVideoObj.title,
+      title: assignedVideoObj.title,
+      url: cleanVideoUrl,
+      playlistId: assignedVideoObj.playlistId,
+      playlistTitle: assignedVideoObj.playlistTitle,
+      dayOfWeek: targetDay,
+      activityId: activityId || 'act-1',
+      isRepeatVideo: playlistId === 'repeat_previous_video',
+      instructions: assignedVideoObj.instructions || '',
+      duration: assignedVideoObj.duration || '5-10 min',
+      updatedAt: new Date().toISOString(),
+    }).catch((e) => console.warn('Firestore routine subcollection notice:', e));
+
+    if (validVidId && playlistId !== 'repeat_previous_video') {
+      addWatchedVideoToUserDoc(uid, validVidId).catch(() => {});
+    }
+
+    saveStudentAssignmentsByUid(uid, {
+      uid,
+      email: cleanEmail,
+      level: studentLevel,
+      videoAssignments: db.studentVideoAssignments?.[uid] || db.studentVideoAssignments?.[cleanEmail] || [],
+      spotifyAssignments: db.studentSpotifyAssignments?.[uid] || db.studentSpotifyAssignments?.[cleanEmail] || [],
+      routines: studentRoutineObj,
+      updatedAt: new Date().toISOString(),
+    }).catch((err) => console.warn('Firestore saveStudentAssignmentsByUid (YouTube assign) notice:', err));
+  }
+
+  // Count remaining unseen videos in this playlist for this student
+  const remainingUnseen = playlist.videos.filter((v: any) => {
+    const vid = extractServerYouTubeId(v.videoId || v.url || v.id);
+    return vid && !consumedVideoIds.has(vid) && vid !== validVidId;
+  }).length;
+
+  res.json({
+    success: true,
+    video: assignedVideoObj,
+    playlistTitle: assignedVideoObj.playlistTitle,
+    playlistId: assignedVideoObj.playlistId,
+    remainingUnseen,
+    totalVideos: playlist?.videos?.length || 7,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    message: `Vídeo exclusivo "${chosenVideo.title}" atribuído com sucesso!`,
+  });
+});
+
+// Endpoint to distribute exclusive sequential YouTube videos for student active days (or Monday to Sunday)
+app.post('/api/student-video-assignments/distribute-week', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, teacherUid, teacherEmail, level, days } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+
+  if (!cleanEmail && !uid) {
+    return res.status(400).json({ error: 'studentEmail or studentUid is required' });
+  }
+
+  const assignments = distributeWeeklyYouTubeForStudent(
+    db,
+    cleanEmail,
+    uid,
+    level,
+    teacherUid,
+    teacherEmail,
+    Array.isArray(days) ? days : undefined
+  );
+
+  writeDb(db);
+
+  res.json({
+    success: true,
+    assignments,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+    message: `Semana de ${assignments.length} vídeos exclusivos do YouTube atribuída com sucesso!`,
+  });
+});
+
+app.post('/api/student-video-assignments/watch', (req, res) => {
+  const db = readDb();
+  const { studentEmail, studentUid, videoId } = req.body;
+  const { email: cleanEmail, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const cleanVidId = extractServerYouTubeId(videoId);
+
+  if ((!cleanEmail && !uid) || !cleanVidId) {
+    return res.status(400).json({ error: 'studentEmail/studentUid and valid videoId are required' });
+  }
+
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+
+  const keysToUpdate = [cleanEmail, uid].filter(Boolean) as string[];
+  keysToUpdate.forEach((key) => {
+    if (!db.studentWatchedVideos[key]) db.studentWatchedVideos[key] = [];
+    if (!db.studentWatchedVideos[key].includes(cleanVidId)) {
+      db.studentWatchedVideos[key].push(cleanVidId);
+    }
+  });
+
+  writeDb(db);
+
+  const watchedList = (cleanEmail && db.studentWatchedVideos[cleanEmail]) || (uid && db.studentWatchedVideos[uid]) || [];
+  if (uid && cleanVidId) {
+    addWatchedVideoToUserDoc(uid, cleanVidId, (req.body.videoTitle || req.body.title)).catch(() => {});
+  }
+
+  res.json({
+    success: true,
+    watchedCount: watchedList.length,
+    watchedVideos: watchedList,
+    studentEmail: cleanEmail,
+    studentUid: uid,
+  });
+});
+
+app.post('/api/routines/daily-video', (req, res) => {
+  const { studentUid, day, dayOfWeek, videoId, title, videoTitle, url, playlistId, playlistTitle, isRepeatVideo } = req.body;
+  const targetDay = dayOfWeek || day;
+  if (!studentUid || !targetDay) {
+    return res.status(400).json({ error: 'studentUid and day are required' });
+  }
+
+  const cleanVidId = extractServerYouTubeId(videoId || url);
+  saveRoutineVideoSubcollection(studentUid, targetDay, {
+    videoId: cleanVidId || videoId,
+    title: title || videoTitle || 'Daily Video Practice',
+    videoTitle: videoTitle || title || 'Daily Video Practice',
+    url: url || (cleanVidId ? `https://www.youtube.com/watch?v=${cleanVidId}` : ''),
+    playlistId: playlistId || '',
+    playlistTitle: playlistTitle || '',
+    dayOfWeek: targetDay,
+    isRepeatVideo: Boolean(isRepeatVideo),
+    updatedAt: new Date().toISOString(),
+  }).catch(() => {});
+
+  if (cleanVidId && !isRepeatVideo) {
+    addWatchedVideoToUserDoc(studentUid, cleanVidId).catch(() => {});
+  }
+
+  res.json({ success: true });
+});
+
+app.post('/api/routines/update-time', (req, res) => {
+  const db = readDb();
+  const { day, activityId, time, studentEmail } = req.body;
+  if (!day || !activityId || !time) {
+    return res.status(400).json({ error: 'day, activityId, and time are required' });
+  }
+
+  if (db.routinesByDay && db.routinesByDay[day]) {
+    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) =>
+      item.id === activityId ? { ...item, time } : item
+    );
+  }
+
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  if (cleanEmail) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentRoutinesMap[cleanEmail]) {
+      db.studentRoutinesMap[cleanEmail] = JSON.parse(JSON.stringify(db.routinesByDay || {}));
+    }
+    if (db.studentRoutinesMap[cleanEmail]?.[day]) {
+      db.studentRoutinesMap[cleanEmail][day] = db.studentRoutinesMap[cleanEmail][day].map((item: any) =>
+        item.id === activityId ? { ...item, time } : item
+      );
+    }
+  }
+
+  writeDb(db);
+  res.json({ success: true, day, activityId, time });
+});
+
+// 7.1 Student Weekly S-Path Progress Endpoints (Multi-device cloud persistence)
+app.get('/api/routines/weekly-checks', (req, res) => {
+  const db = readDb();
+  const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
+  if (!studentEmail) {
+    return res.json({ checks: {}, weeklyNativeLessonsTarget: 1, weeklyStudyDaysTarget: 7, weeklyStudyDays: [] });
+  }
+  const checks = (db.studentWeeklyChecks && db.studentWeeklyChecks[studentEmail]) || {};
+  const userProf = (db.userProfiles && db.userProfiles[studentEmail]) || {};
+  const weeklyNativeLessonsTarget =
+    (db.weeklyNativeTargets && db.weeklyNativeTargets[studentEmail]) ||
+    userProf.weeklyNativeLessonsTarget ||
+    1;
+  const weeklyStudyDaysTarget =
+    (db.weeklyStudyDaysTargets && db.weeklyStudyDaysTargets[studentEmail]) ||
+    userProf.weeklyStudyDaysTarget ||
+    7;
+  const weeklyStudyDays =
+    (db.weeklyStudyDays && db.weeklyStudyDays[studentEmail]) ||
+    userProf.weeklyStudyDays ||
+    ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  res.json({ checks, weeklyNativeLessonsTarget, weeklyStudyDaysTarget, weeklyStudyDays });
+});
+
+app.post('/api/routines/weekly-checks', (req, res) => {
+  const db = readDb();
+  const { studentEmail, checks, weeklyNativeLessonsTarget, weeklyStudyDaysTarget, weeklyStudyDays } = req.body;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  if (cleanEmail) {
+    if (checks && typeof checks === 'object') {
+      if (!db.studentWeeklyChecks) {
+        db.studentWeeklyChecks = {};
+      }
+      if (req.body.merge && db.studentWeeklyChecks[cleanEmail]) {
+        db.studentWeeklyChecks[cleanEmail] = {
+          ...db.studentWeeklyChecks[cleanEmail],
+          ...checks,
+        };
+      } else {
+        db.studentWeeklyChecks[cleanEmail] = checks;
+      }
+    }
+    if (typeof weeklyNativeLessonsTarget === 'number' && weeklyNativeLessonsTarget > 0) {
+      if (!db.weeklyNativeTargets) {
+        db.weeklyNativeTargets = {};
+      }
+      db.weeklyNativeTargets[cleanEmail] = weeklyNativeLessonsTarget;
+      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail].weeklyNativeLessonsTarget = weeklyNativeLessonsTarget;
+      }
+    }
+    if (typeof weeklyStudyDaysTarget === 'number' && weeklyStudyDaysTarget >= 1 && weeklyStudyDaysTarget <= 7) {
+      if (!db.weeklyStudyDaysTargets) {
+        db.weeklyStudyDaysTargets = {};
+      }
+      db.weeklyStudyDaysTargets[cleanEmail] = weeklyStudyDaysTarget;
+      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail].weeklyStudyDaysTarget = weeklyStudyDaysTarget;
+      }
+    }
+    if (Array.isArray(weeklyStudyDays)) {
+      if (!db.weeklyStudyDays) {
+        db.weeklyStudyDays = {};
+      }
+      db.weeklyStudyDays[cleanEmail] = weeklyStudyDays;
+      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+        db.userProfiles[cleanEmail].weeklyStudyDays = weeklyStudyDays;
+      }
+    }
+    writeDb(db);
+  }
+  const savedChecks = (db.studentWeeklyChecks && db.studentWeeklyChecks[cleanEmail]) || {};
+  const savedTarget =
+    (db.weeklyNativeTargets && db.weeklyNativeTargets[cleanEmail]) ||
+    (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyNativeLessonsTarget) ||
+    1;
+  const savedStudyTarget =
+    (db.weeklyStudyDaysTargets && db.weeklyStudyDaysTargets[cleanEmail]) ||
+    (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyStudyDaysTarget) ||
+    7;
+  const savedStudyDays =
+    (db.weeklyStudyDays && db.weeklyStudyDays[cleanEmail]) ||
+    (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyStudyDays) ||
+    [];
+  res.json({
+    success: true,
+    checks: savedChecks,
+    weeklyNativeLessonsTarget: savedTarget,
+    weeklyStudyDaysTarget: savedStudyTarget,
+    weeklyStudyDays: savedStudyDays,
+  });
+});
+
+// 8. Homework Endpoints
+app.get('/api/homework', (req, res) => {
+  const db = readDb();
+  res.json(db.weeklyHomework);
+});
+
+app.post(['/api/homework', '/api/homework/submit'], (req, res) => {
+  const db = readDb();
+  const weeklyHomework = req.body.weeklyHomework || req.body;
+  if (weeklyHomework) {
+    db.weeklyHomework = weeklyHomework;
+    writeDb(db);
+  }
+  res.json({ success: true, weeklyHomework: db.weeklyHomework });
+});
+
+// Safe Gemini generation runner with timeout and multi-model fallback (no uncaught errors or stderr stack traces)
+async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const candidateModels = [
+    'gemini-3.8-flash',
+    GEMINI_TEXT_MODEL,
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+  ];
+  const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  for (const model of modelsToTry) {
+    let timerId: any = null;
+    try {
+      const config: any = {
+        responseMimeType: 'application/json',
+      };
+      if (model.includes('gemini-3')) {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      }
+
+      const generatePromise = ai.models.generateContent({
+        model,
+        contents: prompt,
+        config,
+      });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+      });
+
+      const response: any = await Promise.race([generatePromise, timeoutPromise]);
+
+      if (response && response.text) {
+        try {
+          const parsed = JSON.parse(response.text);
+          return parsed;
+        } catch {
+          // JSON parsing failure, try next candidate
+        }
+      }
+    } catch {
+      // Model might be temporarily busy, overloaded, rate-limited, or unavailable.
+      // Continue loop cleanly to next candidate or fallback without printing raw stack traces.
+    } finally {
+      if (timerId) clearTimeout(timerId);
+    }
+  }
+
+  return null;
+}
+
+// Helper to normalize and calibrate English proficiency levels
+function normalizeStudentLevel(lvl?: string): {
+  key: 'beginner' | 'intermediate' | 'advanced';
+  labelEn: string;
+  labelPt: string;
+  cefr: string;
+  grammarFocusEn: string;
+  grammarFocusPt: string;
+} {
+  const clean = (lvl || '').toLowerCase().trim();
+  if (clean.includes('avanc') || clean.includes('advan') || clean.includes('c1') || clean.includes('c2')) {
+    return {
+      key: 'advanced',
+      labelEn: 'Advanced',
+      labelPt: 'Avançado',
+      cefr: 'C1-C2',
+      grammarFocusEn: 'Complex clauses, passive voice, subjunctive/inversion, mixed conditionals, subtle modal nuances, idiomatic collocations, executive and reflective discourse (20-30 words per sentence).',
+      grammarFocusPt: 'Orações complexas, voz passiva, inversões/condicionais mistas, colocações idiomáticas refinadas e discurso executivo (20 a 30 palavras por frase).',
+    };
+  }
+  if (clean.includes('intermed') || clean.includes('b1') || clean.includes('b2')) {
+    return {
+      key: 'intermediate',
+      labelEn: 'Intermediate',
+      labelPt: 'Intermediário',
+      cefr: 'B1-B2',
+      grammarFocusEn: 'Compound and complex sentences with connectors (although, because, while, since, whenever), modal verbs (should, could, might), present perfect, workplace and social situations (14-22 words per sentence).',
+      grammarFocusPt: 'Frases compostas com conectivos de causa/contraste, present perfect, verbos modais e situações de trabalho e convívio (14 a 22 palavras por frase).',
+    };
+  }
+  return {
+    key: 'beginner',
+    labelEn: 'Beginner',
+    labelPt: 'Iniciante',
+    cefr: 'A1-A2',
+    grammarFocusEn: 'Simple Present, Simple Past, Present Continuous, direct Subject + Verb + Object structures, accessible everyday routine vocabulary with high context clues (8-14 words per sentence).',
+    grammarFocusPt: 'Presente Simples, Passado Simples, estruturas diretas Sujeito + Verbo + Objeto e vocabulário cotidiano com pistas claras de contexto (8 a 14 palavras por frase).',
+  };
+}
+
+// Cache for AI memorization to provide instant (<5ms) responses and avoid rate limiting
+const aiMemorizationCache = new Map<string, { data: any; expiry: number }>();
+
+// Helper to safely extract and parse JSON from model responses (handles code fences and trailing text)
+function extractCleanJson(text: string): any {
+  if (!text || typeof text !== 'string') return null;
+  let clean = text.trim();
+  if (clean.includes('```')) {
+    clean = clean.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  }
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start !== -1 && end !== -1 && end > start) {
+      const candidate = clean.substring(start, end + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        try {
+          const sanitized = candidate.replace(/,\s*([}\]])/g, '$1');
+          return JSON.parse(sanitized);
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+}
+
+// Detection for generic placeholders, boilerplate text, or repetitive templates that violate the zero-generic rule
+function hasGenericBoilerplate(data: any): boolean {
+  if (!data) return false;
+  const str = JSON.stringify(data).toLowerCase();
+  return (
+    str.includes('core active vocabulary applied') ||
+    str.includes('applied during your daily') ||
+    str.includes('i practice using "______"') ||
+    str.includes('i practice using \\"______\\"') ||
+    str.includes('i practice using "') ||
+    str.includes('i practice using \\"') ||
+    str.includes('focus on the sentence context to identify') ||
+    str.includes('describe a specific task, plan, or event in your daily life using') ||
+    str.includes('write about a conversation with a colleague or friend that involves') ||
+    (str.includes('explain how "') && str.includes('connects to your current weekly goals')) ||
+    str.includes('key vocabulary term practiced in daily routines') ||
+    str.includes('understanding how to optimize') ||
+    str.includes('the team established a') ||
+    str.includes('key concept representing') ||
+    str.includes('descriptive term characterizing') ||
+    str.includes('action term describing') ||
+    str.includes('modifying term highlighting') ||
+    str.includes('with clear intention creates noticeable progress')
+  );
+}
+
+// Detection for stale, formulaic, or robotic story templates that should never be shown to students
+function isBadStoryText(text: string): boolean {
+  if (!text || typeof text !== 'string' || text.trim().length < 80) return true;
+  const t = text.toLowerCase();
+  return (
+    t.includes('the day began with great purpose as') ||
+    t.includes('reviewed key plans regarding') ||
+    t.includes('address **') ||
+    t.includes('managing **') ||
+    t.includes('progress made on **') ||
+    t.includes('to make sure everything stayed aligned') ||
+    t.includes('quick to ') ||
+    t.includes('refreshing weather') ||
+    t.includes('storm terms') ||
+    t.includes('a productive day of focus and growth') ||
+    t.includes('finishing the workday on schedule allowed everyone to celebrate')
+  );
+}
+
+// Dedicated Generator for Part 4: Mini-Story / Routine Reading & Interpretation with Gemini API
+// 100% INÉDITA, ORGANIC VOCABULARY INTEGRATION, AND DYNAMIC STORY-GROUNDED COMPREHENSION QUESTIONS
+async function generatePart4StoryWithGemini(
+  words: string[],
+  studentLevel: string,
+  studentName: string = 'Student'
+): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !Array.isArray(words) || words.length === 0) return null;
+
+  const levelMeta = normalizeStudentLevel(studentLevel);
+  const protagonist = (studentName && studentName !== 'Student' ? studentName.split(' ')[0] : 'Regina').trim();
+
+  const systemInstruction = `You are a distinguished literary author, linguistic stylist, and senior English Language Teaching (ELT) instructional designer for "It's Simple - Learn English by Living Your Life".
+Your mission is to craft a 100% ORIGINAL, INÉDITA, and COMPELLING short story (Part 4: Routine Reading & Interpretation) and dynamic, narrative-grounded reading comprehension questions tailored to the student's proficiency level (${levelMeta.labelEn} - CEFR ${levelMeta.cefr}).
+
+CRITICAL MANDATORY RULES (STRICTLY ENFORCED):
+
+1. GERAÇÃO DE CONTEÚDO 100% INÉDITO (ZERO TEMPLATES / ZERO REUSO):
+   - You must construct a brand-new, vivid, and original storyline specifically customized to the provided words of the day.
+   - ABSOLUTE PROHIBITION ON STATIC TEMPLATES: You are strictly forbidden from reusing formulaic slot templates where only the target words change.
+   - Specifically NEVER write or mimic sentences like:
+     * "The day began with great purpose as [Name] reviewed key plans regarding [word]..."
+     * "Taking decisive steps early in the morning ensured everyone was prepared to address [word]..."
+     * "Transitioning into the afternoon, the team focused their energy on managing [word]..."
+     * "At the same time, dedicating careful attention to [word] strengthened mutual trust..."
+     * "Before wrapping up the day, taking a moment to evaluate the progress made on [word]..."
+     * "Finishing the workday on schedule allowed everyone to celebrate their achievements..."
+   - Vary the scenario and genre creatively and realistically across calls:
+     * High-stakes workplace discussions, design critiques, urgent troubleshooting, lab diagnostics, software or product launches
+     * Culinary arts, artisan workshops, pottery, architecture, craftsmanship
+     * Travel complications, transit logistics, airport connections, international conferences
+     * Everyday moments, personal triumphs, community initiatives, athletic or health challenges
+   - Featuring ${protagonist} as a capable, relatable protagonist navigating this concrete situation.
+
+2. INTEGRAÇÃO ORGÂNICA DAS PALAVRAS DO DIA:
+   - Every single word from the day's vocabulary list must be woven naturally and grammatically into the story.
+   - Respect real-world parts of speech:
+     * Verbs must be used as genuine actions or states (e.g. "negotiate terms", "reinforce the foundation", "exited through the side door").
+     * Adjectives must modify nouns or follow linking verbs (e.g. "a perfect alignment", "the weather was perfect", "remained willing to assist").
+     * Nouns must function as subjects, direct objects, or complements.
+   - NEVER force a verb or adjective into an awkward noun position.
+   - Every target word MUST be highlighted in markdown bold: **word**.
+
+3. COERÊNCIA TOTAL DAS PERGUNTAS DE INTERPRETAÇÃO:
+   - Generate 2 to 3 multiple-choice reading comprehension questions based EXCLUSIVELY on the newly generated mini-story.
+   - 100% STORY-GROUNDED: Every question must probe specific plot events, character motivations, decisions, or concrete outcomes from the story you just wrote.
+   - ZERO GENERIC QUESTIONS: Prohibit any question about English study habits, vocabulary memorization, grammar theory, or general philosophies.
+   - 4 Narrative-specific options: Exactly 4 options per question ([Option A, Option B, Option C, Option D]). 1 option must be unambiguously correct based on the story, and 3 must be plausible narrative distractors derived from the story context.
+   - Accurate zero-based correctAnswer index (0, 1, 2, or 3).
+   - Clear explanation directly referencing the story sentence that proves the answer.
+
+Output format must be a strict JSON object:
+{
+  "title": "A captivating, story-specific title",
+  "text": "The 100% original narrative (1 to 3 paragraphs) with each target word highlighted as **word**.",
+  "questions": [
+    {
+      "id": "q-1",
+      "question": "Specific question testing a plot development or character action",
+      "options": ["Story Option A", "Story Option B", "Story Option C", "Story Option D"],
+      "correctAnswer": 0,
+      "explanation": "Citation from the story text confirming this choice"
+    }
+  ]
+}`;
+
+  const userPrompt = `Generate a 100% INÉDITA mini-story and 2-3 coherent comprehension questions for:
+Student: "${protagonist}"
+Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+Target Words of the Day to weave in organically with **word**:
+${words.map((w, i) => `${i + 1}. "${w}"`).join('\n')}
+
+MANDATORY RULES:
+1. Plot must be 100% original, lively, and engaging. Absolutely ZERO formulaic templates!
+2. All target words must be used with grammatical precision and highlighted as **word**.
+3. All questions must test factual events, decisions, and turning points in this narrative.
+Return strict JSON only.`;
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  const candidateModels = [
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+  ];
+
+  for (const model of candidateModels) {
+    try {
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            temperature: 0.85,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout model ${model}`)), 18000)
+        ),
+      ]);
+
+      if (response && response.text) {
+        const parsed = extractCleanJson(response.text);
+        if (
+          parsed &&
+          parsed.title &&
+          parsed.text &&
+          !isBadStoryText(parsed.text) &&
+          Array.isArray(parsed.questions) &&
+          parsed.questions.length > 0
+        ) {
+          parsed.questions = parsed.questions.map((q: any, idx: number) => {
+            let corrIdx = 0;
+            if (typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4) {
+              corrIdx = q.correctAnswer;
+            } else if (typeof q.correctAnswer === 'string' && Array.isArray(q.options)) {
+              const foundIdx = q.options.findIndex(
+                (opt: string) => opt.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()
+              );
+              corrIdx = foundIdx >= 0 ? foundIdx : 0;
+            }
+            return {
+              ...q,
+              id: q.id || `q-${idx + 1}`,
+              correctAnswer: corrIdx,
+            };
+          });
+
+          return parsed;
+        }
+      }
+    } catch {
+      // Continue to next candidate model
+    }
+  }
+
+  return null;
+}
+
+// Specialized Native English Teacher & Instructional Designer Generator for Weekly Memorization Activity
+async function generateDirectMemorizationAi(
+  words: string[],
+  studentLevel: string,
+  studentName: string = 'Student'
+): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || !Array.isArray(words) || words.length === 0) return null;
+
+  const cacheKey = `${words.map((w) => w.toLowerCase().trim()).sort().join('|')}_${studentLevel.toLowerCase()}`;
+  const cached = aiMemorizationCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    const cachedStory = cached.data?.readingPassage?.text || '';
+    if (!isBadStoryText(cachedStory) && !hasGenericBoilerplate(cached.data)) {
+      return cached.data;
+    }
+    aiMemorizationCache.delete(cacheKey);
+  }
+
+  const levelMeta = normalizeStudentLevel(studentLevel);
+  const protagonist = (studentName && studentName !== 'Student' ? studentName.split(' ')[0] : 'Regina').trim();
+
+  const systemInstruction = `You are a world-class English Language Teaching (ELT) Instructional Designer and Expert Native English Teacher for "It's Simple - Learn English by Living Your Life".
+Your mission is to generate 100% authentic, personalized, native, and engaging educational content for the 4-part "Weekly Memorization Activity", strictly and exclusively utilizing the student's active target vocabulary words assigned for today's session:
+MANDATORY ACTIVE TARGET VOCABULARY WORDS FOR TODAY'S SESSION (NON-NEGOTIABLE):
+${words.map((w, i) => `  ${i + 1}. "${w}"`).join('\n')}
+
+STRICT SYSTEM PROMPT CONSTRAINTS & RULES (ENFORCED 100%):
+1. MANDATORY TARGET VOCABULARY INJECTION & EXCLUSIVITY:
+   - You MUST strictly author every single exercise across Parts 1, 2, 3, and 4 around these exact target words: [${words.map((w) => `"${w}"`).join(', ')}].
+   - COMPLETELY FORBIDDEN are placeholder words, arbitrary default words, or generic template terms (such as "now", "happy", "perfect", "app" unless they are explicitly in the active target words list above).
+   - ZERO GENERIC BOILERPLATE: Strictly forbidden are repetitive slot-filling formulas such as "Understanding how to optimize...", "The team established a...", "Key concept representing...", "Action term describing...", "Taking time to...", or "I practice using...".
+   - Every single sentence, definition, blank space, matching clue, distractor, and mini-story MUST be authentically authored specifically around the exact lexical, grammatical, and semantic meaning of each word in realistic daily life, conversation, or workplace contexts.
+
+2. GRAMMATICAL DISTRACTOR RULE FOR PART 2 (FILL IN THE BLANKS):
+   - For each target word, provide exactly 4 options: the correct target word + 3 plausible distractors.
+   - CRITICAL: The 3 distractors MUST share the EXACT SAME grammatical part of speech and structural category as the correct word (e.g. nouns with nouns, adjectives with adjectives, verbs with verbs, adverbs with adverbs).
+   - The sentence context must make the target word the ONLY semantically and logically correct choice.
+
+3. PRECISE PROFICIENCY LEVEL CALIBRATION (${levelMeta.labelEn} / CEFR ${levelMeta.cefr}):
+   - ${levelMeta.key === 'beginner' ? 'BEGINNER (A1-A2): Direct SVO sentences (8-14 words), accessible daily vocabulary, clear context clues, simple present/past.' : levelMeta.key === 'intermediate' ? 'INTERMEDIATE (B1-B2): Natural compound and complex sentences (14-22 words) using connectors (because, although, while, since, so), modal verbs, phrasal verbs, realistic workplace, technology, or modern social situations.' : 'ADVANCED (C1-C2): Nuanced vocabulary, varied syntax, idiomatic collocations, executive and reflective depth (18-28 words), conditional structures.'}
+
+4. DETAILED SPECIFICATIONS FOR THE 4 PARTS:
+   - Part 1 (Matching Pairs):
+     * Create contextual definitions or synonyms where the clues explicitly hint at the meaning of each specific target word in realistic contexts.
+     * Include a natural Portuguese equivalent ("translation").
+     * Shuffle the order in the "matchingPairs" array so the items do not match 1-to-1 in sequence.
+   - Part 2 (Fill in the Blanks):
+     * Create a natural, realistic sentence for each target word where "______" is the single blank.
+     * The blank must test the usage of that specific target word within real daily life or career contexts, and it MUST be the only logical and grammatical fit among the choices.
+     * Provide 4 options (the target word + 3 plausible distractors belonging to the same part of speech).
+     * Provide an insightful clue in English ("hintEn") and Portuguese ("hintPt") highlighting the context clue.
+     * Provide an explanation in English ("explanationEn") and Portuguese ("explanationPt") explaining why that word is the correct choice.
+   - Part 3 (Sentence Writing):
+     * Provide a personalized, engaging prompt that challenges ${protagonist} to apply each target word to their personal goals, career, or daily routine.
+     * Calibrate the prompt to ${levelMeta.labelEn} level.
+     * Include practical challenge guidance in English ("hint" and "hintEn"), in Portuguese ("hintPt"), and a clear level grammar instruction ("levelInstruction").
+   - Part 4 (Mini-Story & Comprehension Questions):
+     * Compose a cohesive, lively, and 100% original short story (like a project launch, collaborative task, or real-life event) featuring ${protagonist} that seamlessly and organically embeds ALL target words in context, highlighted with **word**.
+     * Accompany with 2 to 3 multiple-choice reading comprehension questions that strictly test concrete plot events, decisions, and outcomes in this narrative. ZERO generic questions about English study methods.
+     * Each question has 4 options, a "correctAnswer" index (0, 1, 2, or 3), and an "explanation" citing the story.
+
+You MUST respond with a strict, valid JSON object matching the requested schema.`;
+
+  const userPrompt = `Generate the complete, customized 4-part Memorization Activity:
+- Student Name: "${protagonist}"
+- Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+- Pedagogical Grammar Focus: ${levelMeta.grammarFocusEn}
+
+TARGET VOCABULARY WORDS FOR TODAY (MUST GENERATE COMPLETE CUSTOM CONTENT FOR EACH ONE):
+${words.map((w, i) => `${i + 1}. "${w}"`).join('\n')}
+
+Required JSON Structure:
+{
+  "matchingPairs": [
+    {
+      "id": "match-1",
+      "word": "exact target word",
+      "definition": "Contextual definition or synonym hinting explicitly at the meaning in realistic contexts",
+      "translation": "natural Portuguese translation"
+    }
+  ],
+  "fillInBlanks": [
+    {
+      "id": "fill-1",
+      "sentenceWithBlank": "Natural sentence with ______ as the blank testing this specific word",
+      "correctWord": "exact target word",
+      "options": ["target word", "distractor1", "distractor2", "distractor3"],
+      "hintPt": "Dica funcional contextualizando a palavra",
+      "hintEn": "Contextual clue highlighting the meaning",
+      "explanationPt": "Explicação em português do porquê desta palavra encaixar",
+      "explanationEn": "Explanation in English why this word fits"
+    }
+  ],
+  "sentenceWritingPrompts": [
+    {
+      "word": "exact target word",
+      "hint": "Engaging prompt challenging the student to apply this word to their personal goals, career, or daily routine",
+      "hintPt": "Desafio prático de escrita em português direcionado para a rotina ou carreira",
+      "hintEn": "Engaging prompt in English",
+      "levelInstruction": "Grammar structure tip for ${levelMeta.labelEn} level"
+    }
+  ],
+  "readingPassage": {
+    "title": "Story Title",
+    "text": "Coherent short story featuring ${protagonist} that organically embeds ALL target words highlighted with **word**.",
+    "questions": [
+      {
+        "id": "q-1",
+        "question": "Comprehension question directly probing plot events or character actions",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correctAnswer": 0,
+        "explanation": "Why this answer is correct based strictly on the text"
+      }
+    ]
+  }
+}`;
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  const candidateModels = [
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+  ];
+
+  for (const model of candidateModels) {
+    try {
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            temperature: 0.75,
+          },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout model ${model}`)), 24000)
+        ),
+      ]);
+
+      if (response && response.text) {
+        const parsed = extractCleanJson(response.text);
+        if (
+          parsed &&
+          Array.isArray(parsed.matchingPairs) &&
+          parsed.matchingPairs.length > 0 &&
+          Array.isArray(parsed.fillInBlanks) &&
+          parsed.fillInBlanks.length > 0 &&
+          Array.isArray(parsed.sentenceWritingPrompts) &&
+          parsed.sentenceWritingPrompts.length > 0
+        ) {
+          // Verify that zero generic boilerplate exists in generated items
+          if (hasGenericBoilerplate(parsed)) {
+            continue;
+          }
+
+          // If story was missing or formulaic, generate it via dedicated Part 4 generator
+          if (!parsed.readingPassage?.text || isBadStoryText(parsed.readingPassage.text)) {
+            const dedicatedStory = await generatePart4StoryWithGemini(words, studentLevel, studentName);
+            if (dedicatedStory && !isBadStoryText(dedicatedStory.text)) {
+              parsed.readingPassage = dedicatedStory;
+            }
+          }
+
+          // Normalize questions
+          if (Array.isArray(parsed.readingPassage?.questions)) {
+            parsed.readingPassage.questions = parsed.readingPassage.questions.map((q: any, qIdx: number) => {
+              let corrIdx = 0;
+              if (typeof q.correctAnswer === 'number' && q.correctAnswer >= 0 && q.correctAnswer < 4) {
+                corrIdx = q.correctAnswer;
+              } else if (typeof q.correctAnswer === 'string' && Array.isArray(q.options)) {
+                const foundIdx = q.options.findIndex(
+                  (opt: string) => opt.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()
+                );
+                corrIdx = foundIdx >= 0 ? foundIdx : 0;
+              }
+              return {
+                ...q,
+                id: q.id || `q-${qIdx + 1}`,
+                correctAnswer: corrIdx,
+              };
+            });
+          }
+
+          // Cache successful AI response for 2 hours
+          aiMemorizationCache.set(cacheKey, {
+            data: parsed,
+            expiry: Date.now() + 2 * 60 * 60 * 1000,
+          });
+          return parsed;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Direct Memorization AI] Attempt failed with model ${model}:`, err?.message || err);
+    }
+  }
+
+  return null;
+}
+
+// AI-Powered 4-Stage Weekly Memorization Activity Generator
+app.post('/api/homework/generate-ai', async (req, res) => {
+  try {
+    const {
+      words = [],
+      wordDetails = [],
+      studentName = 'Student',
+      studentLevel = 'Intermediate',
+      studentEmail = '',
+      weekLabel = '',
+    } = req.body;
+
+    const levelMeta = normalizeStudentLevel(studentLevel);
+
+    // 1. Simple direct input: clean array of unique words
+    const rawList = Array.isArray(words) ? words : [];
+    const cleanWords = Array.from(
+      new Set(
+        rawList
+          .map((item: any) => (typeof item === 'string' ? item : item?.word || '').trim())
+          .filter((w: string) => Boolean(w))
+      )
+    );
+
+    // Anti-generic rule: if no words provided, return clean empty notice immediately
+    if (cleanWords.length === 0) {
+      return res.json({
+        success: true,
+        isEmpty: true,
+        emptyWarning:
+          'Nenhum vocabulário cadastrado nesta semana ainda. Para gerar sua Atividade de Memorização inteligente, adicione palavras nas suas rotinas diárias ou participe de uma aula ao vivo com seu Amigo Nativo para que ele anote novos termos no seu vocabulário.',
+        emptyWarningEn:
+          'No vocabulary registered for this week yet. To generate your AI Memorization Activity, add words in your daily routines or attend a live lesson with your Native Friend so they can note new terms in your vocabulary.',
+        totalWordsCollected: 0,
+        vocabularyList: [],
+        matchingPairs: [],
+        fillInBlanks: [],
+        sentenceWritingPrompts: [],
+        readingPassage: {
+          title: 'Aguardando Vocabulário Real',
+          text: '',
+          questions: [],
+        },
+      });
+    }
+
+    const cacheKey = `${cleanWords.map((w: string) => w.toLowerCase().trim()).sort().join('|')}_${studentLevel.toLowerCase()}`;
+    const cachedResponse = aiMemorizationCache.get(cacheKey);
+    if (cachedResponse && Date.now() < cachedResponse.expiry) {
+      const cachedText = cachedResponse.data?.homework?.readingPassage?.text || '';
+      if (!isBadStoryText(cachedText) && !hasGenericBoilerplate(cachedResponse.data)) {
+        return res.json(cachedResponse.data);
+      }
+      aiMemorizationCache.delete(cacheKey);
+    }
+
+    // 2. Direct Gemini AI generation with Specialized Native Teacher & Instructional Designer System Prompt
+    const aiResult = await generateDirectMemorizationAi(cleanWords, studentLevel, studentName);
+
+    // Assemble the 4 parts
+    let matchingPairs: any[] = [];
+    let fillInBlanks: any[] = [];
+    let sentenceWritingPrompts: any[] = [];
+    let readingPassage: any = null;
+
+    if (
+      aiResult &&
+      Array.isArray(aiResult.matchingPairs) &&
+      aiResult.matchingPairs.length > 0 &&
+      Array.isArray(aiResult.fillInBlanks) &&
+      aiResult.fillInBlanks.length > 0 &&
+      !hasGenericBoilerplate(aiResult)
+    ) {
+      matchingPairs = aiResult.matchingPairs;
+      fillInBlanks = aiResult.fillInBlanks;
+      sentenceWritingPrompts = aiResult.sentenceWritingPrompts || [];
+
+      if (aiResult.readingPassage?.text && !isBadStoryText(aiResult.readingPassage.text)) {
+        readingPassage = aiResult.readingPassage;
+      } else {
+        readingPassage = await generatePart4StoryWithGemini(cleanWords, studentLevel, studentName);
+      }
+    }
+
+    // Dynamic, contextual fallback without any boilerplate
+    if (!matchingPairs || matchingPairs.length === 0) {
+      matchingPairs = cleanWords.map((w, idx) => {
+        const detail = wordDetails.find((d: any) => d.word?.toLowerCase().trim() === w.toLowerCase().trim());
+        const prof = profileWord(w, detail);
+        return {
+          id: `match-${idx}-${w}`,
+          word: w,
+          definition: prof.definitionEn,
+          translation: prof.translationPt,
+        };
+      }).sort(() => 0.5 - Math.random());
+    }
+
+    if (!fillInBlanks || fillInBlanks.length === 0) {
+      fillInBlanks = synthesizeFillInBlanks(cleanWords, wordDetails);
+    }
+
+    if (!sentenceWritingPrompts || sentenceWritingPrompts.length === 0) {
+      sentenceWritingPrompts = cleanWords.map((w, idx) => {
+        const detail = wordDetails.find((d: any) => d.word?.toLowerCase().trim() === w.toLowerCase().trim());
+        const prof = profileWord(w, detail);
+        let hintEn = '';
+        let hintPt = '';
+        if (levelMeta.key === 'advanced') {
+          hintEn = `Formulate an advanced sentence using "${w}" analyzing a strategic goal, project challenge, or complex decision.`;
+          hintPt = `Formule uma frase em nível avançado usando "${w}" (${prof.translationPt}) analisando uma decisão complexa ou meta de carreira.`;
+        } else if (levelMeta.key === 'intermediate') {
+          hintEn = `Write an authentic compound sentence with "${w}" connecting two related actions or explaining a key reason in your daily routine.`;
+          hintPt = `Escreva uma frase intermediária autêntica com "${w}" (${prof.translationPt}) conectando duas ações ou explicando uma razão da rotina.`;
+        } else {
+          hintEn = `Write a clear, direct English sentence about your daily routine using "${w}".`;
+          hintPt = `Escreva uma frase simples e direta sobre sua rotina usando "${w}" (${prof.translationPt}).`;
+        }
+        return {
+          word: w,
+          hint: hintEn,
+          hintPt,
+          hintEn,
+          levelInstruction: levelMeta.key === 'advanced'
+            ? 'Use complex clauses, conditionals (if/would), or executive phrasing.'
+            : levelMeta.key === 'intermediate'
+            ? 'Connect two ideas using a connector like "because", "although", "since", or "while".'
+            : 'Use a clear Subject + Verb + Object structure.',
+        };
+      });
+    }
+
+    if (!readingPassage || isBadStoryText(readingPassage.text)) {
+      readingPassage = await generatePart4StoryWithGemini(cleanWords, studentLevel, studentName);
+    }
+
+    if (!readingPassage || isBadStoryText(readingPassage.text)) {
+      readingPassage = synthesizeCohesiveStoryAndQuestions({
+        words: cleanWords,
+        studentLevel,
+        studentName,
+        wordDetails,
+      });
+    }
+
+    // Build unified vocabulary list populated directly with contextual definitions and sentences
+    const vocabularyList = cleanWords.map((word) => {
+      const matchPair = matchingPairs.find((m: any) => m.word?.toLowerCase() === word.toLowerCase());
+      const fillItem = fillInBlanks.find((f: any) => f.correctWord?.toLowerCase() === word.toLowerCase());
+      const prof = profileWord(word);
+      return {
+        word,
+        definitionEn: matchPair?.definition || prof.definitionEn,
+        translationPt: matchPair?.translation || prof.translationPt,
+        exampleSentence: fillItem?.sentenceWithBlank?.replace(/______/g, word) || prof.exampleSentenceEn,
+        sourceActivityName: 'Weekly Vocabulary',
+        sourceDay: 'monday' as const,
+      };
+    });
+
+    const finalHomeworkData = {
+      id: `hw-ai-${Date.now()}`,
+      weekLabel: weekLabel || `Semana de ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}`,
+      studentEmail: studentEmail || '',
+      studentName: studentName || 'Student',
+      studentLevel: levelMeta.labelEn,
+      createdAt: new Date().toISOString(),
+      totalWordsCollected: cleanWords.length,
+      vocabularyList,
+      allRoutineWords: vocabularyList,
+      matchingPairs,
+      fillInBlanks,
+      sentenceWritingPrompts,
+      readingPassage,
+      isEmpty: false,
+      isAiGenerated: true,
+      isCompleted: false,
+      score: 0,
+    };
+
+    const payload = { success: true, homework: finalHomeworkData };
+    if (!hasGenericBoilerplate(finalHomeworkData)) {
+      aiMemorizationCache.set(cacheKey, { data: payload, expiry: Date.now() + 60 * 60 * 1000 });
+    }
+    res.json(payload);
+  } catch (error: any) {
+    console.error('Error generating AI memorization activity:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+// Dedicated Endpoint for Part 4 (Mini-Story / Routine Reading & Interpretation)
+// Delivers 100% original story narratives and dynamic comprehension questions using Gemini API
+app.post(['/api/homework/generate-part4', '/api/homework/generate-story'], async (req, res) => {
+  try {
+    const {
+      words = [],
+      studentLevel = 'Intermediate',
+      studentName = 'Student',
+      wordDetails = [],
+    } = req.body;
+
+    const rawList = Array.isArray(words) ? words : [];
+    const cleanWords = Array.from(
+      new Set(
+        rawList
+          .map((item: any) => (typeof item === 'string' ? item : item?.word || '').trim())
+          .filter((w: string) => Boolean(w))
+      )
+    );
+
+    if (cleanWords.length === 0) {
+      return res.status(400).json({ error: 'No words provided for Part 4 generation' });
+    }
+
+    // Direct generation via dedicated Gemini Prompt Architecture
+    const aiStory = await generatePart4StoryWithGemini(cleanWords, studentLevel, studentName);
+    if (aiStory && !isBadStoryText(aiStory.text)) {
+      return res.json({ success: true, readingPassage: aiStory, isAiGenerated: true });
+    }
+
+    // Dynamic fallback ensuring zero template-reuse
+    const fallbackStory = synthesizeCohesiveStoryAndQuestions({
+      words: cleanWords,
+      studentLevel,
+      studentName,
+      wordDetails,
+    });
+    return res.json({ success: true, readingPassage: fallbackStory, isAiGenerated: false });
+  } catch (error: any) {
+    console.error('Error in /api/homework/generate-part4:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate Part 4 story' });
+  }
+});
+
+// 9. Contracted Lessons Endpoints
+app.get('/api/contracted-lessons', (req, res) => {
+  const db = readDb();
+  res.json(db.contractedLessons || {});
+});
+
+app.post('/api/contracted-lessons', (req, res) => {
+  const db = readDb();
+  const { studentEmail, email, count } = req.body;
+  const cleanEmail = (studentEmail || email || '').toLowerCase().trim();
+  if (cleanEmail && count !== undefined) {
+    db.contractedLessons[cleanEmail] = Number(count);
+    writeDb(db);
+  }
+  res.json(db.contractedLessons);
+});
+
+// 11. Email Logs Endpoint
+app.post('/api/email-logs', (req, res) => {
+  const db = readDb();
+  const { log } = req.body;
+  if (log) {
+    db.emailLogs = [log, ...(db.emailLogs || [])].slice(0, 100);
+    writeDb(db);
+  }
+  res.json({ success: true });
+});
+
+// 12. Writing / Grammar Evaluation via Gemini API with Absolute Rigor & Subtle Error Detection
+app.post('/api/check-writing', async (req, res) => {
+  const {
+    words = [],
+    sentence = '',
+    activityName = 'Weekly Memorization Activity',
+    level = 'iniciante',
+    targetWord = '',
+    instruction = '',
+    levelInstruction = '',
+    language = 'pt',
+  } = req.body;
+  const levelMeta = normalizeStudentLevel(level);
+  const allTargetWords = targetWord ? Array.from(new Set([targetWord, ...words])) : words;
+  const mainTarget = targetWord || allTargetWords[0] || '';
+
+  const rawClean = (sentence || '').trim();
+  const programmaticErrorsPt: string[] = [];
+  const programmaticErrorsEn: string[] = [];
+  let programmaticFixed = rawClean;
+  let hasProgrammaticError = false;
+
+  // 1. Rigorous Check: Missing dummy subject "it" in impersonal clauses
+  if (/\b(sometimes\s+)?is\s+better\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\b(sometimes\s+)?is\s+better\b/gi, (match) => {
+      if (/^sometimes/i.test(match)) {
+        return match[0] === 'S' ? 'Sometimes it is better' : 'sometimes it is better';
+      }
+      return match[0] === 'I' || match[0] === 'i' ? 'It is better' : 'it is better';
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Omissão de sujeito: orações impessoais exigem o pronome 'it' (use 'It is better' ou 'Sometimes it is better').");
+    programmaticErrorsEn.push("Missing dummy subject: English requires 'it' in impersonal clauses (use 'It is better' or 'Sometimes it is better').");
+  } else if (/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential|bad)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/(^|[.?!;]\s*)is\s+(important|necessary|hard|easy|good|essential|bad)\b/gi, '$1It is $2');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Omissão de sujeito: inicie com 'It is' para predicativos impessoais.");
+    programmaticErrorsEn.push("Missing subject: start with 'It is' for impersonal predicates.");
+  }
+
+  // 2. Rigorous Check: Missing infinitive marker "to" after better + verb
+  if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/gi, (match, prefix, verb) => {
+      const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : (prefix[0] === 'I' ? 'It is better' : 'it is better');
+      return `${cleanPrefix} to ${verb}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Falta de infinitivo: use 'to' após 'better' (ex: 'better to stop', 'better to take').");
+    programmaticErrorsEn.push("Missing infinitive: use 'to' after 'better' (e.g., 'better to stop', 'better to take').");
+  }
+
+  // 2b. Rigorous Check: Gerund after 'stop' to cease an action
+  if (/\bstop\s+to\s+(complain|worry|cry|smoke|argue|judge|overthink)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\bstop\s+to\s+(complain|worry|cry|smoke|argue|judge|overthink)\b/gi, (m, verb) => {
+      let g = verb + 'ing';
+      if (verb.endsWith('e') && !verb.endsWith('ee')) g = verb.slice(0, -1) + 'ing';
+      return `stop ${g}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Uso de gerúndio: para cessar uma atitude ou hábito, use 'stop + gerúndio' (ex: 'stop complaining', e não 'stop to complain').");
+    programmaticErrorsEn.push("Gerund usage: to cease an action, use 'stop + gerund' (e.g., 'stop complaining', not 'stop to complain').");
+  }
+
+  // 3. Rigorous Check: Regência / Prepositional complement (instead to / instead + bare verb -> instead of + gerund)
+  if (/\binstead\s+(to\s+([a-z]+)|(face|do|take|make|stay|go|complain|wait)\b)/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\binstead\s+(to\s+([a-z]+)|([a-z]+)\b)/gi, (match, toGroup, verb1, verb2) => {
+      const v = (verb1 || verb2 || '').toLowerCase();
+      if (!v || v === 'of') return match;
+      let gerund = v + 'ing';
+      if (v.endsWith('e') && !v.endsWith('ee')) {
+        gerund = v.slice(0, -1) + 'ing';
+      }
+      return `instead of ${gerund}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Regência incorreta: após 'instead', usa-se 'instead of' seguido de verbo no gerúndio (ex: 'instead of facing', e não 'instead to face').");
+    programmaticErrorsEn.push("Incorrect preposition: use 'instead of' + gerund (e.g., 'instead of facing', not 'instead to face').");
+  }
+
+  // 4. Rigorous Check: Indefinite article vowel error (a vs an)
+  // Matches 'a' before any vowel sound (e.g. "a outstanding", "a awkward", "a apple", "a hour")
+  const A_BEFORE_VOWEL_REGEX = /\ba\s+([aeio][a-z]+|u(?!niversity|nicorn|nique|niform|nion|nit|ser|sage|seful|nisex|niversal|nilateral)[a-z]+|hour[a-z]*|honest[a-z]*|honor[a-z]*|heir[a-z]*)\b/gi;
+  if (A_BEFORE_VOWEL_REGEX.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(A_BEFORE_VOWEL_REGEX, (match, word) => {
+      if (/^(one|once)/i.test(word)) return match;
+      return `an ${word}`;
+    });
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Erro de artigo indefinido: use 'an' antes de palavras iniciadas por som vocálico (ex: 'an outstanding', 'an awkward', 'an hour').");
+    programmaticErrorsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an outstanding', 'an awkward', 'an hour').");
+  }
+
+  // Matches 'an' before consonant sounds (e.g. "an university", "an European", "an book")
+  const AN_BEFORE_CONSONANT_REGEX = /\ban\s+([bcdfghjklmnpqrstvwxyz](?!hour|honest|honor|heir)[a-z]+|university[a-z]*|unicorn[a-z]*|unique[a-z]*|uniform[a-z]*|union[a-z]*|unit[a-z]*|user[a-z]*|usage[a-z]*|useful[a-z]*|european[a-z]*|one|once)\b/gi;
+  if (AN_BEFORE_CONSONANT_REGEX.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(AN_BEFORE_CONSONANT_REGEX, (match, word) => `a ${word}`);
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Erro de artigo indefinido: use 'a' antes de palavras iniciadas por som consonantal (ex: 'a project', 'a university').");
+    programmaticErrorsEn.push("Indefinite article error: use 'a' before words starting with consonant sounds (e.g., 'a project', 'a university').");
+  }
+
+  // 5. Rigorous Check: Homophone/confusable word (loose vs lose)
+  if (/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace|time|money|chance|opportunity|game|match)\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\bloose\s+(your|my|his|her|their|our|the|a|an|mental|mind|focus|control|temper|weight|job|state|peace|time|money|chance|opportunity|game|match)\b/gi, 'lose $1');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Confusão ortográfica: use 'lose' (verbo perder) e não 'loose' (adjetivo frouxo/solto).");
+    programmaticErrorsEn.push("Word confusion: use 'lose' (verb to lose) instead of 'loose' (adjective loose).");
+  }
+
+  // 6. Rigorous Check: Common spelling mistakes (e.g. millestone -> milestone)
+  const SERVER_SPELLING_FIXES: Record<string, { correct: string; explPt: string; explEn: string }> = {
+    'millestone': { correct: 'milestone', explPt: 'A grafia correta é "milestone" (com apenas um "l").', explEn: 'Correct spelling is "milestone" (single "l").' },
+    'millestones': { correct: 'milestones', explPt: 'A grafia correta é "milestones" (com apenas um "l").', explEn: 'Correct spelling is "milestones" (single "l").' },
+    'definately': { correct: 'definitely', explPt: 'A grafia correta é "definitely" (com "i").', explEn: 'Correct spelling is "definitely".' },
+    'tommorow': { correct: 'tomorrow', explPt: 'A grafia correta é "tomorrow" (com um "m" e dois "r").', explEn: 'Correct spelling is "tomorrow".' },
+    'untill': { correct: 'until', explPt: 'A palavra "until" tem apenas uma letra "l".', explEn: 'The word "until" ends in a single "l".' },
+    'comute': { correct: 'commute', explPt: '"Commute" (deslocamento) tem "mm" duplo.', explEn: '"Commute" has double "mm".' },
+    'breackfast': { correct: 'breakfast', explPt: 'A grafia correta em inglês é "breakfast" (sem "c").', explEn: 'Correct spelling is "breakfast".' },
+    'coffe': { correct: 'coffee', explPt: '"Coffee" termina com "ee" duplo.', explEn: '"Coffee" ends in double "ee".' },
+    'restorant': { correct: 'restaurant', explPt: 'A grafia correta é "restaurant".', explEn: 'Correct spelling is "restaurant".' },
+    'restaurante': { correct: 'restaurant', explPt: 'Em inglês, "restaurant" não tem "e" no final.', explEn: 'In English, "restaurant" does not have an "e" at the end.' },
+  };
+
+  Object.entries(SERVER_SPELLING_FIXES).forEach(([wrong, data]) => {
+    const rx = new RegExp(`\\b${wrong}\\b`, 'gi');
+    if (rx.test(programmaticFixed)) {
+      programmaticFixed = programmaticFixed.replace(rx, data.correct);
+      hasProgrammaticError = true;
+      programmaticErrorsPt.push(data.explPt);
+      programmaticErrorsEn.push(data.explEn);
+    }
+  });
+
+  // 7. Rigorous Check: Verb agreement
+  if (/\byou has\b/i.test(programmaticFixed)) {
+    programmaticFixed = programmaticFixed.replace(/\byou has\b/gi, 'you have');
+    hasProgrammaticError = true;
+    programmaticErrorsPt.push("Concordância: use 'you have' em vez de 'you has'.");
+    programmaticErrorsEn.push("Verb agreement: use 'you have' instead of 'you has'.");
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (apiKey) {
+    const prompt = `YOU ARE A METICULOUS, STRICT SENIOR PROFESSOR OF ENGLISH AND GRAMMAR SPECIALIST AT "IT'S SIMPLE".
+YOUR TASK: Perform an EXTREMELY RIGOROUS, ZERO-TOLERANCE grammatical, orthographical, and linguistic evaluation of an English sentence written by a student.
+
+CRITICAL MANDATE - RIGOR ABSOLUTO:
+Under NO circumstances may you approve a sentence as correct or "hasAnyError: false" if it contains ANY linguistic inaccuracy, grammatical error, spelling typo, article mismatch, omission, or awkward non-native phrasing—no matter how subtle!
+Even if the student's message is understandable, communicative, or creative, ANY error MUST be flagged and rejected with "hasAnyError": true and "isCorrect": false.
+NEVER APPROVE A SENTENCE AS "OUTSTANDING" IF IT CONTAINS ANY ERROR!
+
+MANDATORY ERROR CHECKLIST TO DETECT AND REJECT:
+1. INDEFINITE ARTICLE MISMATCHES (A vs. AN):
+   - "an" MUST precede ALL words starting with a vowel sound (e.g., "an outstanding", "an awkward", "an interview", "an apple", "an option", "an unusual", "an hour", "an honest").
+   - "a" MUST precede words starting with consonant sounds or the /juː/ sound (e.g., "a project", "a university", "a European", "a unique", "a uniform").
+   - REJECT: "a outstanding" -> MUST BE "an outstanding".
+   - REJECT: "a awkward" -> MUST BE "an awkward".
+   - REJECT: "a interview", "a apple", "a hour", "an university", "an European".
+
+2. SPELLING ERRORS & TYPOS:
+   - Detect and reject ANY misspelled word, missing letter, or duplicate consonant error.
+   - REJECT: "millestone" -> MUST BE "milestone" (single 'l').
+   - REJECT: "definately" (definitely), "tommorow" (tomorrow), "untill" (until), "comute" (commute), "breackfast" (breakfast), "coffe" (coffee), "restorant" (restaurant).
+
+3. DUMMY SUBJECT OMISSIONS:
+   - English requires explicit subjects in non-imperative clauses.
+   - REJECT: "Sometimes is better...", "Is raining", "Is important to...", "Is necessary...", "Was good to see you".
+   - MUST BE: "Sometimes IT is better...", "It is raining", "It is important to...", "It was good to see you".
+
+4. PREPOSITION COMPLEMENTS & REGÊNCIA (PREPOSITIONAL GOVERNANCE):
+   - REJECT incorrect prepositions or bare/infinitive forms after prepositions:
+   - REJECT: "instead to face", "instead to do", "instead face".
+   - MUST BE: "instead OF facing", "instead of doing".
+   - REJECT: "look forward to see", "capable to do", "interested to buy", "in spite to".
+   - MUST BE: "look forward to seeing", "capable of doing", "interested in buying", "in spite of".
+
+5. COMMONLY CONFUSED WORDS & HOMOPHONES:
+   - REJECT: "loose" used for "lose" (e.g., "loose your mental state / focus / time / keys" -> MUST BE "lose your mental state / focus / time / keys").
+   - REJECT: "affect" vs "effect", "their" vs "there" vs "they're", "its" vs "it's", "than" vs "then", "choose" vs "chose", "breathe" vs "breath", "advice" vs "advise".
+
+6. INFINITIVE vs. GERUND vs. BARE INFINITIVE:
+   - REJECT: "is better take" -> MUST BE: "is better TO take" or "taking".
+   - REJECT: "stop to smoke" (when meaning quit smoking) vs "stop smoking".
+
+7. SUBJECT-VERB AGREEMENT & TENSE CONSISTENCY:
+   - REJECT: "he do", "she have", "you has", "everyone are", "neither of them are".
+   - REJECT unjustified mixing of past and present tenses.
+
+8. PUNCTUATION, RUN-ONS & CAPITALIZATION:
+   - First letter must be capitalized.
+   - Sentence must end with valid punctuation (. ! ?).
+   - Comma splices joining two independent clauses without a conjunction or semicolon must be corrected.
+
+9. TARGET VOCABULARY & TRIGGER USAGE:
+   - If target words were provided (${JSON.stringify(allTargetWords)}), verify that the student used the target word ("${mainTarget}").
+   - If a specific trigger was requested ("${levelInstruction}"), verify strict compliance.
+
+EVALUATION PARAMETERS:
+- Student Proficiency Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+- Target Word: "${mainTarget}"
+- Required Trigger/Instruction: "${levelInstruction || 'Form a natural, grammatically flawless sentence'}"
+- Student Input: "${sentence}"
+
+STRICT DECISION RULES:
+- If ANY error from the checklist above (or any other grammar/syntax/collocation/spelling flaw) is present:
+  * "hasAnyError": true
+  * "isCorrect": false
+  * "sentenceFeedback.hasError": true
+  * "explanationPt": Point out EXACTLY what is wrong in clear, supportive Portuguese (e.g., "Identificamos erros a corrigir: 1) Artigo indefinido incorreto: use 'an outstanding' (e não 'a outstanding') antes de som vocálico; 2) Ortografia: a grafia correta é 'milestone' (com apenas uma letra 'l').")
+  * "explanationEn": Point out EXACTLY what is wrong in clear English.
+  * "correctedSentence": The fully polished, 100% grammatically correct, native-sounding English sentence.
+  * "overallSummaryPt": "Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação."
+  * "overallSummaryEn": "Needs revision: please review the grammar corrections below to perfect your sentence."
+- ONLY IF the sentence is 100% FLAWLESS with NO errors whatsoever:
+  * "hasAnyError": false
+  * "isCorrect": true
+  * "overallSummaryPt": "Excelente! Sua frase está 100% correta gramaticalmente, fluente e natural."
+  * "overallSummaryEn": "Outstanding! Your sentence is grammatically correct and natural."
+
+Output STRICT JSON matching this schema:
+{
+  "hasAnyError": boolean,
+  "isCorrect": boolean,
+  "usedTargetWord": boolean,
+  "usedTrigger": boolean,
+  "targetWordFeedback": "string",
+  "triggerFeedback": "string",
+  "wordFeedbacks": [
+    {
+      "original": "string",
+      "hasError": boolean,
+      "corrected": "string",
+      "explanationPt": "string",
+      "explanationEn": "string"
+    }
+  ],
+  "sentenceFeedback": {
+    "original": "string",
+    "hasError": boolean,
+    "corrected": "string",
+    "explanationPt": "string",
+    "explanationEn": "string"
+  },
+  "correctedSentence": "string",
+  "overallSummaryPt": "string",
+  "overallSummaryEn": "string",
+  "levelTipsPt": "string",
+  "levelTipsEn": "string"
+}`;
+
+    const parsed = await callGeminiSafeJson(prompt, 10000);
+    if (parsed && typeof parsed === 'object') {
+      const normalizedOriginal = rawClean.trim().replace(/[.!?\s]+$/, '').toLowerCase();
+      const normalizedCorrected = (parsed.correctedSentence || '').trim().replace(/[.!?\s]+$/, '').toLowerCase();
+      const hasGeminiDiff = Boolean(normalizedCorrected && normalizedCorrected !== normalizedOriginal);
+
+      // Programmatic safety enforcement: if programmatic check detected an error OR Gemini made changes, guarantee failure!
+      if (hasProgrammaticError || hasGeminiDiff || parsed.hasAnyError || parsed.isCorrect === false) {
+        parsed.hasAnyError = true;
+        parsed.isCorrect = false;
+        if (!parsed.sentenceFeedback) {
+          parsed.sentenceFeedback = { original: rawClean, hasError: true, corrected: programmaticFixed, explanationPt: '', explanationEn: '' };
+        }
+        parsed.sentenceFeedback.hasError = true;
+        const extraPt = programmaticErrorsPt.join(' ');
+        const extraEn = programmaticErrorsEn.join(' ');
+        if (extraPt) {
+          parsed.sentenceFeedback.explanationPt = parsed.sentenceFeedback.explanationPt
+            ? `${extraPt} ${parsed.sentenceFeedback.explanationPt}`
+            : extraPt;
+        }
+        if (extraEn) {
+          parsed.sentenceFeedback.explanationEn = parsed.sentenceFeedback.explanationEn
+            ? `${extraEn} ${parsed.sentenceFeedback.explanationEn}`
+            : extraEn;
+        }
+        parsed.explanation = parsed.sentenceFeedback.explanationPt || parsed.sentenceFeedback.explanationEn;
+        parsed.overallSummaryPt = "Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação.";
+        parsed.overallSummaryEn = "Needs revision: please review the grammar corrections below to perfect your sentence.";
+        if (!parsed.correctedSentence || parsed.correctedSentence === rawClean) {
+          parsed.correctedSentence = programmaticFixed;
+        }
+      }
+
+      parsed.isCorrect = parsed.hasAnyError === false;
+      if (parsed.hasAnyError) {
+        parsed.overallSummaryPt = "Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação.";
+        parsed.overallSummaryEn = "Needs revision: please review the grammar corrections below to perfect your sentence.";
+      }
+      parsed.explanation =
+        parsed.explanation ||
+        parsed.sentenceFeedback?.explanationPt ||
+        parsed.sentenceFeedback?.explanationEn ||
+        parsed.overallSummaryPt;
+      return res.json(parsed);
+    }
+  }
+
+  // Fallback heuristic with level tips, trigger detection, and absolute rigor
+  const cleanTarget = mainTarget.trim().toLowerCase();
+  const lowerSentence = (sentence || '').toLowerCase().trim();
+  const targetRoot = cleanTarget.replace(/(ing|ed|s|es|d)$/i, '');
+  const usedTargetWord = Boolean(
+    !cleanTarget ||
+    lowerSentence.includes(cleanTarget) ||
+    (targetRoot.length >= 4 && lowerSentence.includes(targetRoot))
+  );
+
+  let usedTrigger = true;
+  let triggerFeedback = '';
+  if (levelInstruction && levelInstruction.trim()) {
+    const triggerLower = levelInstruction.toLowerCase();
+    if (triggerLower.includes('because') || triggerLower.includes('since')) {
+      usedTrigger = /\b(because|since)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: você usou "because" ou "since" para justificar o motivo.'
+        : 'Desafio: lembre-se de usar "because" ou "since" para explicar a sua razão.';
+    } else if (triggerLower.includes('whenever')) {
+      usedTrigger = /\bwhenever\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: você aplicou "whenever" para descrever um hábito.'
+        : 'Desafio: inclua o conectivo "whenever" para indicar frequência ou hábito.';
+    } else if (triggerLower.includes('modal') || triggerLower.includes('might') || triggerLower.includes('should')) {
+      usedTrigger = /\b(might|should|could|would|can|must)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: verbo modal aplicado adequadamente.'
+        : 'Desafio: use um verbo modal como "might", "should" ou "could".';
+    } else if (triggerLower.includes('conditional') || triggerLower.includes('if')) {
+      usedTrigger = /\b(if|unless)\b/i.test(lowerSentence);
+      triggerFeedback = usedTrigger
+        ? 'Gatilho cumprido: oração condicional aplicada.'
+        : 'Desafio: formule uma condição usando "if" ou "unless".';
+    }
+  }
+
+  const wordFeedbacks = allTargetWords.map((w: string) => ({
+    original: w,
+    hasError: false,
+    corrected: w,
+    explanationPt: 'Ortografia válida.',
+    explanationEn: 'Valid spelling.',
+  }));
+
+  const isBeg = levelMeta.key === 'beginner';
+  const isAdv = levelMeta.key === 'advanced';
+
+  let hasSentenceError = hasProgrammaticError;
+  let correctedSentence = programmaticFixed;
+
+  if (correctedSentence && !/[.!?]$/.test(correctedSentence)) {
+    correctedSentence += '.';
+  }
+  if (correctedSentence && /^[a-z]/.test(correctedSentence)) {
+    correctedSentence = correctedSentence.charAt(0).toUpperCase() + correctedSentence.slice(1);
+    hasSentenceError = true;
+    programmaticErrorsPt.push("Inicie a frase com letra maiúscula.");
+    programmaticErrorsEn.push("Start the sentence with a capital letter.");
+  }
+
+  const explanationPt = hasSentenceError
+    ? programmaticErrorsPt.join(' ')
+    : !usedTargetWord && mainTarget
+    ? `Por favor, inclua a palavra-alvo "${mainTarget}".`
+    : 'Frase correta e bem estruturada.';
+
+  const explanationEn = hasSentenceError
+    ? programmaticErrorsEn.join(' ')
+    : !usedTargetWord && mainTarget
+    ? `Please include the target word "${mainTarget}".`
+    : 'Correct and well-structured sentence.';
+
+  const hasAnyError = hasSentenceError || !usedTargetWord || !usedTrigger;
+
+  res.json({
+    hasAnyError,
+    isCorrect: !hasAnyError,
+    usedTargetWord,
+    usedTrigger,
+    targetWordFeedback: usedTargetWord
+      ? `Palavra-alvo "${mainTarget}" aplicada com sucesso.`
+      : `Inclua a palavra "${mainTarget}" na sua frase.`,
+    triggerFeedback,
+    wordFeedbacks,
+    sentenceFeedback: sentence
+      ? {
+          original: sentence,
+          hasError: hasAnyError,
+          corrected: correctedSentence,
+          explanationPt,
+          explanationEn,
+        }
+      : undefined,
+    correctedSentence,
+    explanation: explanationPt,
+    overallSummaryPt: !hasAnyError
+      ? `Excelente! Frase natural, com a palavra "${mainTarget}" e o gatilho cumprido.`
+      : !usedTargetWord
+      ? `Por favor, inclua a palavra "${mainTarget}" na sua frase.`
+      : !usedTrigger
+      ? triggerFeedback || 'Ajuste o gatilho solicitado na instrução.'
+      : 'Atenção: sua frase contém incorreções gramaticais que precisam ser corrigidas antes da aprovação.',
+    overallSummaryEn: !hasAnyError
+      ? `Outstanding! Your sentence is grammatically correct and natural.`
+      : !usedTargetWord
+      ? `Please incorporate the target word "${mainTarget}" into your sentence.`
+      : !usedTrigger
+      ? 'Review the challenge trigger specified in the prompt.'
+      : 'Needs revision: please review the grammar corrections below to perfect your sentence.',
+    levelTipsPt: isBeg
+      ? 'Dica Iniciante: Lembre-se sempre de manter Sujeito + Verbo + Complemento.'
+      : isAdv
+      ? 'Dica Avançada: Experimente variar a posição dos advérbios ou usar orações relativas para maior elegância.'
+      : 'Dica Intermediária: Pratique usar conectivos como "because", "while" ou "although" para unir duas ações.',
+    levelTipsEn: isBeg
+      ? 'Beginner Tip: Keep practicing the core Subject + Verb + Object structure.'
+      : isAdv
+      ? 'Advanced Tip: Try varying adverb placement or using relative clauses for executive polish.'
+      : 'Intermediate Tip: Practice using connectors like "because", "while", or "although" to link two actions.',
+  });
+});
+
+// 13. Comprehensive AI Homework Evaluator (All 4 Interactive Stages)
+app.post('/api/homework/evaluate', async (req, res) => {
+  try {
+    const {
+      homework,
+      studentAnswers = {},
+      studentLevel = 'iniciante',
+      studentName = 'Student',
+      currentLanguage = 'pt',
+    } = req.body;
+
+    if (!homework) {
+      return res.status(400).json({ error: 'homework data is required' });
+    }
+
+    const levelMeta = normalizeStudentLevel(studentLevel || homework.studentLevel);
+    const { matching = {}, fillInBlanks = {}, sentences = {}, quizAnswers = {} } = studentAnswers;
+
+    // Calculate baseline scores
+    let matchingCorrect = 0;
+    const matchingFeedback = (homework.matchingPairs || []).map((p: any) => {
+      const userAns = (matching[p.id] || '').trim();
+      const isCorrect = userAns.toLowerCase() === p.word.toLowerCase();
+      if (isCorrect) matchingCorrect++;
+      return {
+        id: p.id,
+        isCorrect,
+        userAnswer: userAns || '(sem resposta)',
+        correctAnswer: p.word,
+        explanationPt: isCorrect
+          ? `Correto! "${p.word}" significa "${p.translation}".`
+          : `A resposta correta é "${p.word}" (${p.translation}).`,
+        explanationEn: isCorrect
+          ? `Correct! "${p.word}" corresponds to "${p.definition}".`
+          : `The correct match is "${p.word}" (${p.definition}).`,
+      };
+    });
+
+    let fillCorrect = 0;
+    const fillFeedback = (homework.fillInBlanks || []).map((f: any) => {
+      const userAns = (fillInBlanks[f.id] || '').trim();
+      const isCorrect = userAns.toLowerCase() === f.correctWord.toLowerCase();
+      if (isCorrect) fillCorrect++;
+      return {
+        id: f.id,
+        isCorrect,
+        userAnswer: userAns || '(sem resposta)',
+        correctAnswer: f.correctWord,
+        explanationPt: f.explanationPt || (isCorrect
+          ? `Excelente! "${f.correctWord}" completa perfeitamente o sentido da frase.`
+          : `A palavra correta é "${f.correctWord}" (${f.hintPt || ''}).`),
+        explanationEn: f.explanationEn || (isCorrect
+          ? `Great job! "${f.correctWord}" accurately completes the sentence.`
+          : `The correct word is "${f.correctWord}".`),
+      };
+    });
+
+    let quizCorrect = 0;
+    const readingFeedback = (homework.readingPassage?.questions || []).map((q: any) => {
+      const userAnsIdx = quizAnswers[q.id];
+      const isCorrect = userAnsIdx === q.correctAnswer;
+      if (isCorrect) quizCorrect++;
+      const userAnsText = q.options?.[userAnsIdx] || '(sem resposta)';
+      const correctAnsText = q.options?.[q.correctAnswer] || '';
+      return {
+        id: q.id,
+        isCorrect,
+        userAnswer: userAnsText,
+        correctAnswer: correctAnsText,
+        explanationPt: q.explanation || (isCorrect ? 'Resposta correta com base no texto!' : `Opção correta: ${correctAnsText}.`),
+        explanationEn: q.explanation || (isCorrect ? 'Correct interpretation based on the passage!' : `Correct option: ${correctAnsText}.`),
+      };
+    });
+
+    // Score calculation
+    const totalMatching = Math.max(1, homework.matchingPairs?.length || 1);
+    const totalFill = Math.max(1, homework.fillInBlanks?.length || 1);
+    const totalQuiz = Math.max(1, homework.readingPassage?.questions?.length || 1);
+    const totalSentences = Math.max(1, homework.sentenceWritingPrompts?.length || 1);
+
+    const matchScore = (matchingCorrect / totalMatching) * 25;
+    const fillScore = (fillCorrect / totalFill) * 30;
+    const quizScore = (quizCorrect / totalQuiz) * 20;
+
+    // AI evaluation of sentences with Gemini
+    const apiKey = process.env.GEMINI_API_KEY;
+    let sentenceEvaluationResults: any[] = [];
+    let tutorSummaryPt = '';
+    let tutorSummaryEn = '';
+    let levelStrengthsPt = '';
+    let levelStrengthsEn = '';
+    let levelNextStepsPt = '';
+    let levelNextStepsEn = '';
+
+    if (apiKey) {
+      const prompt = `You are a warm, inspiring Native English teacher at "It's Simple".
+Evaluate this student's completed Weekly Memorization Activity.
+
+STUDENT PROFILE:
+Name: ${studentName}
+Level: ${levelMeta.labelEn} (${levelMeta.labelPt} - CEFR ${levelMeta.cefr})
+Level Goals: ${levelMeta.grammarFocusEn}
+
+STUDENT WRITTEN SENTENCES IN PART 3:
+${JSON.stringify(
+  (homework.sentenceWritingPrompts || []).map((p: any) => ({
+    targetWord: p.word,
+    studentSentence: sentences[p.word] || '',
+    promptHint: p.hintEn || p.hint,
+  })),
+  null,
+  2
+)}
+
+STATS OF OTHER SECTIONS:
+- Matching (Part 1): ${matchingCorrect}/${totalMatching} correct
+- Fill in Blanks (Part 2): ${fillCorrect}/${totalFill} correct
+- Reading Comprehension (Part 4): ${quizCorrect}/${totalQuiz} correct
+
+EVALUATION INSTRUCTIONS:
+1. For each written sentence:
+   - Check grammar, spelling, natural phrasing, and appropriate use of target word.
+   - Align praise and constructive corrections to the student's level (${levelMeta.labelEn}).
+   - If Beginner: celebrate simple sentences, gently fix mechanics.
+   - If Intermediate: suggest natural connectors and verb forms.
+   - If Advanced: refine style, collocation elegance, and tone.
+2. Provide a personalized, encouraging summary note from the tutor:
+   - "tutorFeedbackSummaryPt" (in Portuguese) and "tutorFeedbackSummaryEn" (in English).
+3. Provide level-specific strengths ("levelStrengthsPt", "levelStrengthsEn").
+4. Provide actionable next steps for their English routine ("levelNextStepsPt", "levelNextStepsEn").
+
+Output STRICT JSON matching this schema:
+{
+  "sentenceFeedback": [
+    {
+      "word": "string",
+      "originalSentence": "string",
+      "isCorrect": boolean,
+      "correctedSentence": "string",
+      "explanationPt": "string",
+      "explanationEn": "string",
+      "levelAdvicePt": "string",
+      "levelAdviceEn": "string"
+    }
+  ],
+  "tutorFeedbackSummaryPt": "string",
+  "tutorFeedbackSummaryEn": "string",
+  "levelStrengthsPt": "string",
+  "levelStrengthsEn": "string",
+  "levelNextStepsPt": "string",
+  "levelNextStepsEn": "string"
+}`;
+
+      const aiRes = await callGeminiSafeJson(prompt, 7000);
+      if (aiRes && Array.isArray(aiRes.sentenceFeedback)) {
+        sentenceEvaluationResults = aiRes.sentenceFeedback;
+        tutorSummaryPt = aiRes.tutorFeedbackSummaryPt || '';
+        tutorSummaryEn = aiRes.tutorFeedbackSummaryEn || '';
+        levelStrengthsPt = aiRes.levelStrengthsPt || '';
+        levelStrengthsEn = aiRes.levelStrengthsEn || '';
+        levelNextStepsPt = aiRes.levelNextStepsPt || '';
+        levelNextStepsEn = aiRes.levelNextStepsEn || '';
+      }
+    }
+
+    // Fallback sentence evaluation if AI was offline
+    if (sentenceEvaluationResults.length === 0) {
+      sentenceEvaluationResults = (homework.sentenceWritingPrompts || []).map((p: any) => {
+        const raw = (sentences[p.word] || '').trim();
+        const hasText = raw.length >= 6;
+        const containsWord = raw.toLowerCase().includes(p.word.toLowerCase());
+        const isOk = hasText && containsWord;
+
+        return {
+          word: p.word,
+          originalSentence: raw || '(nenhuma frase escrita)',
+          isCorrect: isOk,
+          correctedSentence: raw || `I practice using ${p.word} every day.`,
+          explanationPt: isOk
+            ? `Parabéns! Você utilizou a palavra "${p.word}" com contexto correto.`
+            : `Lembre-se de incluir a palavra "${p.word}" em uma frase completa sobre sua rotina.`,
+          explanationEn: isOk
+            ? `Great job! You incorporated "${p.word}" with natural context.`
+            : `Remember to include the target word "${p.word}" in a full routine sentence.`,
+          levelAdvicePt: levelMeta.key === 'beginner'
+            ? 'Continue praticando frases curtas com Sujeito + Verbo.'
+            : levelMeta.key === 'advanced'
+            ? 'Excelente! Experimente aplicar conectivos avançados e expressões idiomáticas.'
+            : 'Muito bom! Tente conectar duas ideias usando conectivos como "because" ou "although".',
+          levelAdviceEn: levelMeta.key === 'beginner'
+            ? 'Keep practicing clear, simple sentences with Subject + Verb.'
+            : levelMeta.key === 'advanced'
+            ? 'Great! Experiment with advanced transition clauses and rich collocations.'
+            : 'Good job! Try linking ideas with connectors like "because" or "while".',
+        };
+      });
+
+      tutorSummaryPt = `Parabéns pela dedicação na Atividade de Memorização! Você consolidou o vocabulário real da sua semana com foco no nível ${levelMeta.labelPt}. Continue vivendo o inglês na sua rotina diária.`;
+      tutorSummaryEn = `Congratulations on completing your Weekly Memorization Activity! You practiced your real weekly vocabulary tailored to your ${levelMeta.labelEn} level. Keep living English in your daily routine.`;
+      levelStrengthsPt = `Boa capacidade de identificação de termos no contexto diário e dedicação na resolução dos desafios interativos.`;
+      levelStrengthsEn = `Strong ability to recognize routine vocabulary and dedication in active recall practice.`;
+      levelNextStepsPt = `Na sua próxima aula com seu Amigo Nativo, use as palavras desta semana em conversas espontâneas.`;
+      levelNextStepsEn = `In your next live session with your Native Friend, use these words naturally in casual conversation.`;
+    }
+
+    // Sentence score: up to 25 points
+    let sentenceCorrectCount = 0;
+    sentenceEvaluationResults.forEach((s) => {
+      if (s.isCorrect) sentenceCorrectCount++;
+    });
+    const sentenceScore = (sentenceCorrectCount / totalSentences) * 25;
+
+    const overallScore = Math.min(100, Math.round(matchScore + fillScore + quizScore + sentenceScore));
+
+    const evaluationResponse = {
+      overallScore,
+      evaluatedAt: new Date().toISOString(),
+      studentLevel: levelMeta.labelEn,
+      tutorFeedbackSummaryPt: tutorSummaryPt,
+      tutorFeedbackSummaryEn: tutorSummaryEn,
+      levelStrengthsPt,
+      levelStrengthsEn,
+      levelNextStepsPt,
+      levelNextStepsEn,
+      matchingFeedback,
+      fillFeedback,
+      sentenceFeedback: sentenceEvaluationResults,
+      readingFeedback,
+    };
+
+    res.json({ success: true, evaluation: evaluationResponse });
+  } catch (error: any) {
+    console.error('Error evaluating homework:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+// AI Live Lesson Vocabulary Generator
+app.post('/api/lesson/vocab-generate', async (req, res) => {
+  const { words, topic, notes } = req.body;
+  if (!words || !Array.isArray(words) || words.length === 0) {
+    return res.status(400).json({ error: 'words array is required' });
+  }
+
+  const cleanWords = words.map((w: any) => String(w || '').trim()).filter((w) => w.length > 0);
+  if (cleanWords.length === 0) {
+    return res.json({ success: true, entries: [] });
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    const prompt = `You are a native English language teacher creating personalized vocabulary study notes for a live conversation lesson.
+Lesson Topic: "${topic || 'Everyday conversation and practical routines'}"
+Teacher's Live Lesson Notes/Context: "${notes || 'Real-life speaking practice'}"
+Vocabulary items typed by the teacher during class: ${JSON.stringify(cleanWords)}
+
+For EACH word or expression, generate a distinct, highly contextual pedagogical entry tailored specifically to that word:
+1. word: exact word/expression
+2. definitionEn: A simple, natural 1-sentence English definition explaining what the word means clearly for an English learner.
+3. exampleSentenceEn: A natural, practical conversational or workplace example sentence in English that authentically uses the word in real context (NO generic placeholders, and never repeat the same sentence structure across words).
+4. translationPt: A clear, concise Portuguese translation of the term.
+
+Return a JSON array of objects with the exact schema:
+[
+  {
+    "word": "string",
+    "definitionEn": "string",
+    "exampleSentenceEn": "string",
+    "translationPt": "string"
+  }
+]`;
+
+    const parsed = await callGeminiSafeJson(prompt, 6000);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return res.json({ success: true, entries: parsed });
+    }
+  }
+
+  // Fallback linguistic generator for each word
+  const entries = cleanWords.map((word) => {
+    return {
+      word,
+      definitionEn: `A practical English term denoting "${word}", used naturally when communicating about ${topic || 'daily life'}.`,
+      exampleSentenceEn: `During our conversation about ${topic || 'our routines'}, we practiced using "${word}" naturally.`,
+      translationPt: `Vocabulário prático em inglês`,
+    };
+  });
+
+  res.json({ success: true, entries });
+});
+
+async function startServer() {
+  // Preload local database into memory immediately
+  readDb();
+
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`It's Simple Server running on http://localhost:${PORT}`);
+    // Sync with Cloud Firestore asynchronously without blocking dev server startup
+    initCloudPersistence().catch((err) => {
+      console.warn('Initial cloud persistence notice:', err);
+    });
+  });
+}
+
+startServer();
