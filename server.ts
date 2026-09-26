@@ -7073,7 +7073,14 @@ function hasGenericBoilerplate(data: any): boolean {
     str.includes('describe a specific task, plan, or event in your daily life using') ||
     str.includes('write about a conversation with a colleague or friend that involves') ||
     (str.includes('explain how "') && str.includes('connects to your current weekly goals')) ||
-    str.includes('key vocabulary term practiced in daily routines')
+    str.includes('key vocabulary term practiced in daily routines') ||
+    str.includes('understanding how to optimize') ||
+    str.includes('the team established a') ||
+    str.includes('key concept representing') ||
+    str.includes('descriptive term characterizing') ||
+    str.includes('action term describing') ||
+    str.includes('modifying term highlighting') ||
+    str.includes('with clear intention creates noticeable progress')
   );
 }
 
@@ -7268,17 +7275,26 @@ async function generateDirectMemorizationAi(
   const protagonist = (studentName && studentName !== 'Student' ? studentName.split(' ')[0] : 'Regina').trim();
 
   const systemInstruction = `You are a world-class English Language Teaching (ELT) Instructional Designer and Expert Native English Teacher for "It's Simple - Learn English by Living Your Life".
-Your mission is to generate 100% authentic, personalized, native, and engaging educational content for the 4-part "Weekly Memorization Activity", strictly contextualized around the student's daily target words and precisely tailored to their proficiency level (${levelMeta.labelEn} - CEFR ${levelMeta.cefr}).
+Your mission is to generate 100% authentic, personalized, native, and engaging educational content for the 4-part "Weekly Memorization Activity", strictly and exclusively utilizing the student's active target vocabulary words assigned for today's session:
+MANDATORY ACTIVE TARGET VOCABULARY WORDS FOR TODAY'S SESSION (NON-NEGOTIABLE):
+${words.map((w, i) => `  ${i + 1}. "${w}"`).join('\n')}
 
-NON-NEGOTIABLE PEDAGOGICAL CONSTRAINTS (STRICTLY ENFORCED):
-1. ZERO GENERIC OR BOILERPLATE CONTENT:
-   - NEVER output mechanical, repetitive, or generic placeholders (e.g. NEVER write "Core active vocabulary applied...", "I practice using...", or generic prompts).
-   - EVERY single definition, fill-in-the-blank sentence, writing challenge, and story passage MUST be uniquely constructed around the specific semantic and practical meaning of that exact target word in everyday life or workplace scenarios.
+STRICT SYSTEM PROMPT CONSTRAINTS & RULES (ENFORCED 100%):
+1. MANDATORY TARGET VOCABULARY INJECTION & EXCLUSIVITY:
+   - You MUST strictly author every single exercise across Parts 1, 2, 3, and 4 around these exact target words: [${words.map((w) => `"${w}"`).join(', ')}].
+   - COMPLETELY FORBIDDEN are placeholder words, arbitrary default words, or generic template terms (such as "now", "happy", "perfect", "app" unless they are explicitly in the active target words list above).
+   - ZERO GENERIC BOILERPLATE: Strictly forbidden are repetitive slot-filling formulas such as "Understanding how to optimize...", "The team established a...", "Key concept representing...", "Action term describing...", "Taking time to...", or "I practice using...".
+   - Every single sentence, definition, blank space, matching clue, distractor, and mini-story MUST be authentically authored specifically around the exact lexical, grammatical, and semantic meaning of each word in realistic daily life, conversation, or workplace contexts.
 
-2. PRECISE PROFICIENCY LEVEL CALIBRATION (${levelMeta.labelEn} / CEFR ${levelMeta.cefr}):
+2. GRAMMATICAL DISTRACTOR RULE FOR PART 2 (FILL IN THE BLANKS):
+   - For each target word, provide exactly 4 options: the correct target word + 3 plausible distractors.
+   - CRITICAL: The 3 distractors MUST share the EXACT SAME grammatical part of speech and structural category as the correct word (e.g. nouns with nouns, adjectives with adjectives, verbs with verbs, adverbs with adverbs).
+   - The sentence context must make the target word the ONLY semantically and logically correct choice.
+
+3. PRECISE PROFICIENCY LEVEL CALIBRATION (${levelMeta.labelEn} / CEFR ${levelMeta.cefr}):
    - ${levelMeta.key === 'beginner' ? 'BEGINNER (A1-A2): Direct SVO sentences (8-14 words), accessible daily vocabulary, clear context clues, simple present/past.' : levelMeta.key === 'intermediate' ? 'INTERMEDIATE (B1-B2): Natural compound and complex sentences (14-22 words) using connectors (because, although, while, since, so), modal verbs, phrasal verbs, realistic workplace, technology, or modern social situations.' : 'ADVANCED (C1-C2): Nuanced vocabulary, varied syntax, idiomatic collocations, executive and reflective depth (18-28 words), conditional structures.'}
 
-3. DETAILED SPECIFICATIONS FOR THE 4 PARTS:
+4. DETAILED SPECIFICATIONS FOR THE 4 PARTS:
    - Part 1 (Matching Pairs):
      * Create contextual definitions or synonyms where the clues explicitly hint at the meaning of each specific target word in realistic contexts.
      * Include a natural Portuguese equivalent ("translation").
@@ -7294,7 +7310,7 @@ NON-NEGOTIABLE PEDAGOGICAL CONSTRAINTS (STRICTLY ENFORCED):
      * Calibrate the prompt to ${levelMeta.labelEn} level.
      * Include practical challenge guidance in English ("hint" and "hintEn"), in Portuguese ("hintPt"), and a clear level grammar instruction ("levelInstruction").
    - Part 4 (Mini-Story & Comprehension Questions):
-     * Compose a cohesive, lively, and 100% original short story (like a lab diagnostic, project launch, or real-life event) featuring ${protagonist} that seamlessly and organically embeds ALL target words in context, highlighted with **word**.
+     * Compose a cohesive, lively, and 100% original short story (like a project launch, collaborative task, or real-life event) featuring ${protagonist} that seamlessly and organically embeds ALL target words in context, highlighted with **word**.
      * Accompany with 2 to 3 multiple-choice reading comprehension questions that strictly test concrete plot events, decisions, and outcomes in this narrative. ZERO generic questions about English study methods.
      * Each question has 4 options, a "correctAnswer" index (0, 1, 2, or 3), and an "explanation" citing the story.
 

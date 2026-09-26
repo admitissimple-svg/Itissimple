@@ -117,6 +117,13 @@ export const COMPREHENSIVE_LEXICON: Record<string, Omit<LexicalWordProfile, 'wor
   },
 
   // Time & Frequency
+  now: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'agora / neste momento',
+    definitionEn: 'At the present time or moment; immediately without delay',
+    exampleSentenceEn: 'I need to review our project notes right now before the meeting starts.',
+  },
   nowadays: {
     partOfSpeech: 'adverb',
     category: 'time',
@@ -137,6 +144,13 @@ export const COMPREHENSIVE_LEXICON: Record<string, Omit<LexicalWordProfile, 'wor
     translationPt: 'amanhã',
     definitionEn: 'On or for the day following today',
     exampleSentenceEn: 'We scheduled the strategic planning session for tomorrow morning.',
+  },
+  yesterday: {
+    partOfSpeech: 'noun',
+    category: 'time',
+    translationPt: 'ontem',
+    definitionEn: 'On the day before today',
+    exampleSentenceEn: 'Yesterday we had an insightful conversation with our native friend.',
   },
   moment: {
     partOfSpeech: 'noun',
@@ -165,6 +179,69 @@ export const COMPREHENSIVE_LEXICON: Record<string, Omit<LexicalWordProfile, 'wor
     translationPt: 'pausa / intervalo',
     definitionEn: 'A pause in work or during an activity or event',
     exampleSentenceEn: 'Stepping away for a 10-minute break helps restore mental focus.',
+  },
+  already: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'já',
+    definitionEn: 'Before or by now or the time in question',
+    exampleSentenceEn: 'By 10:00 AM, our team had already finalized the weekly performance report.',
+  },
+  soon: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'em breve / logo',
+    definitionEn: 'In or after a short time; without long delay',
+    exampleSentenceEn: 'We will soon schedule our next live practice session with our native friend.',
+  },
+  early: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'cedo / adiantado',
+    definitionEn: 'Happening or done before the usual or expected time',
+    exampleSentenceEn: 'Waking up early gives me quiet time to read and plan my daily schedule.',
+  },
+  late: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'tarde / atrasado',
+    definitionEn: 'Doing something or taking place after the expected or proper time',
+    exampleSentenceEn: 'We worked late on Tuesday to ensure the deliverables met our high quality standards.',
+  },
+  always: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'sempre',
+    definitionEn: 'At all times; on all occasions',
+    exampleSentenceEn: 'I always review my vocabulary notes over breakfast before opening my work inbox.',
+  },
+  never: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'nunca',
+    definitionEn: 'At no time in the past or future; on no occasion',
+    exampleSentenceEn: 'He never misses his morning English audio session, even when traveling.',
+  },
+  often: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'frequentemente',
+    definitionEn: 'Many times; at frequent intervals',
+    exampleSentenceEn: 'We often collaborate across international time zones to finalize major client projects.',
+  },
+  sometimes: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'às vezes',
+    definitionEn: 'At certain times; occasionally',
+    exampleSentenceEn: 'Sometimes a five-minute break away from your screen is the best way to regain focus.',
+  },
+  rarely: {
+    partOfSpeech: 'adverb',
+    category: 'time',
+    translationPt: 'raramente',
+    definitionEn: 'Not often; seldom',
+    exampleSentenceEn: 'She rarely encounters communication problems now that she practices with native friends.',
   },
 
   // Work, Business & Tasks
@@ -365,6 +442,146 @@ export const COMPREHENSIVE_LEXICON: Record<string, Omit<LexicalWordProfile, 'wor
   },
 
   // Core Common Vocabulary & Action Terms
+  app: {
+    partOfSpeech: 'noun',
+    category: 'work',
+    translationPt: 'aplicativo / app',
+    definitionEn: 'A software program designed to perform a specific function directly for the user on a mobile device or computer',
+    exampleSentenceEn: 'I opened the mobile app on my smartphone to practice English during my morning commute.',
+  },
+  happy: {
+    partOfSpeech: 'adjective',
+    category: 'emotion',
+    translationPt: 'feliz / contente / satisfeito',
+    definitionEn: 'Feeling or showing pleasure, satisfaction, or contentment with life or work',
+    exampleSentenceEn: 'The client was very happy with the prompt delivery and high quality of our project.',
+  },
+  perfect: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'perfeito / ideal',
+    definitionEn: 'Having all desirable elements, qualities, or characteristics; completely suitable or ideal',
+    exampleSentenceEn: 'A quiet morning at home provides the perfect environment for focused study and deep concentration.',
+  },
+  simple: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'simples / descomplicado',
+    definitionEn: 'Easily understood or done; presenting no unnecessary complication or difficulty',
+    exampleSentenceEn: 'Our method makes learning English simple, natural, and directly connected to daily life.',
+  },
+  easy: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'fácil / tranquilo',
+    definitionEn: 'Achieved without great effort; presenting few difficulties',
+    exampleSentenceEn: 'With consistent daily practice, remembering practical vocabulary becomes remarkably easy.',
+  },
+  important: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'importante / essencial',
+    definitionEn: 'Of great significance or value; likely to have a profound effect on success',
+    exampleSentenceEn: 'It is important to review new expressions immediately following your conversation with a native friend.',
+  },
+  clear: {
+    partOfSpeech: 'adjective',
+    category: 'communication',
+    translationPt: 'claro / objetivo',
+    definitionEn: 'Easy to perceive, understand, or interpret; transparent in communication',
+    exampleSentenceEn: 'She gave a very clear explanation of the project milestones during our team meeting.',
+  },
+  productive: {
+    partOfSpeech: 'adjective',
+    category: 'work',
+    translationPt: 'produtivo',
+    definitionEn: 'Achieving or producing a significant amount or excellent result',
+    exampleSentenceEn: 'We had a highly productive morning session aligning on all client deliverables.',
+  },
+  calm: {
+    partOfSpeech: 'adjective',
+    category: 'emotion',
+    translationPt: 'calmo / tranquilo',
+    definitionEn: 'Not showing or feeling nervousness, agitation, or stress; peaceful',
+    exampleSentenceEn: 'Remaining calm under pressure helped her negotiate the agreement with great poise.',
+  },
+  confident: {
+    partOfSpeech: 'adjective',
+    category: 'emotion',
+    translationPt: 'confiante / seguro',
+    definitionEn: 'Feeling or showing certainty about one\'s abilities or qualities',
+    exampleSentenceEn: 'Practicing daily conversation with native tutors makes students truly confident when speaking.',
+  },
+  ready: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'pronto / preparado',
+    definitionEn: 'In a suitable state for an activity, action, or situation; fully prepared',
+    exampleSentenceEn: 'After preparing the slide deck, the entire team was ready for the executive briefing.',
+  },
+  busy: {
+    partOfSpeech: 'adjective',
+    category: 'general',
+    translationPt: 'ocupado / movimentado',
+    definitionEn: 'Having a great deal to do; keeping active with tasks and responsibilities',
+    exampleSentenceEn: 'Despite having a busy weekday schedule, she always reserves twenty minutes for English practice.',
+  },
+  start: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'começar / iniciar',
+    definitionEn: 'To begin doing or taking part in an activity or journey',
+    exampleSentenceEn: 'I start my daily routine early in the morning with a warm cup of coffee and light reading.',
+  },
+  finish: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'terminar / concluir',
+    definitionEn: 'To bring a task, project, or activity to a complete end',
+    exampleSentenceEn: 'Our priority today is to finish the client proposal before the end of the afternoon.',
+  },
+  learn: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'aprender',
+    definitionEn: 'To acquire knowledge or skill through study, experience, or being taught',
+    exampleSentenceEn: 'You learn English much faster by living your daily routine than by memorizing abstract rules.',
+  },
+  speak: {
+    partOfSpeech: 'verb',
+    category: 'communication',
+    translationPt: 'falar / conversar',
+    definitionEn: 'To say words orally; to communicate using spoken language',
+    exampleSentenceEn: 'The best way to speak English naturally is having regular conversations with native friends.',
+  },
+  listen: {
+    partOfSpeech: 'verb',
+    category: 'communication',
+    translationPt: 'ouvir / escutar com atenção',
+    definitionEn: 'To give one\'s attention to a sound or speaker in order to understand',
+    exampleSentenceEn: 'I listen to English podcasts while taking a brisk walk in the morning.',
+  },
+  read: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'ler',
+    definitionEn: 'To look at and comprehend the meaning of written words and sentences',
+    exampleSentenceEn: 'I read the international industry report to prepare for the upcoming client call.',
+  },
+  write: {
+    partOfSpeech: 'verb',
+    category: 'general',
+    translationPt: 'escrever',
+    definitionEn: 'To compose text or record thoughts and information in written form',
+    exampleSentenceEn: 'Writing in my daily reflection journal locks in the new vocabulary I acquired today.',
+  },
+  review: {
+    partOfSpeech: 'verb',
+    category: 'work',
+    translationPt: 'revisar / examinar',
+    definitionEn: 'To examine or assess something again with the possibility of instituting change',
+    exampleSentenceEn: 'Let us review the presentation slides together to ensure every point is accurate.',
+  },
   this: {
     partOfSpeech: 'other',
     category: 'general',
@@ -448,7 +665,15 @@ function isGenericText(text?: string): boolean {
     lower.includes('active vocabulary practiced during') ||
     lower.includes('i practice using') ||
     lower.includes('key vocabulary term practiced') ||
-    lower.includes('applied during your daily')
+    lower.includes('applied during your daily') ||
+    lower.includes('understanding how to optimize') ||
+    lower.includes('the team established a') ||
+    lower.includes('key concept representing') ||
+    lower.includes('descriptive term characterizing') ||
+    lower.includes('action term describing') ||
+    lower.includes('modifying term highlighting') ||
+    lower.includes('with clear intention creates noticeable progress') ||
+    lower.includes('focus on the sentence context to identify')
   );
 }
 
@@ -497,7 +722,7 @@ export function profileWord(
   if (/er$|or$|ee$|ist$|ian$/i.test(clean)) category = 'people';
   else if (/tion$|sion$|ment$|ness$|ship$/i.test(clean)) category = 'relation';
 
-  // Dynamic contextual definition based on grammar and form - ZERO boilerplate!
+  // Authentic contextual definitions and real-world example sentences - ZERO generic boilerplate!
   let defaultDef = '';
   let defaultEx = '';
 
@@ -506,27 +731,27 @@ export function profileWord(
   } else {
     switch (partOfSpeech) {
       case 'verb':
-        defaultDef = `Action term describing how to perform, manage, or execute "${clean}" in practical activities.`;
-        defaultEx = `Taking time to ${clean} effectively ensures optimal performance throughout the project.`;
+        defaultDef = `To engage in, conduct, or carry out the action of ${clean} in personal or workplace situations.`;
+        defaultEx = `During our daily routine, our team collaborates closely to ${clean} effectively.`;
         break;
       case 'adjective':
-        defaultDef = `Descriptive term characterizing a condition, quality, or standard described as "${clean}".`;
-        defaultEx = `The team established a ${clean} process to handle daily tasks smoothly.`;
+        defaultDef = `Characterized by being ${clean}; expressing a notable quality, state, or condition.`;
+        defaultEx = `Maintaining a ${clean} mindset makes daily communication and collaborative projects much smoother.`;
         break;
       case 'adverb':
-        defaultDef = `Modifying term highlighting the manner, timing, or degree of performing an action "${clean}".`;
-        defaultEx = `Approaching the conversation ${clean} helped clarify expectations immediately.`;
+        defaultDef = `In a distinct manner, degree, or timing characterized as ${clean}.`;
+        defaultEx = `She expressed her perspective ${clean}, ensuring that every participant understood the message.`;
         break;
       default:
-        defaultDef = `Key concept representing "${clean}" applied in professional responsibilities and daily routines.`;
-        defaultEx = `Understanding how to optimize "${clean}" directly enhances our daily productivity.`;
+        defaultDef = `An important concept, role, or tool referring to ${clean} in everyday life and communication.`;
+        defaultEx = `Having a clear and structured ${clean} helps everyone stay organized and confident throughout the day.`;
     }
   }
 
   if (providedDetails?.exampleSentence && !isGenericText(providedDetails.exampleSentence) && providedDetails.exampleSentence.toLowerCase().includes(lower)) {
     defaultEx = providedDetails.exampleSentence;
   } else if (!defaultEx) {
-    defaultEx = `Applying "${clean}" with clear intention creates noticeable progress in daily conversations.`;
+    defaultEx = `Practicing with "${clean}" in daily English conversations builds natural fluency and confidence.`;
   }
 
   const defaultTrans = providedDetails?.translationPt || clean;
@@ -918,7 +1143,7 @@ export function synthesizeCohesiveStoryAndQuestions(params: {
 
 /**
  * Builds authentic Fill-in-the-Blanks challenges using the real definition and example sentence
- * of each word, eliminating nonsensical slot templates.
+ * of each word, eliminating nonsensical slot templates and strictly matching parts of speech for distractors.
  */
 export function synthesizeFillInBlanks(
   words: string[],
@@ -929,22 +1154,54 @@ export function synthesizeFillInBlanks(
     exampleSentence?: string;
   }>
 ): FillInBlankItem[] {
-  return words.map((w, idx) => {
-    const detail = wordDetails?.find((d) => d.word.toLowerCase().trim() === w.toLowerCase().trim());
-    const profile = profileWord(w, detail);
+  const NOUN_DISTRACTORS = ['schedule', 'routine', 'practice', 'update', 'meeting', 'project', 'balance', 'culture', 'priority', 'task', 'goal', 'habit', 'feedback', 'strategy'];
+  const VERB_DISTRACTORS = ['review', 'manage', 'organize', 'develop', 'prepare', 'improve', 'practice', 'coordinate', 'finish', 'start', 'learn', 'deliver'];
+  const ADJ_DISTRACTORS = ['productive', 'effective', 'creative', 'consistent', 'calm', 'confident', 'simple', 'essential', 'focused', 'clear', 'natural', 'smooth'];
+  const ADV_DISTRACTORS = ['nowadays', 'always', 'already', 'soon', 'regularly', 'smoothly', 'clearly', 'consistently', 'frequently', 'rarely', 'early', 'often'];
 
-    const distractors = words.filter((o) => o.toLowerCase() !== w.toLowerCase()).slice(0, 3);
-    const options = [w, ...distractors];
-    const backupDistractors = ['schedule', 'routine', 'practice', 'update', 'meeting', 'project', 'balance', 'culture'];
-    let b = 0;
-    while (options.length < 4) {
-      const cand = backupDistractors[b++ % backupDistractors.length];
-      if (!options.includes(cand) && cand.toLowerCase() !== w.toLowerCase()) {
+  // Map each word to its profile for POS matching
+  const profileMap = new Map<string, LexicalWordProfile>();
+  words.forEach((w) => {
+    const detail = wordDetails?.find((d) => d.word.toLowerCase().trim() === w.toLowerCase().trim());
+    profileMap.set(w.toLowerCase().trim(), profileWord(w, detail));
+  });
+
+  return words.map((w, idx) => {
+    const profile = profileMap.get(w.toLowerCase().trim()) || profileWord(w);
+    const pos = profile.partOfSpeech;
+
+    // 1. Pick distractors that strictly match the part of speech
+    // First, look for other student words that share the same POS
+    const samePosStudentWords = words
+      .filter((other) => {
+        if (other.toLowerCase().trim() === w.toLowerCase().trim()) return false;
+        const otherProf = profileMap.get(other.toLowerCase().trim());
+        return otherProf?.partOfSpeech === pos;
+      })
+      .slice(0, 3);
+
+    const options = [w, ...samePosStudentWords];
+
+    // Fill remaining slots from high-frequency POS pool so distractors are always grammatically coherent
+    const pool = pos === 'verb'
+      ? VERB_DISTRACTORS
+      : pos === 'adjective'
+      ? ADJ_DISTRACTORS
+      : pos === 'adverb'
+      ? ADV_DISTRACTORS
+      : NOUN_DISTRACTORS;
+
+    let poolIdx = 0;
+    while (options.length < 4 && poolIdx < pool.length * 2) {
+      const cand = pool[poolIdx++ % pool.length];
+      if (!options.some((opt) => opt.toLowerCase() === cand.toLowerCase()) && cand.toLowerCase() !== w.toLowerCase()) {
         options.push(cand);
       }
     }
 
-    const wordRegex = new RegExp(`\\b${w}\\b`, 'i');
+    // Escape regex special characters
+    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wordRegex = new RegExp(`\\b${escaped}\\b`, 'i');
     let sentenceWithBlank = '';
 
     if (profile.exampleSentenceEn && !isGenericText(profile.exampleSentenceEn) && wordRegex.test(profile.exampleSentenceEn)) {
@@ -986,7 +1243,7 @@ export function synthesizeFillInBlanks(
           } else if (profile.partOfSpeech === 'adverb') {
             sentenceWithBlank = `She had ______ delivered the executive summary when the stakeholders entered the room.`;
           } else {
-            sentenceWithBlank = `Paying close attention to ______ ensured that the team delivered high quality results on time.`;
+            sentenceWithBlank = `Having a clear and reliable ______ ensures that the team delivers high quality results on time.`;
           }
       }
     }
@@ -997,7 +1254,7 @@ export function synthesizeFillInBlanks(
       correctWord: w,
       options: options.sort(() => 0.5 - Math.random()),
       hintPt: `Dica contextual: Encaixa com o sentido de "${profile.translationPt}".`,
-      hintEn: `Context clue: Choose the word meaning "${profile.definitionEn.slice(0, 70)}...".`,
+      hintEn: `Context clue: Choose the word that best expresses "${profile.definitionEn.slice(0, 65)}...".`,
       explanationPt: `A palavra "${w}" (${profile.translationPt}) completa a frase com precisão semântica e gramatical.`,
       explanationEn: `"${w}" is the only choice that logically and grammatically fits this specific context.`,
     };

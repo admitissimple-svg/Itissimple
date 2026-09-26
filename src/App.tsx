@@ -461,7 +461,7 @@ export default function App() {
       if (prev?.isAiGenerated && !prev.isEmpty && prev.totalWordsCollected > 0 && prev.targetDay === homeworkTargetDay) {
         const prevText = prev.readingPassage?.text || '';
         const prevTextLower = prevText.toLowerCase();
-        const isBadOldStory =
+        const hasBadOldStoryOrBoilerplate =
           prevText.includes('to make sure everything stayed aligned') ||
           prevText.includes('quick to ') ||
           prevText.includes('refreshing weather') ||
@@ -472,9 +472,15 @@ export default function App() {
           prevTextLower.includes('address **') ||
           prevTextLower.includes('managing **') ||
           prevTextLower.includes('progress made on **') ||
-          prevText.length < 80;
+          prevText.length < 80 ||
+          prev.fillInBlanks?.some((f: any) =>
+            f.sentenceWithBlank?.includes('Understanding how to optimize') ||
+            f.sentenceWithBlank?.includes('The team established a') ||
+            f.hintEn?.includes('Key concept representing') ||
+            f.hintEn?.includes('Descriptive term characterizing')
+          );
 
-        if (!isBadOldStory) {
+        if (!hasBadOldStoryOrBoilerplate) {
           const prevWords = prev.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
           const nextWords = generated.vocabularyList.map((w) => w.word.toLowerCase()).sort().join('|');
           if (prevWords === nextWords) {

@@ -377,6 +377,64 @@ export function generateWeeklyHomework(
     }
   }
 
+  // 1.1 Proper Session Words Fallback: If targetDay has no words registered yet,
+  // fallback to the proper session words from the student's active week / routines
+  // rather than generating generic boilerplate exercises.
+  if (rawWords.length === 0 && targetDay) {
+    for (const d of DAYS_OF_WEEK) {
+      if (d === targetDay) continue;
+      const items = routinesByDay[d] || [];
+      for (const item of items) {
+        if (item.learnedWords && Array.isArray(item.learnedWords)) {
+          for (const w of item.learnedWords) {
+            const trimmed = (w || '').trim();
+            if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
+              seenWords.add(trimmed.toLowerCase());
+              const lower = trimmed.toLowerCase();
+              const dictMatch = ROUTINE_VOCAB_DICT[lower];
+              const prof = profileWord(trimmed, dictMatch ? {
+                definitionEn: dictMatch.definitionEn,
+                translationPt: dictMatch.translationPt,
+                exampleSentence: dictMatch.exampleSentence,
+              } : undefined);
+
+              rawWords.push({
+                word: trimmed,
+                sourceActivityName: `${item.activityName} (${DAY_LABELS_PT[d] || d})`,
+                sourceDay: d,
+                definitionEn: prof.definitionEn,
+                translationPt: prof.translationPt,
+                exampleSentence: prof.exampleSentenceEn,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(customWords)) {
+      customWords.forEach((cw) => {
+        const trimmed = (cw?.word || '').trim();
+        if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
+          seenWords.add(trimmed.toLowerCase());
+          const prof = profileWord(trimmed, {
+            definitionEn: cw.definitionEn,
+            translationPt: cw.translationPt,
+            exampleSentence: cw.exampleSentence,
+          });
+          rawWords.push({
+            word: trimmed,
+            sourceActivityName: cw.sourceActivityName || 'Session Vocabulary',
+            sourceDay: cw.sourceDay || targetDay,
+            definitionEn: prof.definitionEn,
+            translationPt: prof.translationPt,
+            exampleSentence: prof.exampleSentenceEn,
+          });
+        }
+      });
+    }
+  }
+
   const dayNamePt = targetDay ? DAY_LABELS_PT[targetDay] : '';
   const dayNameEn = targetDay ? DAY_LABELS_EN[targetDay] : '';
   const partInfoPt = schedule ? ` (${schedule.partTitlePt})` : '';
