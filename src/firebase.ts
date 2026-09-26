@@ -32,9 +32,11 @@ export const app = getApps().length === 0 ? initializeApp(effectiveFirebaseConfi
 // Firebase Authentication instance
 export const auth = getAuth(app);
 
-// Google Auth Provider configured for popups
+// Google Auth Provider configured for popups with multi-account isolation and required Workspace scopes
 export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({ prompt: 'select_account' });
+googleAuthProvider.addScope('https://www.googleapis.com/auth/calendar.events');
+googleAuthProvider.addScope('https://www.googleapis.com/auth/gmail.send');
 
 // Lazy-initialized Firestore instance to avoid starting unused background gRPC streams
 let _firestoreDb: Firestore | null = null;

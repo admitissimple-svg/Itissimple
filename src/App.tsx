@@ -38,6 +38,9 @@ import { executeStartNewWeek } from './utils/StartNewWeekHandler';
 import { addVideoToWatchedHistoryInFirestore, addTrackToListenedHistoryInFirestore } from './hooks/useRoutine';
 import { recordConsumedVideo, recordConsumedTrack } from './hooks/useStudentHistory';
 import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
+import { auth, getDb } from './firebase';
+import { onAuthStateChanged, signOut as firebaseSignOutAuth } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -224,6 +227,69 @@ export default function App() {
       }
     } catch {}
   }, [availableAccounts]);
+
+  // Synchronize Firebase Auth state with React app state for multi-account isolation & published profile detection
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser && fbUser.email) {
+        const cleanEmail = fbUser.email.toLowerCase().trim();
+        const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
+
+        // Check if currentAccount matches the active Firebase Auth user
+        if (!currentAccount || currentAccount.email.toLowerCase() !== cleanEmail) {
+          let resolvedRole: UserRole = isMasterAdmin ? 'admin' : 'student';
+          let firestoreDoc: any = null;
+          try {
+            const db = getDb();
+            const snap = await Promise.race([
+              getDoc(doc(db, 'users', fbUser.uid)),
+              new Promise<null>((r) => setTimeout(() => r(null), 3000)),
+            ]);
+            if (snap && snap.exists()) {
+              firestoreDoc = snap.data();
+              const r = (firestoreDoc.role || '').toLowerCase();
+              if (r === 'admin' || isMasterAdmin) resolvedRole = 'admin';
+              else if (r === 'teacher' || r === 'native_friend') resolvedRole = 'teacher';
+              else resolvedRole = 'student';
+            }
+          } catch (e) {
+            console.warn('Notice hydrating Firebase Auth user in App:', e);
+          }
+
+          const account: GoogleAccount = {
+            uid: fbUser.uid,
+            email: cleanEmail,
+            name: firestoreDoc?.name || fbUser.displayName || cleanEmail.split('@')[0],
+            role: resolvedRole,
+            picture: firestoreDoc?.picture || firestoreDoc?.avatar || fbUser.photoURL || '',
+          };
+
+          setCurrentAccount(account);
+          setAvailableAccounts((prev) => {
+            if (!prev.some((a) => a.email.toLowerCase() === cleanEmail)) {
+              return [...prev, account];
+            }
+            return prev.map((a) => (a.email.toLowerCase() === cleanEmail ? account : a));
+          });
+
+          // Sync with backend API
+          fetch('/api/auth/google', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uid: fbUser.uid,
+              email: cleanEmail,
+              name: account.name,
+              role: resolvedRole,
+              picture: account.picture,
+            }),
+          }).catch(() => {});
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [currentAccount]);
 
   const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
 
@@ -1401,6 +1467,13 @@ export default function App() {
 
   // Handler: Logout
   const handleLogout = () => {
+    try {
+      firebaseSignOutAuth(auth).catch(() => {});
+    } catch {}
+    try {
+      localStorage.removeItem('its_simple_current_account');
+      localStorage.removeItem('currentUserAccount');
+    } catch {}
     setCurrentAccount(null);
     setUserProfile(createDefaultStudentProfile(null));
     setLessons([]);

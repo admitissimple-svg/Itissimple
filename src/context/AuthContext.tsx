@@ -99,40 +99,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Sync Firebase Auth session on mount
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setFirebaseUser(user);
-      if (user) {
-        // Hydrate from Firestore
-        try {
-          const docData = await fetchFirestoreUser(user.uid, user.email || undefined);
-          if (docData) {
-            const resolvedRole: UserRole =
-              docData.role === 'admin'
-                ? 'admin'
-                : docData.role === 'teacher' || docData.role === 'native_friend'
-                ? 'teacher'
-                : 'student';
-
-            const acc: GoogleAccount = {
-              uid: user.uid,
-              email: user.email || docData.email,
-              name: docData.name || user.displayName || (user.email ? user.email.split('@')[0] : 'User'),
-              role: resolvedRole,
-              picture: docData.picture || docData.avatar || user.photoURL || '',
-            };
-            setCurrentAccount(acc);
-          }
-        } catch {
-          // Keep current state
-        }
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
-
   // Fetch Firestore user doc by UID with fallback to emailDocId
   const fetchFirestoreUser = useCallback(async (uid: string, email?: string): Promise<AuthUserDoc | null> => {
     if (!uid && !email) return null;
@@ -156,6 +122,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     return null;
   }, []);
+
+  // Sync Firebase Auth session on mount
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        const cleanEmail = (user.email || '').toLowerCase().trim();
+        const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
+
+        // Hydrate from Firestore with resilient fallback
+        try {
+          const docData = await fetchFirestoreUser(user.uid, user.email || undefined);
+          const resolvedRole: UserRole = docData
+            ? (docData.role === 'admin' || isMasterAdmin
+                ? 'admin'
+                : docData.role === 'teacher' || docData.role === 'native_friend'
+                ? 'teacher'
+                : 'student')
+            : (isMasterAdmin ? 'admin' : 'student');
+
+          const acc: GoogleAccount = {
+            uid: user.uid,
+            email: cleanEmail,
+            name: docData?.name || user.displayName || (cleanEmail ? cleanEmail.split('@')[0] : 'User'),
+            role: resolvedRole,
+            picture: docData?.picture || docData?.avatar || user.photoURL || '',
+          };
+          setCurrentAccount(acc);
+        } catch (hydrationErr) {
+          console.warn('Notice during user hydration:', hydrationErr);
+          const acc: GoogleAccount = {
+            uid: user.uid,
+            email: cleanEmail,
+            name: user.displayName || (cleanEmail ? cleanEmail.split('@')[0] : 'User'),
+            role: isMasterAdmin ? 'admin' : 'student',
+            picture: user.photoURL || '',
+          };
+          setCurrentAccount(acc);
+        }
+      } else {
+        setCurrentAccount(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [fetchFirestoreUser]);
 
   // Dynamic Login with Email/Password and Firestore Role Verification
   const loginWithEmail = async (

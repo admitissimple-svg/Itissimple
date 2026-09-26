@@ -57,6 +57,34 @@ const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 const app = express();
 const PORT = 3000;
 
+// Universal CORS & embedding middleware for published app previews, Cloud Run, and cross-account requests
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
+
+  // Prevent frame blocking when published or embedded in preview containers
+  res.removeHeader('X-Frame-Options');
+
+  // Support Firebase Auth Popup & Cross-Account window communication
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+
+  // Allow iframe embedding across Google AI Studio, Cloud Run, and published previews
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://*.google.com https://*.run.app https://*.aistudio.google.com https://*.googleusercontent.com *;");
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 app.use(express.json());
 
 
@@ -1616,21 +1644,22 @@ app.post('/api/auth/google', (req, res) => {
   }
 
   const cleanEmail = email.toLowerCase().trim();
+  const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail === 'admin@itissimple.com';
   let role = requestedRole === 'teacher' ? 'teacher' : 'student';
   let displayName = name || cleanEmail.split('@')[0];
 
-  if (cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('adm')) {
-    role = requestedRole || 'admin';
-    if (role === 'admin' && (!name || name === cleanEmail.split('@')[0])) {
+  if (isMasterAdmin) {
+    role = 'admin';
+    if (!name || name === cleanEmail.split('@')[0]) {
       displayName = "Admin It's Simple";
     }
-  } else if (requestedRole) {
-    role = requestedRole === 'teacher' ? 'teacher' : requestedRole === 'admin' ? 'admin' : 'student';
   } else if (
     db.teachers?.some((t) => t.email.toLowerCase() === cleanEmail) ||
     db.tutorsList?.some((t) => t.email.toLowerCase() === cleanEmail)
   ) {
     role = 'teacher';
+  } else if (requestedRole) {
+    role = requestedRole === 'teacher' ? 'teacher' : (requestedRole === 'admin' && isMasterAdmin ? 'admin' : 'student');
   }
 
   // Update or record in authUsers
@@ -1708,15 +1737,17 @@ app.post('/api/auth/google', (req, res) => {
     }
   }
 
+  const effectiveUid = uid || db.authUsers?.[cleanEmail]?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
+
   const account = {
-    uid: uid || db.authUsers?.[cleanEmail]?.uid || (cleanEmail === 'adm.itissimple@gmail.com' ? 'admin-master-uid' : undefined),
+    uid: effectiveUid,
     email: cleanEmail,
     name: displayName,
     role,
     picture:
       picture ||
       db.userProfiles?.[cleanEmail]?.picture ||
-      db.userProfiles?.[uid]?.picture ||
+      db.userProfiles?.[effectiveUid]?.picture ||
       '',
   };
 
