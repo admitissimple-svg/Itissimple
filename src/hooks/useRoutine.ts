@@ -645,6 +645,45 @@ export async function resetDailyRoutinesForNewWeekInFirestore(
 }
 
 /**
+ * Initializes clean, default isolated routine records in Firestore for a newly registered student.
+ * Guarantees zero leakage of previously saved video configurations or admin fallbacks.
+ */
+export async function initializeCleanStudentRoutinesInFirestore(
+  studentUid: string,
+  targetDays: DayOfWeek[] = ALL_DAYS_OF_WEEK
+): Promise<boolean> {
+  const cleanUid = normalizeStudentIdForPath(studentUid);
+  if (!cleanUid) return false;
+
+  const db = getDb();
+  try {
+    // 1. Initialize user document with empty history and clean S-Path checks
+    const userRef = doc(db, 'users', cleanUid);
+    await withFirestoreTimeout(
+      setDoc(
+        userRef,
+        {
+          watchedVideosHistory: [],
+          listenedTracksHistory: [],
+          studentJournal: [],
+          weeklyChecks: {},
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ),
+      2500,
+      undefined
+    );
+
+    // 2. Initialize all daily routine documents with clean placeholder state
+    return await resetDailyRoutinesForNewWeekInFirestore(cleanUid, targetDays);
+  } catch (err) {
+    console.warn('Notice initializing clean student routines in Firestore:', err);
+    return false;
+  }
+}
+
+/**
  * Filter candidates against watched videos history and studentJournal to enforce 100% exclusivity.
  * Returns the first video that has NOT yet been watched or recorded in studentJournal.
  */

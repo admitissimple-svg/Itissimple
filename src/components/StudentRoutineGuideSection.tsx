@@ -331,12 +331,16 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     }
   }, [persistedRoutinesByDay]);
 
-  // Reset selected topics when starting a new week or weekly cycle updates
+  // Reset selected topics and day-specific state when student identity changes or weekly cycle updates
   useEffect(() => {
     setSelectedTopicByDay({});
     setCustomSuggestionActivities({});
     setSuggestingUrlValues({});
-  }, [weeklyCycle]);
+    setSavedTopicsBeforeRepeat({});
+    setSentenceInput('');
+    setSentenceSavedSuccess(false);
+    setSentenceEvaluation(null);
+  }, [effectiveStudentUid, weeklyCycle]);
 
   // Quick jump helpers
   const activeStudyDays: DayOfWeek[] = useMemo(() => {

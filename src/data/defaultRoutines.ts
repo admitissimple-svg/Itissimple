@@ -10,18 +10,8 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Rotina Matinal e Café da Manhã (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-m1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Making Morning Coffee & Breakfast Vocabulary',
-          duration: '8 min',
-          instructions: 'Preste atenção aos verbos de ação na cozinha (brew, pour, slice, spread) e anote 5 palavras.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Preste atenção aos verbos de ação na cozinha e anote 5 palavras.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
@@ -35,18 +25,8 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Rotina Matinal e Café da Manhã (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-t1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Breakfast & Kitchen Essentials in English',
-          duration: '10 min',
-          instructions: 'Pratique descrever ingredientes e utensílios matinais.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Pratique descrever ingredientes e utensílios matinais.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
@@ -60,18 +40,8 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Alongamento Matinal e Hábitos Diários (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-w1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Morning Routine & Healthy Habits',
-          duration: '8 min',
-          instructions: 'Verbos de movimento corporal e respiração.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Verbos de movimento corporal e respiração.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
@@ -85,18 +55,8 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Planejamento do Dia e Clima (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-th1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Weather Expressions & Daily Planning',
-          duration: '7 min',
-          instructions: 'Vocabulário meteorológico e roupas adequadas.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Vocabulário meteorológico e roupas adequadas.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
@@ -110,18 +70,8 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Planos do Fim de Semana (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-f1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Friday Feelings & Weekend Plans in English',
-          duration: '6 min',
-          instructions: 'Entusiasmo com o fim de semana e expressões coloquiais.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Entusiasmo com o fim de semana.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
@@ -135,18 +85,8 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Brunch e Atividades de Lazer (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-sa1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Weekend Morning Routines & Leisure Activities',
-          duration: '8 min',
-          instructions: 'Brunch, descanso e passeios ao ar livre.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Brunch, descanso e passeios ao ar livre.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
@@ -160,20 +100,42 @@ export const defaultRoutinesByDay: Record<DayOfWeek, RoutineItem[]> = {
       activityName: 'Café da Manhã e Momento em Família (Vídeo)',
       category: 'morning',
       isMandatory: true,
-      teacherVideos: [
-        {
-          id: 'v-su1',
-          url: 'https://www.youtube.com/watch?v=kYJv_yP22aE',
-          videoId: 'kYJv_yP22aE',
-          title: 'Sunday Calm & Family Time Vocabulary',
-          duration: '7 min',
-          instructions: 'Momentos calmos de início de domingo.',
-          addedAt: '2025-01-15T08:00:00Z',
-        },
-      ],
-      teacherNotes: 'Momentos calmos de início de domingo.',
+      teacherVideos: [],
+      teacherNotes: '',
       learnedWords: [],
       completedToday: false,
     },
   ],
+};
+
+/**
+ * Creates clean, isolated initial routines for a newly registered student
+ * with all days defaulted to empty/placeholder values (Choose Video) and their configured video time.
+ */
+export const createCleanStudentRoutines = (videoTime?: string): Record<DayOfWeek, RoutineItem[]> => {
+  const days: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const res: Record<DayOfWeek, RoutineItem[]> = {} as any;
+  days.forEach((day) => {
+    const defaultDayList = defaultRoutinesByDay[day] || [];
+    res[day] = defaultDayList.map((item) => {
+      const isVideo =
+        item.id.endsWith('1') ||
+        (item.activityName || '').toLowerCase().includes('vídeo') ||
+        (item.activityName || '').toLowerCase().includes('video');
+      return {
+        ...item,
+        time: isVideo && videoTime ? videoTime : item.time || '09:00',
+        teacherVideos: [],
+        playlistId: '',
+        playlistTitle: '',
+        teacherNotes: '',
+        learnedWords: [],
+        completed: false,
+        completedToday: false,
+        isRepeatVideo: false,
+        repeatVideo: false,
+      };
+    });
+  });
+  return res;
 };

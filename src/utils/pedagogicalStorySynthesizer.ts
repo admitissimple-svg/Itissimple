@@ -805,7 +805,7 @@ export function synthesizeCohesiveStoryAndQuestions(params: {
   const isInter = level.includes('inter');
   const levelLabel = isAdv ? 'Advanced' : isInter ? 'Intermediate' : 'Beginner';
 
-  const protagonist = studentName && studentName !== 'Student' ? studentName.split(' ')[0] : 'Regina';
+  const protagonist = studentName && studentName !== 'Student' && studentName !== 'Aluno' ? studentName.split(' ')[0] : 'The student';
 
   // Specific semantic matching for cohesive workplace / daily scenario
   const wordMap = new Map<string, LexicalWordProfile>();

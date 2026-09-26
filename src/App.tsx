@@ -21,7 +21,7 @@ import {
   DailyJournalEntry,
   WritingEvaluationResult,
 } from './types';
-import { defaultRoutinesByDay } from './data/defaultRoutines';
+import { defaultRoutinesByDay, createCleanStudentRoutines } from './data/defaultRoutines';
 import { INITIAL_NATIVE_FRIENDS } from './data/tutors';
 import { getTranslations, getActivityDisplayName } from './utils/i18n';
 import {
@@ -35,7 +35,11 @@ import { getTodayDayOfWeek, DAYS_OF_WEEK } from './utils/notifications';
 import { generateWeeklyHomeworkFromRoutines, generateWeeklyHomeworkWithAi } from './utils/homeworkGenerator';
 import { normalizeStudentLevel, fetchTracksForStudentLevel } from './utils/spotify';
 import { executeStartNewWeek } from './utils/StartNewWeekHandler';
-import { addVideoToWatchedHistoryInFirestore, addTrackToListenedHistoryInFirestore } from './hooks/useRoutine';
+import {
+  addVideoToWatchedHistoryInFirestore,
+  addTrackToListenedHistoryInFirestore,
+  initializeCleanStudentRoutinesInFirestore,
+} from './hooks/useRoutine';
 import { recordConsumedVideo, recordConsumedTrack } from './hooks/useStudentHistory';
 import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
 import { auth, getDb } from './firebase';
@@ -695,8 +699,11 @@ export default function App() {
       setLessons([]);
       setStudents([]);
       setWeeklyChecks({});
+      setStudentJournal([]);
+      setWeeklyHomework(null);
+      setStudentDictionaryEntries([]);
       setUserProfile(createDefaultStudentProfile(null));
-      setRoutinesByDay(defaultRoutinesByDay);
+      setRoutinesByDay(createCleanStudentRoutines());
       return;
     }
 
@@ -743,9 +750,13 @@ export default function App() {
       setStudents([]);
     }
 
-    // 3. If student, reset routines first and fetch student-specific routines and user profile
+    // 3. If student, immediately reset routines and session state to clean state before fetching
     if (role === 'student') {
-      setRoutinesByDay(defaultRoutinesByDay);
+      setWeeklyChecks({});
+      setStudentJournal([]);
+      setWeeklyHomework(null);
+      setStudentDictionaryEntries([]);
+      setRoutinesByDay(createCleanStudentRoutines(userProfile?.routineVideoTime));
 
       async function loadStudentData() {
         try {
@@ -775,7 +786,7 @@ export default function App() {
 
           // Fetch student-specific routines
           const routinesRes = await fetch(`/api/student-routines?studentEmail=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`).catch(() => null);
-          let baseRoutines = defaultRoutinesByDay;
+          let baseRoutines = createCleanStudentRoutines(loadedProfile?.routineVideoTime);
           if (routinesRes && routinesRes.ok) {
             const routines = await routinesRes.json();
             if (routines && typeof routines === 'object' && Object.keys(routines).length > 0) {
@@ -1102,12 +1113,19 @@ export default function App() {
 
       // 3. INSTANT SYNCHRONOUS STATE BATCHING:
       // Eliminate any delay between onboarding completion and student dashboard access
+      const cleanInitialRoutines = createCleanStudentRoutines(data.routineVideoTime);
       setIsOnboardingCompleting(false);
       setIsOnboardingModalOpen(false);
       setViewMode('dashboard');
       setCurrentAccount(newStudentAccount);
       setUserProfile(updatedProfile);
+      setRoutinesByDay(cleanInitialRoutines);
+      setWeeklyChecks({});
+      setStudentJournal([]);
+      setWeeklyHomework(null);
+      setStudentDictionaryEntries([]);
       localStorage.setItem('currentUserAccount', JSON.stringify(newStudentAccount));
+      localStorage.setItem('its_simple_current_account', JSON.stringify(newStudentAccount));
 
       // Update contractedLessons map with trial lesson immediately
       if (cleanEmail) {
@@ -1187,6 +1205,10 @@ export default function App() {
       // Persist credentials & full student profile to backend & Firestore asynchronously
       (async () => {
         try {
+          if (studentUid) {
+            initializeCleanStudentRoutinesInFirestore(studentUid).catch(() => {});
+          }
+
           if (isRegisteringStudent) {
             await fetch('/api/auth/signup', {
               method: 'POST',

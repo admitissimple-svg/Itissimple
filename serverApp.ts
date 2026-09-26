@@ -21,7 +21,7 @@ import {
   addWatchedVideoToUserDoc,
 } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
-import { defaultRoutinesByDay } from './src/data/defaultRoutines';
+import { defaultRoutinesByDay, createCleanStudentRoutines } from './src/data/defaultRoutines';
 import {
   parseSpotifyUrl,
   isValidSpotifyUrl,
@@ -1506,6 +1506,22 @@ const handleRegistration = async (req: any, res: any) => {
     };
   }
 
+  // Ensure clean isolated state for newly registered student in database
+  if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+  if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
+  if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+  if (!db.studentWatchedVideos) db.studentWatchedVideos = {};
+
+  const cleanInitialRoutines = createCleanStudentRoutines(routineVideoTime);
+  db.studentRoutinesMap[cleanEmail] = cleanInitialRoutines;
+  db.studentRoutinesMap[userUid] = cleanInitialRoutines;
+  db.studentAwaitingTopicSelection[cleanEmail] = true;
+  db.studentAwaitingTopicSelection[userUid] = true;
+  db.studentVideoAssignments[cleanEmail] = [];
+  db.studentVideoAssignments[userUid] = [];
+  db.studentWatchedVideos[cleanEmail] = [];
+  db.studentWatchedVideos[userUid] = [];
+
   writeDb(db);
 
   // Persist 100% of student profile settings to Firestore in background
@@ -1539,8 +1555,9 @@ const handleRegistration = async (req: any, res: any) => {
     level,
     weeklyStudyDaysTarget: db.userProfiles[cleanEmail].weeklyStudyDaysTarget,
     weeklyStudyDays: db.userProfiles[cleanEmail].weeklyStudyDays,
-    videoAssignments: db.studentVideoAssignments?.[cleanEmail] || [],
+    videoAssignments: [],
     spotifyAssignments: db.studentSpotifyAssignments?.[cleanEmail] || [],
+    routines: cleanInitialRoutines,
   }).catch(() => {});
 
   const account = {
