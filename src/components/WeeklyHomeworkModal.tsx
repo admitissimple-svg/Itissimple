@@ -762,40 +762,9 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
               <BookOpen className="w-5 h-5 text-[#9AB4FF]" />
             </div>
             <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-black text-base sm:text-xl text-white print:text-black tracking-tight">
-                  {memT.modalTitle}
-                </h3>
-                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-[#F4CA54] text-[#000035] shadow-xs flex items-center gap-1">
-                  <span>⭐ {isEn ? `Today: Part ${dailySchedule.partNumber}` : `Foco de Hoje: Parte ${dailySchedule.partNumber}`}</span>
-                </span>
-                <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-[#1C4C96]/90 text-[#BFDBFE] border border-[#607EC9]/50 flex items-center gap-1 shadow-xs">
-                  <span>{isEn ? 'S-Path Rhythm: 1 Part / Day' : 'Ritmo S-Path: 1 Parte / Dia'}</span>
-                </span>
-                {isTodayPartCompleted && (
-                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-400/40 flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-emerald-300" />
-                    <span>{isEn ? 'Recorded on S-Path' : 'Gravado no S-Path'}</span>
-                  </span>
-                )}
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#1C4C96] text-[#9AB4FF] border border-[#607EC9]/50">
-                  {memT.wordsCount(homework.totalWordsCollected)}
-                </span>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#062863] text-emerald-300 border border-emerald-500/40">
-                  {studentLevelDisplay}
-                </span>
-                {homework.isAiGenerated && (
-                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-600/90 text-white border border-indigo-400/50 flex items-center gap-1">
-                    <Sparkles className="w-2.5 h-2.5 text-amber-300" />
-                    Gemini AI
-                  </span>
-                )}
-                {homework.isCompleted && (
-                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#607EC9] text-white">
-                    {memT.scoreBadge(homework.score || 0)}
-                  </span>
-                )}
-              </div>
+              <h3 className="font-black text-base sm:text-xl text-white print:text-black tracking-tight">
+                {memT.modalTitle}
+              </h3>
               <p className="text-xs text-[#9AB4FF]/80 print:text-gray-600 mt-0.5">
                 {formattedWeekLabel} • {homework.studentName}
               </p>
