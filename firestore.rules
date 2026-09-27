@@ -82,6 +82,17 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isOwner(userId) || isAdmin() || isAuthenticated() || request.auth == null;
       }
+
+      // Student homework & activity progress subcollection (matching, fill-in-blanks, sentence writing, quiz)
+      match /homework/{homeworkId} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin() || isAuthenticated() || request.auth == null;
+      }
+    }
+
+    // Top-level student homework collection by student UID / cleanEmail
+    match /student_homework/{userId} {
+      allow read, write: if true;
     }
 
     // App state synchronization document for persistent backend storage across restarts

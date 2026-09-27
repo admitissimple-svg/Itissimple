@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore, setLogLevel, Firestore } from 'firebase/firestore';
+import { getFirestore, setLogLevel, Firestore, doc, getDoc } from 'firebase/firestore';
 import baseFirebaseConfig from '../firebase-applet-config.json';
 
 // Silence internal gRPC stream disconnection logs
@@ -22,7 +22,7 @@ export const effectiveFirebaseConfig = {
   storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || baseFirebaseConfig.storageBucket,
   messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || baseFirebaseConfig.messagingSenderId,
   measurementId: env.VITE_FIREBASE_MEASUREMENT_ID || baseFirebaseConfig.measurementId,
-  oAuthClientId: env.VITE_FIREBASE_OAUTH_CLIENT_ID || baseFirebaseConfig.oAuthClientId,
+  oAuthClientId: env.VITE_FIREBASE_OAUTH_CLIENT_ID || (baseFirebaseConfig as any).oauthClientId || (baseFirebaseConfig as any).oAuthClientId,
   recaptchaSiteKey: env.VITE_FIREBASE_RECAPTCHA_SITE_KEY || baseFirebaseConfig.recaptchaSiteKey,
 };
 
@@ -54,5 +54,17 @@ export const db = {
     return getDb();
   },
 };
+
+export async function testConnection(): Promise<boolean> {
+  try {
+    const firestore = getDb();
+    const testDoc = doc(firestore, '_connection_test', 'ping');
+    await getDoc(testDoc);
+    return true;
+  } catch (error) {
+    console.warn('Firestore connection test notice:', error);
+    return false;
+  }
+}
 
 export default app;

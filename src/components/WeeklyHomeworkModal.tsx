@@ -372,12 +372,56 @@ export const WeeklyHomeworkModal: React.FC<WeeklyHomeworkModalProps> = ({
   const [isEvaluatingAll, setIsEvaluatingAll] = useState(false);
 
   React.useEffect(() => {
-    setMatchingAnswers(homework?.studentAnswers?.matching || {});
-    setFillAnswers(homework?.studentAnswers?.fillInBlanks || {});
-    setSentenceAnswers(homework?.studentAnswers?.sentences || {});
-    setQuizAnswers(homework?.studentAnswers?.quizAnswers || {});
-    setAiEvaluation(homework?.aiEvaluation);
-  }, [homework?.id]);
+    if (homework?.studentAnswers) {
+      setMatchingAnswers((prev) => ({ ...(homework.studentAnswers?.matching || {}), ...prev }));
+      setFillAnswers((prev) => ({ ...(homework.studentAnswers?.fillInBlanks || {}), ...prev }));
+      setSentenceAnswers((prev) => ({ ...(homework.studentAnswers?.sentences || {}), ...prev }));
+      setQuizAnswers((prev) => ({ ...(homework.studentAnswers?.quizAnswers || {}), ...prev }));
+    } else {
+      setMatchingAnswers(homework?.studentAnswers?.matching || {});
+      setFillAnswers(homework?.studentAnswers?.fillInBlanks || {});
+      setSentenceAnswers(homework?.studentAnswers?.sentences || {});
+      setQuizAnswers(homework?.studentAnswers?.quizAnswers || {});
+    }
+    if (homework?.aiEvaluation) {
+      setAiEvaluation(homework.aiEvaluation);
+    }
+  }, [homework?.id, homework?.studentAnswers, homework?.aiEvaluation]);
+
+  // Synchronize student answers with parent state and Cloud Firestore
+  const lastSavedJsonRef = React.useRef<string>('');
+
+  React.useEffect(() => {
+    if (!isOpen || !onSaveProgress) return;
+
+    const hasAnyAnswers =
+      Object.keys(matchingAnswers).length > 0 ||
+      Object.keys(fillAnswers).length > 0 ||
+      Object.keys(sentenceAnswers).length > 0 ||
+      Object.keys(quizAnswers).length > 0;
+
+    if (!hasAnyAnswers) return;
+
+    const updatedHw: WeeklyHomeworkData = {
+      ...homework,
+      studentAnswers: {
+        matching: matchingAnswers,
+        fillInBlanks: fillAnswers,
+        sentences: sentenceAnswers,
+        quizAnswers: quizAnswers,
+      },
+    };
+
+    const currentJson = JSON.stringify(updatedHw.studentAnswers);
+    if (currentJson === lastSavedJsonRef.current) return;
+
+    const timer = setTimeout(() => {
+      lastSavedJsonRef.current = currentJson;
+      onSaveProgress(updatedHw);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [matchingAnswers, fillAnswers, sentenceAnswers, quizAnswers, isOpen, homework, onSaveProgress]);
 
   // Track initial tab selection when modal opens without locking user into results
   const wasOpenRef = React.useRef(false);

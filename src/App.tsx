@@ -42,6 +42,7 @@ import {
 } from './hooks/useRoutine';
 import { recordConsumedVideo, recordConsumedTrack } from './hooks/useStudentHistory';
 import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
+import { getInstantOrCachedWord } from './utils/dictionaryService';
 import { auth, getDb } from './firebase';
 import { onAuthStateChanged, signOut as firebaseSignOutAuth } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
@@ -89,6 +90,9 @@ import { StudentJournalModal } from './components/StudentJournalModal';
 import {
   saveStudentVocabularyToFirestore,
   fetchStudentVocabularyFromFirestore,
+  subscribeToStudentVocabulary,
+  getCachedLocalVocabulary,
+  cacheVocabularyLocally,
   saveStudentJournalEntryToFirestore,
   fetchStudentJournalFromFirestore,
   saveLiveLessonToFirestore,
@@ -101,6 +105,9 @@ import {
   removeActivityFromStudentJournal,
   subscribeToStudentJournal,
   fetchStudentJournalActivitiesFromFirestore,
+  saveStudentHomeworkProgressToFirestore,
+  fetchStudentHomeworkProgressFromFirestore,
+  subscribeToStudentHomeworkProgress,
   getDateForDayInCurrentWeek,
   getTodayIsoDate,
   mapStepIdToJournalType,
@@ -363,7 +370,9 @@ export default function App() {
   const [isEditTutorProfileOpen, setIsEditTutorProfileOpen] = useState<boolean>(false);
   const [isStudentProfileOpen, setIsStudentProfileOpen] = useState<boolean>(false);
   const [isPersonalDictionaryOpen, setIsPersonalDictionaryOpen] = useState<boolean>(false);
-  const [studentDictionaryEntries, setStudentDictionaryEntries] = useState<StudentDictionaryEntry[]>([]);
+  const [studentDictionaryEntries, setStudentDictionaryEntries] = useState<StudentDictionaryEntry[]>(() => {
+    return getCachedLocalVocabulary(currentAccount?.uid, currentAccount?.email);
+  });
   const [dailyJournalEntries, setDailyJournalEntries] = useState<DailyJournalEntry[]>([]);
   const [isJournalModalOpen, setIsJournalModalOpen] = useState<boolean>(false);
   const [isManageSubscriptionOpen, setIsManageSubscriptionOpen] = useState<boolean>(false);
@@ -755,7 +764,10 @@ export default function App() {
       setWeeklyChecks({});
       setStudentJournal([]);
       setWeeklyHomework(null);
-      setStudentDictionaryEntries([]);
+      const cachedDict = getCachedLocalVocabulary(uid, email);
+      if (cachedDict && cachedDict.length > 0) {
+        setStudentDictionaryEntries(cachedDict);
+      }
       setRoutinesByDay(createCleanStudentRoutines(userProfile?.routineVideoTime));
 
       async function loadStudentData() {
@@ -838,17 +850,47 @@ export default function App() {
             })
             .catch(() => {});
 
-          fetch('/api/homework')
+          // 4. Fetch student homework and activity progress directly from Cloud Firestore (cross-device sync)
+          fetchStudentHomeworkProgressFromFirestore(uid, email)
+            .then((cloudHw) => {
+              if (cloudHw && (cloudHw.completedPartsByDay || cloudHw.studentAnswers || cloudHw.matchingPairs)) {
+                setWeeklyHomework((prev) => {
+                  if (!prev) return cloudHw;
+                  return {
+                    ...prev,
+                    ...cloudHw,
+                    completedPartsByDay: {
+                      ...(prev.completedPartsByDay || {}),
+                      ...(cloudHw.completedPartsByDay || {}),
+                    },
+                    studentAnswers: {
+                      matching: { ...(prev.studentAnswers?.matching || {}), ...(cloudHw.studentAnswers?.matching || {}) },
+                      fillInBlanks: { ...(prev.studentAnswers?.fillInBlanks || {}), ...(cloudHw.studentAnswers?.fillInBlanks || {}) },
+                      sentences: { ...(prev.studentAnswers?.sentences || {}), ...(cloudHw.studentAnswers?.sentences || {}) },
+                      quizAnswers: { ...(prev.studentAnswers?.quizAnswers || {}), ...(cloudHw.studentAnswers?.quizAnswers || {}) },
+                    },
+                    aiEvaluation: cloudHw.aiEvaluation || prev.aiEvaluation,
+                    score: typeof cloudHw.score === 'number' ? cloudHw.score : prev.score,
+                    isCompleted: typeof cloudHw.isCompleted === 'boolean' ? cloudHw.isCompleted : prev.isCompleted,
+                  };
+                });
+              }
+            })
+            .catch((err) => {
+              console.warn('Notice loading homework from Firestore:', err);
+            });
+
+          fetch(`/api/homework?studentEmail=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`)
             .then((res) => (res.ok ? res.json() : null))
             .then((savedHw) => {
-              if (savedHw && savedHw.completedPartsByDay) {
+              if (savedHw && (savedHw.completedPartsByDay || savedHw.studentAnswers)) {
                 setWeeklyHomework((prev) => {
-                  if (!prev) return prev;
+                  if (!prev) return savedHw;
                   return {
                     ...prev,
                     completedPartsByDay: {
                       ...(prev.completedPartsByDay || {}),
-                      ...savedHw.completedPartsByDay,
+                      ...(savedHw.completedPartsByDay || {}),
                     },
                     studentAnswers: {
                       matching: { ...(prev.studentAnswers?.matching || {}), ...(savedHw.studentAnswers?.matching || {}) },
@@ -856,6 +898,9 @@ export default function App() {
                       sentences: { ...(prev.studentAnswers?.sentences || {}), ...(savedHw.studentAnswers?.sentences || {}) },
                       quizAnswers: { ...(prev.studentAnswers?.quizAnswers || {}), ...(savedHw.studentAnswers?.quizAnswers || {}) },
                     },
+                    aiEvaluation: savedHw.aiEvaluation || prev.aiEvaluation,
+                    score: typeof savedHw.score === 'number' ? savedHw.score : prev.score,
+                    isCompleted: typeof savedHw.isCompleted === 'boolean' ? savedHw.isCompleted : prev.isCompleted,
                   };
                 });
               }
@@ -903,10 +948,19 @@ export default function App() {
     // Fetch user-isolated student dictionary entries and journal entries directly from Firestore
     const dictEmail = (role === 'student' ? email : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
     if (dictEmail || (role === 'student' && uid)) {
-      // 1. Direct Firestore fetch for vocabulary
+      // 1. Direct Firestore fetch for vocabulary (cumulative)
       fetchStudentVocabularyFromFirestore(uid, dictEmail).then((fsEntries) => {
         if (Array.isArray(fsEntries) && fsEntries.length > 0) {
-          setStudentDictionaryEntries(fsEntries);
+          setStudentDictionaryEntries((prev) => {
+            const map = new Map<string, StudentDictionaryEntry>();
+            prev.forEach((e) => {
+              if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+            });
+            fsEntries.forEach((e) => {
+              if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+            });
+            return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+          });
         }
       });
 
@@ -967,6 +1021,86 @@ export default function App() {
 
     return () => unsub();
   }, [currentAccount?.uid, currentAccount?.email, userProfile?.id, userProfile?.weeklyCycle]);
+
+  // Real-time synchronization of student homework and activity progress across all devices (Mobile <-> Desktop)
+  useEffect(() => {
+    const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const email = currentAccount?.email || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    const unsub = subscribeToStudentHomeworkProgress(uid, email, (cloudHw) => {
+      if (cloudHw && (cloudHw.completedPartsByDay || cloudHw.studentAnswers || cloudHw.matchingPairs)) {
+        setWeeklyHomework((prev) => {
+          if (!prev) return cloudHw;
+          return {
+            ...prev,
+            ...cloudHw,
+            completedPartsByDay: {
+              ...(prev.completedPartsByDay || {}),
+              ...(cloudHw.completedPartsByDay || {}),
+            },
+            studentAnswers: {
+              matching: { ...(prev.studentAnswers?.matching || {}), ...(cloudHw.studentAnswers?.matching || {}) },
+              fillInBlanks: { ...(prev.studentAnswers?.fillInBlanks || {}), ...(cloudHw.studentAnswers?.fillInBlanks || {}) },
+              sentences: { ...(prev.studentAnswers?.sentences || {}), ...(cloudHw.studentAnswers?.sentences || {}) },
+              quizAnswers: { ...(prev.studentAnswers?.quizAnswers || {}), ...(cloudHw.studentAnswers?.quizAnswers || {}) },
+            },
+            aiEvaluation: cloudHw.aiEvaluation || prev.aiEvaluation,
+            score: typeof cloudHw.score === 'number' ? cloudHw.score : prev.score,
+            isCompleted: typeof cloudHw.isCompleted === 'boolean' ? cloudHw.isCompleted : prev.isCompleted,
+          };
+        });
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email, userProfile?.id]);
+
+  // Real-time synchronization of student vocabulary dictionary across all devices & sessions (Mobile <-> Desktop)
+  useEffect(() => {
+    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.id || (userProfile as any)?.uid || '';
+    const email = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    const unsub = subscribeToStudentVocabulary(uid, email, (cloudEntries) => {
+      if (Array.isArray(cloudEntries) && cloudEntries.length > 0) {
+        setStudentDictionaryEntries((prev) => {
+          const map = new Map<string, StudentDictionaryEntry>();
+          prev.forEach((e) => {
+            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+          });
+          cloudEntries.forEach((e) => {
+            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+          });
+          return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+        });
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email, currentAccount?.role, selectedStudentFilter, userProfile?.id, userProfile?.email]);
+
+  // Ensure accumulated vocabulary is loaded from Firestore whenever switching lessons or days
+  useEffect(() => {
+    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.id || (userProfile as any)?.uid || '';
+    const email = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    fetchStudentVocabularyFromFirestore(uid, email).then((fsEntries) => {
+      if (Array.isArray(fsEntries) && fsEntries.length > 0) {
+        setStudentDictionaryEntries((prev) => {
+          const map = new Map<string, StudentDictionaryEntry>();
+          prev.forEach((e) => {
+            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+          });
+          fsEntries.forEach((e) => {
+            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+          });
+          return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+        });
+      }
+    });
+  }, [selectedDay, selectedActivityId]);
 
   // Refresh student dictionary whenever the modal is opened
   useEffect(() => {
@@ -1123,7 +1257,6 @@ export default function App() {
       setWeeklyChecks({});
       setStudentJournal([]);
       setWeeklyHomework(null);
-      setStudentDictionaryEntries([]);
       localStorage.setItem('currentUserAccount', JSON.stringify(newStudentAccount));
       localStorage.setItem('its_simple_current_account', JSON.stringify(newStudentAccount));
 
@@ -1552,6 +1685,31 @@ export default function App() {
       return { ...prev, [selectedDay]: updatedDayList };
     });
 
+    const currentAct = (routinesByDay[selectedDay] || []).find((a) => a.id === activityId);
+    const actName = currentAct?.activityName || 'Daily Routine';
+    const dictEntries: StudentDictionaryEntry[] = words
+      .filter((w) => Boolean(w && w.trim()))
+      .map((w) => {
+        const cleanW = w.trim();
+        const cached = getInstantOrCachedWord(cleanW, actName);
+        return {
+          id: `routine_${cleanW.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`,
+          word: cleanW,
+          definitionEn: cached.definitionEn || '',
+          exampleSentenceEn: cached.exampleSentenceEn || '',
+          partOfSpeech: cached.partOfSpeech || '',
+          translationPt: cached.translationPt || '',
+          learnedAt: new Date().toISOString(),
+          source: 'api',
+          sourceActivityName: `${actName} (${selectedDay})`,
+          sourceDay: selectedDay,
+        };
+      });
+
+    if (dictEntries.length > 0) {
+      handleAddWordsToDictionary(dictEntries);
+    }
+
     try {
       await fetch('/api/routines/words', {
         method: 'POST',
@@ -1857,11 +2015,15 @@ export default function App() {
             isDayPartCompleted: isCompleted,
             completedPartsByDay: updatedParts,
           };
-          fetch('/api/homework', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ weeklyHomework: updatedHw }),
-          }).catch(() => {});
+          if (uid || email) {
+            saveStudentHomeworkProgressToFirestore(uid, email, updatedHw);
+          } else {
+            fetch('/api/homework', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ weeklyHomework: updatedHw }),
+            }).catch(() => {});
+          }
           return updatedHw;
         });
       }
@@ -2813,21 +2975,23 @@ export default function App() {
     const targetStudent = (studentsList || []).find(
       (s) => (s.email || '').toLowerCase().trim() === targetEmail || (s as any).uid === targetEmail || s.id === targetEmail
     );
-    const targetUid = (targetStudent as any)?.uid || targetStudent?.id || '';
+    const targetUid = (targetStudent as any)?.uid || targetStudent?.id || currentAccount?.uid || '';
 
-    // Only update local studentDictionaryEntries if the current logged-in user is this student
-    if (!currentAccount || (currentAccount.email || '').toLowerCase().trim() === targetEmail) {
-      setStudentDictionaryEntries((prev) => {
-        const map = new Map<string, StudentDictionaryEntry>();
-        prev.forEach((e) => map.set(e.word.toLowerCase(), e));
-        entries.forEach((e) => map.set(e.word.toLowerCase(), e));
-        return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+    // Update local studentDictionaryEntries cumulatively
+    setStudentDictionaryEntries((prev) => {
+      const map = new Map<string, StudentDictionaryEntry>();
+      prev.forEach((e) => {
+        if (e?.word) map.set(e.word.toLowerCase().trim(), e);
       });
-    }
+      entries.forEach((e) => {
+        if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+      });
+      return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
+    });
 
     if (targetEmail || targetUid) {
-      // Direct Firestore persistence
-      saveStudentVocabularyToFirestore(targetUid, entries, targetEmail);
+      // Direct Firestore persistence - cumulative and permanent!
+      await saveStudentVocabularyToFirestore(targetUid, entries, targetEmail);
 
       try {
         await fetch('/api/student-dictionary', {
@@ -2849,19 +3013,21 @@ export default function App() {
 
   // Handler: Save manual entry in Personal Dictionary
   const handleSaveCustomDictionaryEntry = async (entry: StudentDictionaryEntry) => {
-    let updatedList: StudentDictionaryEntry[] = [];
     setStudentDictionaryEntries((prev) => {
-      const existing = prev.filter((e) => e.word.toLowerCase() !== entry.word.toLowerCase());
-      updatedList = [...existing, entry].sort((a, b) => a.word.localeCompare(b.word));
-      return updatedList;
+      const map = new Map<string, StudentDictionaryEntry>();
+      prev.forEach((e) => {
+        if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+      });
+      map.set(entry.word.toLowerCase().trim(), entry);
+      return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
     });
 
     const targetUid = currentAccount?.uid || userProfile?.id || '';
     const targetEmail = currentAccount?.email || userProfile?.email || '';
 
-    // Direct Firestore persistence
+    // Direct Firestore persistence - cumulative and permanent!
     if (targetUid || targetEmail) {
-      saveStudentVocabularyToFirestore(targetUid, [entry], targetEmail);
+      await saveStudentVocabularyToFirestore(targetUid, [entry], targetEmail);
     }
 
     if (currentAccount?.email) {
@@ -4488,11 +4654,17 @@ export default function App() {
       onChangeDay={(day) => setHomeworkTargetDay(day)}
       onSaveProgress={(updated) => {
         setWeeklyHomework(updated);
-        fetch('/api/homework', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ weeklyHomework: updated }),
-        }).catch(() => {});
+        const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+        const email = currentAccount?.email || userProfile?.email || '';
+        if (uid || email) {
+          saveStudentHomeworkProgressToFirestore(uid, email, updated);
+        } else {
+          fetch('/api/homework', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weeklyHomework: updated }),
+          }).catch(() => {});
+        }
       }}
       onRegenerateWithAi={handleRegenerateHomeworkWithAi}
       isGeneratingAi={isGeneratingHomeworkAi}
@@ -4501,11 +4673,17 @@ export default function App() {
       }}
       onSubmitToTeacher={(updated) => {
         setWeeklyHomework(updated);
-        fetch('/api/homework', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ weeklyHomework: updated }),
-        }).catch(() => {});
+        const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+        const email = currentAccount?.email || userProfile?.email || '';
+        if (uid || email) {
+          saveStudentHomeworkProgressToFirestore(uid, email, updated);
+        } else {
+          fetch('/api/homework', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weeklyHomework: updated }),
+          }).catch(() => {});
+        }
         setNotifications((prev) => [
           {
             id: `hw-${Date.now()}`,

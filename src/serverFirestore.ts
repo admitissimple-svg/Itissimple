@@ -134,6 +134,7 @@ export async function saveAppStateToFirestore(data: any): Promise<boolean> {
       liveLessons: sanitized.liveLessons || [],
       contractedLessons: sanitized.contractedLessons || [],
       weeklyHomework: sanitized.weeklyHomework || {},
+      studentHomeworkMap: sanitized.studentHomeworkMap || {},
       updatedAt: new Date().toISOString(),
     };
 
@@ -158,6 +159,7 @@ export async function saveAppStateToFirestore(data: any): Promise<boolean> {
     delete mainData.liveLessons;
     delete mainData.contractedLessons;
     delete mainData.weeklyHomework;
+    delete mainData.studentHomeworkMap;
     mainData.updatedAt = new Date().toISOString();
 
     const savePromises = Promise.all([
@@ -431,6 +433,70 @@ export async function addWatchedVideoToUserDoc(
     return true;
   } catch (err) {
     console.warn('Firestore addWatchedVideoToUserDoc error:', err);
+    return false;
+  }
+}
+
+/**
+ * Server-side persistent storage of student vocabulary in Cloud Firestore.
+ * CUMULATIVE: Merges incoming words with existing words and writes both to the user doc
+ * and the users/{uid}/vocabulary/{wordId} subcollection.
+ */
+export async function saveStudentVocabularyToFirestoreServer(
+  studentUid: string,
+  entries: any[],
+  studentEmail?: string
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || (!studentUid && !studentEmail)) return false;
+  if (!entries || entries.length === 0) return true;
+
+  try {
+    const cleanUid = studentUid || (studentEmail ? studentEmail.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_') : '');
+    const cleanEmail = (studentEmail || '').toLowerCase().trim();
+    const emailDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : '';
+    const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+
+    const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId].filter(Boolean)));
+    const sanitizedEntries = JSON.parse(JSON.stringify(entries || []));
+
+    for (const docId of targetDocIds) {
+      let existingList: any[] = [];
+      try {
+        const userSnap = await getDoc(doc(db, 'users', docId));
+        if (userSnap.exists() && Array.isArray(userSnap.data()?.vocabulary)) {
+          existingList = userSnap.data().vocabulary;
+        }
+      } catch {}
+
+      const map = new Map<string, any>();
+      existingList.forEach((e) => {
+        if (e && e.word) map.set(e.word.toLowerCase().trim(), e);
+      });
+      sanitizedEntries.forEach((e: any) => {
+        if (e && e.word) {
+          const key = e.word.toLowerCase().trim();
+          map.set(key, { ...(map.get(key) || {}), ...e });
+        }
+      });
+      const accumulated = Array.from(map.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
+
+      await setDoc(doc(db, 'users', docId), { vocabulary: accumulated, updatedAt: new Date().toISOString() }, { merge: true });
+
+      for (const item of sanitizedEntries) {
+        if (item && item.word) {
+          const wordDocId = (item.id || item.word).toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+          await setDoc(
+            doc(db, 'users', docId, 'vocabulary', wordDocId),
+            { ...item, studentUid: cleanUid, studentEmail: cleanEmail, updatedAt: new Date().toISOString() },
+            { merge: true }
+          );
+        }
+      }
+    }
+    return true;
+  } catch (err) {
+    console.warn('Firestore server vocabulary save notice:', err);
     return false;
   }
 }

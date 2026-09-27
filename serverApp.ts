@@ -19,6 +19,7 @@ import {
   saveRoutineVideoSubcollection,
   resetRepeatFlagsSubcollection,
   addWatchedVideoToUserDoc,
+  saveStudentVocabularyToFirestoreServer,
 } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay, createCleanStudentRoutines } from './src/data/defaultRoutines';
@@ -51,7 +52,7 @@ import {
 
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
-const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3-flash-preview' : rawEnvModel;
+const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.8-flash' : rawEnvModel;
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
@@ -126,6 +127,7 @@ interface AppDb {
   studentListenedTracks?: Record<string, string[]>;
   studentAwaitingTopicSelection?: Record<string, boolean>;
   spotifyPlaylists?: Record<string, any>;
+  studentHomeworkMap?: Record<string, any>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -186,6 +188,7 @@ const DEFAULT_DB: AppDb = {
   },
   emailLogs: [],
   weeklyHomework: null,
+  studentHomeworkMap: {},
   landingContent: DEFAULT_LANDING_CONTENT,
   dictionary: {},
   studentWeeklyChecks: {},
@@ -291,6 +294,7 @@ function mergeDbWithDefaults(parsed: any): AppDb {
     studentWeeklyChecks: (parsed && parsed.studentWeeklyChecks) || {},
     studentDictionaryMap: (parsed && parsed.studentDictionaryMap) || {},
     studentListenedTracks: (parsed && parsed.studentListenedTracks) || {},
+    studentHomeworkMap: (parsed && parsed.studentHomeworkMap) || {},
     authUsers: (parsed && parsed.authUsers) || DEFAULT_DB.authUsers,
     teacherSettings: (parsed && parsed.teacherSettings) || {},
     meetSettings: (parsed && parsed.meetSettings) || {},
@@ -4983,6 +4987,11 @@ app.post('/api/lessons/:id/notes', async (req, res) => {
     const updatedDict = Array.from(dictMap.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
     if (targetStudentEmail) db.studentDictionaryMap[targetStudentEmail] = updatedDict;
     if (targetStudentUid) db.studentDictionaryMap[targetStudentUid] = updatedDict;
+
+    // Immediately persist accumulated vocabulary to Cloud Firestore
+    saveStudentVocabularyToFirestoreServer(targetStudentUid, updatedDict, targetStudentEmail).catch((err) => {
+      console.warn('Backend Firestore vocabulary save notice:', err);
+    });
   }
 
   await writeDbSync(db);
@@ -5063,6 +5072,11 @@ app.post('/api/student-dictionary', async (req, res) => {
   const updated = Array.from(dictMap.values()).sort((a, b) => (a.word || '').localeCompare(b.word || ''));
   if (cleanEmail) db.studentDictionaryMap[cleanEmail] = updated;
   if (studentUid) db.studentDictionaryMap[studentUid] = updated;
+
+  // Immediately persist accumulated vocabulary to Cloud Firestore
+  saveStudentVocabularyToFirestoreServer(studentUid, updated, cleanEmail).catch((err) => {
+    console.warn('Backend Firestore vocabulary save notice:', err);
+  });
 
   await writeDbSync(db);
   res.json({ success: true, dictionary: updated });
@@ -6955,32 +6969,47 @@ app.post('/api/routines/weekly-checks', (req, res) => {
   });
 });
 
-// 8. Homework Endpoints
+// 8. Homework Endpoints with per-student isolation and cross-device persistence
 app.get('/api/homework', (req, res) => {
   const db = readDb();
+  const studentEmail = (req.query.studentEmail as string || '').toLowerCase().trim();
+  const uid = (req.query.uid as string || '').trim();
+  const key = studentEmail || uid;
+
+  if (key && db.studentHomeworkMap && db.studentHomeworkMap[key]) {
+    return res.json(db.studentHomeworkMap[key]);
+  }
   res.json(db.weeklyHomework);
 });
 
 app.post(['/api/homework', '/api/homework/submit'], (req, res) => {
   const db = readDb();
   const weeklyHomework = req.body.weeklyHomework || req.body;
+  const studentEmail = (req.body.studentEmail as string || '').toLowerCase().trim();
+  const uid = (req.body.uid as string || '').trim();
+  const key = studentEmail || uid;
+
   if (weeklyHomework) {
+    if (key) {
+      db.studentHomeworkMap = db.studentHomeworkMap || {};
+      db.studentHomeworkMap[key] = weeklyHomework;
+    }
     db.weeklyHomework = weeklyHomework;
     writeDb(db);
   }
-  res.json({ success: true, weeklyHomework: db.weeklyHomework });
+  res.json({ success: true, weeklyHomework: (key && db.studentHomeworkMap?.[key]) || db.weeklyHomework });
 });
 
 // Safe Gemini generation runner with timeout and multi-model fallback (no uncaught errors or stderr stack traces)
-async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Promise<any | null> {
+async function callGeminiSafeJson(prompt: string, timeoutMs: number = 12000): Promise<any | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
   const candidateModels = [
     'gemini-3.8-flash',
     GEMINI_TEXT_MODEL,
-    'gemini-3.1-flash-lite',
     'gemini-flash-latest',
+    'gemini-3.1-flash-lite',
   ];
   const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
 
@@ -7016,12 +7045,8 @@ async function callGeminiSafeJson(prompt: string, timeoutMs: number = 3500): Pro
       const response: any = await Promise.race([generatePromise, timeoutPromise]);
 
       if (response && response.text) {
-        try {
-          const parsed = JSON.parse(response.text);
-          return parsed;
-        } catch {
-          // JSON parsing failure, try next candidate
-        }
+        const parsed = extractCleanJson(response.text);
+        if (parsed) return parsed;
       }
     } catch {
       // Model might be temporarily busy, overloaded, rate-limited, or unavailable.
@@ -8347,7 +8372,7 @@ Output STRICT JSON matching this schema:
   "levelNextStepsEn": "string"
 }`;
 
-      const aiRes = await callGeminiSafeJson(prompt, 7000);
+      const aiRes = await callGeminiSafeJson(prompt, 15000);
       if (aiRes && Array.isArray(aiRes.sentenceFeedback)) {
         sentenceEvaluationResults = aiRes.sentenceFeedback;
         tutorSummaryPt = aiRes.tutorFeedbackSummaryPt || '';

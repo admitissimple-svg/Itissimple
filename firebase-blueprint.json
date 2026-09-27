@@ -251,6 +251,34 @@
         "studentEmail": { "type": "string", "format": "email" }
       },
       "required": ["sentence", "date"]
+    },
+    "StudentHomeworkProgress": {
+      "title": "StudentHomeworkProgress",
+      "description": "Student weekly homework activity progress including matching, fill-in-the-blanks, sentence writing, reading comprehension quiz, and AI evaluation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Homework or week identifier" },
+        "studentUid": { "type": "string" },
+        "studentEmail": { "type": "string", "format": "email" },
+        "studentName": { "type": "string" },
+        "studentLevel": { "type": "string" },
+        "isCompleted": { "type": "boolean" },
+        "score": { "type": "number" },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "completedPartsByDay": { "type": "object" },
+        "studentAnswers": {
+          "type": "object",
+          "properties": {
+            "matching": { "type": "object" },
+            "fillInBlanks": { "type": "object" },
+            "sentences": { "type": "object" },
+            "quizAnswers": { "type": "object" }
+          }
+        },
+        "aiEvaluation": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentUid"]
     }
   },
   "firestore": {
@@ -273,6 +301,14 @@
     "/users/{userId}/journal/{entryId}": {
       "schema": "StudentJournalEntry",
       "description": "Daily journal entries and AI corrected sentences saved by student"
+    },
+    "/users/{userId}/homework/{homeworkId}": {
+      "schema": "StudentHomeworkProgress",
+      "description": "Weekly homework activity progress subcollection"
+    },
+    "/student_homework/{userId}": {
+      "schema": "StudentHomeworkProgress",
+      "description": "Student weekly homework progress partitioned by student UID or email"
     },
     "/users/{userId}/lessons/{lessonId}": {
       "schema": "LiveLesson",

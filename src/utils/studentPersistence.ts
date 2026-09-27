@@ -17,6 +17,7 @@ import {
   StudentJournalEntry,
   StudentJournalActivityType,
   DayOfWeek,
+  WeeklyHomeworkData,
 } from '../types';
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
 
@@ -31,8 +32,56 @@ export function normalizeUid(rawId?: string | null, email?: string | null): stri
 }
 
 /**
- * Persist student vocabulary entries directly to Firestore.
- * Saves to users/{studentUID} and subcollection users/{studentUID}/vocabulary.
+ * Retrieve cached vocabulary from localStorage for immediate, non-empty rendering
+ */
+export function getCachedLocalVocabulary(studentUid?: string | null, studentEmail?: string | null): StudentDictionaryEntry[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    const cleanUid = studentUid?.trim();
+    const cleanEmail = studentEmail?.toLowerCase().trim();
+    const keysToCheck = [
+      cleanUid ? `its_simple_vocabulary_${cleanUid}` : '',
+      cleanEmail ? `its_simple_vocabulary_${cleanEmail}` : '',
+      'its_simple_vocabulary_cached',
+    ].filter(Boolean);
+
+    for (const key of keysToCheck) {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    }
+  } catch {}
+  return [];
+}
+
+/**
+ * Cache vocabulary in localStorage for instant retrieval across page loads and component switches
+ */
+export function cacheVocabularyLocally(
+  studentUid?: string | null,
+  studentEmail?: string | null,
+  entries?: StudentDictionaryEntry[]
+) {
+  if (typeof window === 'undefined' || !window.localStorage || !Array.isArray(entries)) return;
+  try {
+    const cleanUid = studentUid?.trim();
+    const cleanEmail = studentEmail?.toLowerCase().trim();
+    const jsonStr = JSON.stringify(entries);
+    if (cleanUid) localStorage.setItem(`its_simple_vocabulary_${cleanUid}`, jsonStr);
+    if (cleanEmail) localStorage.setItem(`its_simple_vocabulary_${cleanEmail}`, jsonStr);
+    localStorage.setItem('its_simple_vocabulary_cached', jsonStr);
+  } catch {}
+}
+
+/**
+ * Persist student vocabulary entries directly and permanently to Cloud Firestore.
+ * CUMULATIVE: Loads existing words first and merges, ensuring words accumulate permanently over time
+ * and are never overwritten or cleared.
+ * Stores in both users/{studentUID} (consolidated vocabulary array) and subcollection users/{studentUID}/vocabulary/{wordId}.
  */
 export async function saveStudentVocabularyToFirestore(
   studentUid: string,
@@ -41,37 +90,134 @@ export async function saveStudentVocabularyToFirestore(
 ): Promise<boolean> {
   const db = getDb();
   if (!db) return false;
+  if (!entries || entries.length === 0) return true;
+
   const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
 
   try {
-    const sanitizedEntries = JSON.parse(JSON.stringify(entries || []));
-    const userRef = doc(db, 'users', cleanUid);
+    const sanitizedEntries: StudentDictionaryEntry[] = JSON.parse(JSON.stringify(entries || []));
+    const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId].filter(Boolean)));
 
-    // 1. Save list directly to user profile doc
-    await withFirestoreTimeout(
-      setDoc(
-        userRef,
-        {
-          vocabulary: sanitizedEntries,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ),
-      3500,
-      null
-    );
+    // Step A: Load all existing words from local cache + Firestore to guarantee 100% accumulation
+    const masterMap = new Map<string, StudentDictionaryEntry>();
 
-    // 2. Also write individual items into subcollection for fast discrete queries
-    const saveIndividualPromises = sanitizedEntries.map((entry: StudentDictionaryEntry) => {
-      const entryId = entry.id || entry.word.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-      const itemRef = doc(db, 'users', cleanUid, 'vocabulary', entryId);
-      return setDoc(itemRef, { ...entry, studentUid: cleanUid, studentEmail: studentEmail || '' }, { merge: true });
+    // 1. Pre-seed with local cache
+    const cached = getCachedLocalVocabulary(cleanUid, cleanEmail);
+    cached.forEach((item) => {
+      if (item && item.word) masterMap.set(item.word.toLowerCase().trim(), item);
     });
 
-    await withFirestoreTimeout(Promise.all(saveIndividualPromises), 4000, []);
+    // 2. Fetch existing words from Firestore users doc & subcollection across all target IDs
+    for (const docId of targetDocIds) {
+      try {
+        const userRef = doc(db, 'users', docId);
+        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        if (userSnap && userSnap.exists()) {
+          const data = userSnap.data();
+          if (Array.isArray(data?.vocabulary)) {
+            data.vocabulary.forEach((item: StudentDictionaryEntry) => {
+              if (item?.word) {
+                const key = item.word.toLowerCase().trim();
+                masterMap.set(key, { ...(masterMap.get(key) || {}), ...item });
+              }
+            });
+          }
+        }
+      } catch {}
 
-    // 3. Mirror to backend server API for disk persistence
-    const cleanEmail = (studentEmail || '').toLowerCase().trim();
+      try {
+        const subColRef = collection(db, 'users', docId, 'vocabulary');
+        const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2000, null);
+        if (subSnap && !subSnap.empty) {
+          subSnap.forEach((docItem) => {
+            const item = docItem.data() as StudentDictionaryEntry;
+            if (item && item.word) {
+              const key = item.word.toLowerCase().trim();
+              masterMap.set(key, { ...(masterMap.get(key) || {}), ...item });
+            }
+          });
+        }
+      } catch {}
+    }
+
+    // 3. Merge new entries into masterMap (accumulating, never dropping existing ones)
+    sanitizedEntries.forEach((entry) => {
+      if (!entry || !entry.word || !entry.word.trim()) return;
+      const key = entry.word.toLowerCase().trim();
+      const existing = masterMap.get(key);
+
+      const mergedEntry: StudentDictionaryEntry = {
+        id: entry.id || existing?.id || `dict_${key.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`,
+        word: entry.word.trim(),
+        partOfSpeech: entry.partOfSpeech || existing?.partOfSpeech || '',
+        definitionEn: entry.definitionEn || existing?.definitionEn || '',
+        exampleSentenceEn: entry.exampleSentenceEn || existing?.exampleSentenceEn || '',
+        translationPt: entry.translationPt || existing?.translationPt || '',
+        phonetic: entry.phonetic || existing?.phonetic || '',
+        sourceActivityName: entry.sourceActivityName || existing?.sourceActivityName || 'Personal Dictionary',
+        sourceDay: entry.sourceDay || existing?.sourceDay,
+        source: entry.source || existing?.source || 'api',
+        learnedAt: entry.learnedAt || existing?.learnedAt || new Date().toISOString(),
+        notFound: entry.notFound ?? existing?.notFound ?? false,
+      };
+
+      masterMap.set(key, mergedEntry);
+    });
+
+    const accumulatedList = Array.from(masterMap.values()).sort((a, b) =>
+      (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
+    );
+
+    // Step B: Cache accumulated list locally immediately
+    cacheVocabularyLocally(cleanUid, cleanEmail, accumulatedList);
+
+    // Step C: Write to Cloud Firestore permanently
+    const writePromises: Promise<any>[] = [];
+
+    for (const docId of targetDocIds) {
+      const userRef = doc(db, 'users', docId);
+
+      // 1. Write the consolidated accumulated list to user doc
+      writePromises.push(
+        setDoc(
+          userRef,
+          {
+            vocabulary: accumulatedList,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        )
+      );
+
+      // 2. Write each entry into subcollection users/{docId}/vocabulary/{wordDocId}
+      sanitizedEntries.forEach((entry) => {
+        if (!entry || !entry.word || !entry.word.trim()) return;
+        const key = entry.word.toLowerCase().trim();
+        const fullItem = masterMap.get(key);
+        if (!fullItem) return;
+        const wordDocId = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const itemRef = doc(db, 'users', docId, 'vocabulary', wordDocId);
+        writePromises.push(
+          setDoc(
+            itemRef,
+            {
+              ...fullItem,
+              studentUid: cleanUid,
+              studentEmail: cleanEmail,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          )
+        );
+      });
+    }
+
+    await withFirestoreTimeout(Promise.all(writePromises), 4500, null);
+
+    // Step D: Mirror to backend server API for disk persistence
     if (cleanEmail || cleanUid) {
       fetch('/api/student-dictionary', {
         method: 'POST',
@@ -79,7 +225,7 @@ export async function saveStudentVocabularyToFirestore(
         body: JSON.stringify({
           studentEmail: cleanEmail,
           uid: cleanUid,
-          entries: sanitizedEntries,
+          entries: accumulatedList,
         }),
       }).catch(() => {});
     }
@@ -93,6 +239,8 @@ export async function saveStudentVocabularyToFirestore(
 
 /**
  * Fetch student vocabulary directly from Firestore.
+ * Always returns accumulated words across document and subcollection,
+ * pre-seeding with local cache so the dictionary never starts empty.
  */
 export async function fetchStudentVocabularyFromFirestore(
   studentUid: string,
@@ -100,60 +248,158 @@ export async function fetchStudentVocabularyFromFirestore(
 ): Promise<StudentDictionaryEntry[]> {
   const db = getDb();
   const cleanUid = normalizeUid(studentUid, studentEmail);
-  if (!db || !cleanUid) return [];
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+
+  const entryMap = new Map<string, StudentDictionaryEntry>();
+
+  // 1. First, check local cache for immediate display
+  const localCached = getCachedLocalVocabulary(cleanUid, cleanEmail);
+  localCached.forEach((item) => {
+    if (item && item.word) entryMap.set(item.word.toLowerCase().trim(), item);
+  });
+
+  if (!db || (!cleanUid && !cleanEmail)) {
+    return Array.from(entryMap.values());
+  }
+
+  const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId].filter(Boolean)));
 
   try {
-    const entryMap = new Map<string, StudentDictionaryEntry>();
-
-    // 1. Try fetching from the user document
-    const userRef = doc(db, 'users', cleanUid);
-    const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
-    if (userSnap && userSnap.exists()) {
-      const data = userSnap.data();
-      if (Array.isArray(data?.vocabulary)) {
-        data.vocabulary.forEach((item: StudentDictionaryEntry) => {
-          if (item?.word) entryMap.set(item.word.toLowerCase().trim(), item);
-        });
-      }
-    }
-
-    // 2. Try fetching from the subcollection
-    const subColRef = collection(db, 'users', cleanUid, 'vocabulary');
-    const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2500, null);
-    if (subSnap && !subSnap.empty) {
-      subSnap.forEach((d) => {
-        const item = d.data() as StudentDictionaryEntry;
-        if (item?.word) entryMap.set(item.word.toLowerCase().trim(), item);
-      });
-    }
-
-    // If we have items from Firestore, return them
-    if (entryMap.size > 0) {
-      return Array.from(entryMap.values());
-    }
-
-    // Fallback: check email-based doc id if studentEmail is available
-    if (studentEmail) {
-      const emailDocId = normalizeUid(null, studentEmail);
-      if (emailDocId !== cleanUid) {
-        const altRef = doc(db, 'users', emailDocId);
-        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
-        if (altSnap && altSnap.exists()) {
-          const altData = altSnap.data();
-          if (Array.isArray(altData?.vocabulary)) {
-            altData.vocabulary.forEach((item: StudentDictionaryEntry) => {
-              if (item?.word) entryMap.set(item.word.toLowerCase().trim(), item);
+    for (const docId of targetDocIds) {
+      // A. Fetch from users/{docId} user profile document
+      try {
+        const userRef = doc(db, 'users', docId);
+        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
+        if (userSnap && userSnap.exists()) {
+          const data = userSnap.data();
+          if (Array.isArray(data?.vocabulary)) {
+            data.vocabulary.forEach((item: StudentDictionaryEntry) => {
+              if (item?.word) {
+                const key = item.word.toLowerCase().trim();
+                entryMap.set(key, { ...(entryMap.get(key) || {}), ...item });
+              }
             });
           }
         }
-      }
+      } catch {}
+
+      // B. Fetch from subcollection users/{docId}/vocabulary
+      try {
+        const subColRef = collection(db, 'users', docId, 'vocabulary');
+        const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2500, null);
+        if (subSnap && !subSnap.empty) {
+          subSnap.forEach((docItem) => {
+            const item = docItem.data() as StudentDictionaryEntry;
+            if (item && item.word) {
+              const key = item.word.toLowerCase().trim();
+              entryMap.set(key, { ...(entryMap.get(key) || {}), ...item });
+            }
+          });
+        }
+      } catch {}
     }
 
-    return Array.from(entryMap.values());
+    const result = Array.from(entryMap.values()).sort((a, b) =>
+      (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
+    );
+
+    if (result.length > 0) {
+      cacheVocabularyLocally(cleanUid, cleanEmail, result);
+    }
+
+    return result;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `users/${cleanUid}/vocabulary`);
-    return [];
+    return Array.from(entryMap.values());
   }
+}
+
+/**
+ * Real-time subscription to student vocabulary on Firestore.
+ * Immediately notifies when any word is added by student, teacher, or routine.
+ */
+export function subscribeToStudentVocabulary(
+  studentUid: string,
+  studentEmail: string | undefined,
+  callback: (entries: StudentDictionaryEntry[]) => void
+): () => void {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+
+  if (!db || (!cleanUid && !cleanEmail)) {
+    return () => {};
+  }
+
+  const activeDocId = cleanUid || emailDocId;
+  const vocabColRef = collection(db, 'users', activeDocId, 'vocabulary');
+  const userDocRef = doc(db, 'users', activeDocId);
+
+  const accumulatedMap = new Map<string, StudentDictionaryEntry>();
+  // Seed with current cache
+  getCachedLocalVocabulary(cleanUid, cleanEmail).forEach((item) => {
+    if (item && item.word) accumulatedMap.set(item.word.toLowerCase().trim(), item);
+  });
+
+  const notify = () => {
+    const list = Array.from(accumulatedMap.values()).sort((a, b) =>
+      (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
+    );
+    if (list.length > 0) {
+      cacheVocabularyLocally(cleanUid, cleanEmail, list);
+      callback(list);
+    }
+  };
+
+  // Subcollection listener
+  const unsubCol = onSnapshot(
+    vocabColRef,
+    (snapshot) => {
+      if (!snapshot.empty) {
+        snapshot.forEach((d) => {
+          const item = d.data() as StudentDictionaryEntry;
+          if (item && item.word) {
+            const key = item.word.toLowerCase().trim();
+            accumulatedMap.set(key, { ...(accumulatedMap.get(key) || {}), ...item });
+          }
+        });
+        notify();
+      }
+    },
+    (err) => {
+      console.warn('Real-time vocabulary subcollection notice:', err);
+    }
+  );
+
+  // User document listener
+  const unsubDoc = onSnapshot(
+    userDocRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data?.vocabulary)) {
+          data.vocabulary.forEach((item: StudentDictionaryEntry) => {
+            if (item && item.word) {
+              const key = item.word.toLowerCase().trim();
+              accumulatedMap.set(key, { ...(accumulatedMap.get(key) || {}), ...item });
+            }
+          });
+          notify();
+        }
+      }
+    },
+    (err) => {
+      console.warn('Real-time vocabulary user doc notice:', err);
+    }
+  );
+
+  return () => {
+    unsubCol();
+    unsubDoc();
+  };
 }
 
 /**
@@ -1072,4 +1318,207 @@ export function subscribeToStudentJournal(
 
   return unsubscribe;
 }
+
+/**
+ * Persist student weekly homework and activity progress directly to Cloud Firestore.
+ * Saves to:
+ * 1. users/{studentUID}/homework/{weekId}
+ * 2. users/{studentUID} (field: weeklyHomework)
+ * 3. top-level student_homework/{studentUID} for fast cross-device queries
+ * 4. Mirrors to /api/homework with studentEmail and uid
+ */
+export async function saveStudentHomeworkProgressToFirestore(
+  studentUid: string,
+  studentEmail: string | undefined,
+  homework: WeeklyHomeworkData,
+  weekId: string = 'current_week'
+): Promise<boolean> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  if (!homework) return false;
+
+  try {
+    const sanitizedHomework = JSON.parse(JSON.stringify(homework));
+    const payload = {
+      ...sanitizedHomework,
+      id: weekId,
+      studentUid: cleanUid,
+      studentEmail: cleanEmail,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (db && cleanUid) {
+      // 1. Save directly to subcollection users/{cleanUid}/homework/{weekId}
+      const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
+      await withFirestoreTimeout(
+        setDoc(hwDocRef, payload, { merge: true }),
+        3500,
+        null
+      );
+
+      // 2. Also save to user profile doc for unified profile payload
+      const userRef = doc(db, 'users', cleanUid);
+      await withFirestoreTimeout(
+        setDoc(userRef, { weeklyHomework: payload, updatedAt: new Date().toISOString() }, { merge: true }),
+        3000,
+        null
+      );
+
+      // 3. Top-level student_homework partition for cross-device synchronization
+      const topLevelRef = doc(db, 'student_homework', cleanUid);
+      await withFirestoreTimeout(
+        setDoc(topLevelRef, payload, { merge: true }),
+        3000,
+        null
+      );
+
+      // 4. Redundant mirror if email differs
+      if (cleanEmail) {
+        const emailDocId = normalizeUid(null, cleanEmail);
+        if (emailDocId && emailDocId !== cleanUid) {
+          const altDocRef = doc(db, 'users', emailDocId, 'homework', weekId);
+          await withFirestoreTimeout(setDoc(altDocRef, payload, { merge: true }), 2000, null);
+        }
+      }
+    }
+
+    // 5. Mirror to server API for backup persistence
+    if (cleanEmail || cleanUid) {
+      fetch('/api/homework', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentEmail: cleanEmail,
+          uid: cleanUid,
+          weeklyHomework: sanitizedHomework,
+        }),
+      }).catch(() => {});
+    }
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/homework/${weekId}`);
+    return false;
+  }
+}
+
+/**
+ * Fetch student weekly homework and activity progress directly from Cloud Firestore.
+ * Prioritizes Firestore users/{cleanUid}/homework/{weekId}, then users/{cleanUid}.weeklyHomework,
+ * then top-level student_homework/{cleanUid}, with fallbacks to alternate email IDs and server API.
+ */
+export async function fetchStudentHomeworkProgressFromFirestore(
+  studentUid: string,
+  studentEmail?: string,
+  weekId: string = 'current_week'
+): Promise<WeeklyHomeworkData | null> {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+
+  if (!db || !cleanUid) return null;
+
+  try {
+    // 1. Fetch from subcollection users/{cleanUid}/homework/{weekId}
+    const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
+    const hwSnap = await withFirestoreTimeout(getDoc(hwDocRef), 2500, null);
+    if (hwSnap && hwSnap.exists()) {
+      const data = hwSnap.data();
+      if (data && (data.completedPartsByDay || data.studentAnswers || data.matchingPairs)) {
+        return data as WeeklyHomeworkData;
+      }
+    }
+
+    // 2. Fetch from users/{cleanUid} document
+    const userRef = doc(db, 'users', cleanUid);
+    const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
+    if (userSnap && userSnap.exists()) {
+      const data = userSnap.data();
+      if (data?.weeklyHomework && (data.weeklyHomework.completedPartsByDay || data.weeklyHomework.studentAnswers)) {
+        return data.weeklyHomework as WeeklyHomeworkData;
+      }
+    }
+
+    // 3. Fetch from top-level student_homework/{cleanUid}
+    const topRef = doc(db, 'student_homework', cleanUid);
+    const topSnap = await withFirestoreTimeout(getDoc(topRef), 2000, null);
+    if (topSnap && topSnap.exists()) {
+      const data = topSnap.data();
+      if (data && (data.completedPartsByDay || data.studentAnswers || data.matchingPairs)) {
+        return data as WeeklyHomeworkData;
+      }
+    }
+
+    // 4. Fallback: check email doc if different
+    if (cleanEmail) {
+      const emailDocId = normalizeUid(null, cleanEmail);
+      if (emailDocId && emailDocId !== cleanUid) {
+        const altRef = doc(db, 'users', emailDocId, 'homework', weekId);
+        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
+        if (altSnap && altSnap.exists()) {
+          const data = altSnap.data();
+          if (data && (data.completedPartsByDay || data.studentAnswers)) {
+            return data as WeeklyHomeworkData;
+          }
+        }
+      }
+    }
+
+    // 5. Server API fallback
+    if (cleanEmail || cleanUid) {
+      try {
+        const res = await fetch(`/api/homework?studentEmail=${encodeURIComponent(cleanEmail)}&uid=${encodeURIComponent(cleanUid)}`);
+        if (res.ok) {
+          const apiData = await res.json();
+          if (apiData && (apiData.completedPartsByDay || apiData.studentAnswers)) {
+            return apiData as WeeklyHomeworkData;
+          }
+        }
+      } catch {}
+    }
+
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${cleanUid}/homework/${weekId}`);
+    return null;
+  }
+}
+
+/**
+ * Real-time subscription to student homework on Cloud Firestore.
+ * Enables instant cross-device synchronization between PC, tablet, and mobile!
+ */
+export function subscribeToStudentHomeworkProgress(
+  studentUid: string,
+  studentEmail: string | undefined,
+  callback: (homework: WeeklyHomeworkData) => void,
+  weekId: string = 'current_week'
+): () => void {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  if (!db || !cleanUid) {
+    return () => {};
+  }
+
+  const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
+  const unsubscribe = onSnapshot(
+    hwDocRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && (data.completedPartsByDay || data.studentAnswers || data.matchingPairs)) {
+          callback(data as WeeklyHomeworkData);
+        }
+      }
+    },
+    (err) => {
+      console.warn('Real-time notice for student homework listener:', err);
+    }
+  );
+
+  return unsubscribe;
+}
+
 
