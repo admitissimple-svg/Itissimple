@@ -32,6 +32,10 @@ interface LessonPackageOption {
   labelEn: string;
   priceBrl: number;
   priceUsd: number;
+  baseTotalUsd: number;
+  baseTotalBrl: number;
+  discountPercent: number;
+  pricePerLessonUsd: number;
   pricePerLessonBrl: number;
   discountBadgePt?: string;
   discountBadgeEn?: string;
@@ -39,108 +43,159 @@ interface LessonPackageOption {
   isBestValue?: boolean;
   descriptionPt: string;
   descriptionEn: string;
-  frequency?: '1x' | '2x' | '4x';
+  frequency?: '1x' | '2x' | '3x';
   isRecurringMonthly?: boolean;
 }
 
-export const MONTHLY_PACKAGES: LessonPackageOption[] = [
-  {
-    lessonsCount: 4,
-    frequency: '1x',
-    isRecurringMonthly: true,
-    labelPt: '1x por semana (4 aulas/mês)',
-    labelEn: '1x per week (4 lessons/mo)',
-    priceBrl: 360,
-    priceUsd: 70,
-    pricePerLessonBrl: 90,
-    discountBadgePt: 'RECORRÊNCIA MENSAL',
-    discountBadgeEn: 'MONTHLY AUTO-RENEW',
-    descriptionPt: '1 encontro semanal com seu Amigo Nativo para manter contato constante e hábitos sólidos.',
-    descriptionEn: '1 weekly session with your Native Friend for steady practice and solid habits.',
-  },
-  {
-    lessonsCount: 8,
-    frequency: '2x',
-    isRecurringMonthly: true,
-    labelPt: '2x por semana (8 aulas/mês)',
-    labelEn: '2x per week (8 lessons/mo)',
-    priceBrl: 680,
-    priceUsd: 130,
-    pricePerLessonBrl: 85,
-    discountBadgePt: 'MAIS RECOMENDADO • 10% OFF',
-    discountBadgeEn: 'MOST POPULAR • 10% OFF',
-    isPopular: true,
-    descriptionPt: 'Ritmo ideal de imersão para destravar fluência, segurança e vocabulário ativo.',
-    descriptionEn: 'Ideal immersion rhythm to unlock fluency, confidence and active vocabulary.',
-  },
-  {
-    lessonsCount: 16,
-    frequency: '4x',
-    isRecurringMonthly: true,
-    labelPt: '4x por semana (16 aulas/mês)',
-    labelEn: '4x per week (16 lessons/mo)',
-    priceBrl: 1280,
-    priceUsd: 240,
-    pricePerLessonBrl: 80,
-    discountBadgePt: 'IMERSÃO INTENSIVA • 15% OFF',
-    discountBadgeEn: 'INTENSIVE IMMERSION • 15% OFF',
-    isBestValue: true,
-    descriptionPt: 'Aceleração máxima: viva o inglês quase todos os dias com seu mentor dedicado.',
-    descriptionEn: 'Maximum speed: live English almost every day with your dedicated mentor.',
-  },
-];
+export function generateLessonPackages(
+  baseRateUsd: number,
+  baseRateBrl?: number
+): { monthly: LessonPackageOption[]; flexible: LessonPackageOption[] } {
+  const safeUsd = Number(baseRateUsd) > 0 ? Number(baseRateUsd) : 15;
+  const safeBrl = Number(baseRateBrl) > 0 ? Number(baseRateBrl) : Math.round(safeUsd * 5.5);
 
-export const FLEXIBLE_PACKAGES: LessonPackageOption[] = [
-  {
-    lessonsCount: 1,
-    labelPt: '1 Aula Avulsa',
-    labelEn: '1 Single Lesson',
-    priceBrl: 95,
-    priceUsd: 18,
-    pricePerLessonBrl: 95,
-    descriptionPt: 'Ideal para experimentar a dinâmica e conhecer seu novo Amigo Nativo.',
-    descriptionEn: 'Perfect to test the dynamic and meet your new Native Friend.',
-  },
-  {
-    lessonsCount: 5,
-    labelPt: 'Pacote 5 Aulas',
-    labelEn: '5 Lessons Pack',
-    priceBrl: 450,
-    priceUsd: 85,
-    pricePerLessonBrl: 90,
-    discountBadgePt: '5% OFF',
-    discountBadgeEn: '5% OFF',
-    descriptionPt: 'Começo consistente para destravar a fala no dia a dia.',
-    descriptionEn: 'Consistent start to unlock daily conversation.',
-  },
-  {
-    lessonsCount: 10,
-    labelPt: 'Pacote 10 Aulas',
-    labelEn: '10 Lessons Pack',
-    priceBrl: 850,
-    priceUsd: 160,
-    pricePerLessonBrl: 85,
-    discountBadgePt: 'MAIS POPULAR • 10% OFF',
-    discountBadgeEn: 'MOST POPULAR • 10% OFF',
-    isPopular: true,
-    descriptionPt: 'Recomendado para manter encontros semanais e fixar vocabulário real.',
-    descriptionEn: 'Recommended for weekly sessions and solid routine retention.',
-  },
-  {
-    lessonsCount: 20,
-    labelPt: 'Pacote 20 Aulas',
-    labelEn: '20 Lessons Pack',
-    priceBrl: 1600,
-    priceUsd: 300,
-    pricePerLessonBrl: 80,
-    discountBadgePt: 'MELHOR VALOR • 15% OFF',
-    discountBadgeEn: 'BEST VALUE • 15% OFF',
-    isBestValue: true,
-    descriptionPt: 'Imersão completa para alcançar fluência conversacional acelerada.',
-    descriptionEn: 'Full immersion to reach conversational fluency faster.',
-  },
-];
+  const calcUsd = (count: number, discountPct: number) => {
+    const raw = count * safeUsd * (1 - discountPct / 100);
+    return Math.round(raw * 100) / 100;
+  };
 
+  const calcBrl = (count: number, discountPct: number) => {
+    const raw = count * safeBrl * (1 - discountPct / 100);
+    return Math.round(raw);
+  };
+
+  const monthly: LessonPackageOption[] = [
+    {
+      lessonsCount: 4,
+      frequency: '1x',
+      isRecurringMonthly: true,
+      labelPt: '1x por semana (4 aulas/mês)',
+      labelEn: '1x per week (4 lessons/mo)',
+      discountPercent: 5,
+      baseTotalUsd: 4 * safeUsd,
+      baseTotalBrl: 4 * safeBrl,
+      priceUsd: calcUsd(4, 5),
+      priceBrl: calcBrl(4, 5),
+      pricePerLessonUsd: Math.round((calcUsd(4, 5) / 4) * 100) / 100,
+      pricePerLessonBrl: Math.round(calcBrl(4, 5) / 4),
+      discountBadgePt: '5% OFF • RECORRÊNCIA MENSAL',
+      discountBadgeEn: '5% OFF • MONTHLY AUTO-RENEW',
+      descriptionPt: '1 encontro semanal com seu Amigo Nativo para manter contato constante e hábitos sólidos.',
+      descriptionEn: '1 weekly session with your Native Friend for steady practice and solid habits.',
+    },
+    {
+      lessonsCount: 8,
+      frequency: '2x',
+      isRecurringMonthly: true,
+      labelPt: '2x por semana (8 aulas/mês)',
+      labelEn: '2x per week (8 lessons/mo)',
+      discountPercent: 10,
+      baseTotalUsd: 8 * safeUsd,
+      baseTotalBrl: 8 * safeBrl,
+      priceUsd: calcUsd(8, 10),
+      priceBrl: calcBrl(8, 10),
+      pricePerLessonUsd: Math.round((calcUsd(8, 10) / 8) * 100) / 100,
+      pricePerLessonBrl: Math.round(calcBrl(8, 10) / 8),
+      discountBadgePt: 'MAIS RECOMENDADO • 10% OFF',
+      discountBadgeEn: 'MOST POPULAR • 10% OFF',
+      isPopular: true,
+      descriptionPt: 'Ritmo ideal de imersão para destravar fluência, segurança e vocabulário ativo.',
+      descriptionEn: 'Ideal immersion rhythm to unlock fluency, confidence and active vocabulary.',
+    },
+    {
+      lessonsCount: 12,
+      frequency: '3x',
+      isRecurringMonthly: true,
+      labelPt: '3x por semana (12 aulas/mês)',
+      labelEn: '3x per week (12 lessons/mo)',
+      discountPercent: 15,
+      baseTotalUsd: 12 * safeUsd,
+      baseTotalBrl: 12 * safeBrl,
+      priceUsd: calcUsd(12, 15),
+      priceBrl: calcBrl(12, 15),
+      pricePerLessonUsd: Math.round((calcUsd(12, 15) / 12) * 100) / 100,
+      pricePerLessonBrl: Math.round(calcBrl(12, 15) / 12),
+      discountBadgePt: 'IMERSÃO INTENSIVA • 15% OFF',
+      discountBadgeEn: 'INTENSIVE IMMERSION • 15% OFF',
+      isBestValue: true,
+      descriptionPt: 'Aceleração máxima: viva o inglês quase todos os dias com seu mentor dedicado.',
+      descriptionEn: 'Maximum speed: live English almost every day with your dedicated mentor.',
+    },
+  ];
+
+  const flexible: LessonPackageOption[] = [
+    {
+      lessonsCount: 1,
+      labelPt: '1 Aula Avulsa',
+      labelEn: '1 Single Lesson',
+      discountPercent: 0,
+      baseTotalUsd: safeUsd,
+      baseTotalBrl: safeBrl,
+      priceUsd: safeUsd,
+      priceBrl: safeBrl,
+      pricePerLessonUsd: safeUsd,
+      pricePerLessonBrl: safeBrl,
+      descriptionPt: 'Ideal para experimentar a dinâmica e conhecer seu novo Amigo Nativo.',
+      descriptionEn: 'Perfect to test the dynamic and meet your new Native Friend.',
+    },
+    {
+      lessonsCount: 4,
+      labelPt: 'Pacote 4 Aulas',
+      labelEn: '4 Lessons Pack',
+      discountPercent: 5,
+      baseTotalUsd: 4 * safeUsd,
+      baseTotalBrl: 4 * safeBrl,
+      priceUsd: calcUsd(4, 5),
+      priceBrl: calcBrl(4, 5),
+      pricePerLessonUsd: Math.round((calcUsd(4, 5) / 4) * 100) / 100,
+      pricePerLessonBrl: Math.round(calcBrl(4, 5) / 4),
+      discountBadgePt: '5% OFF',
+      discountBadgeEn: '5% OFF',
+      descriptionPt: 'Começo consistente para destravar a fala no dia a dia.',
+      descriptionEn: 'Consistent start to unlock daily conversation.',
+    },
+    {
+      lessonsCount: 8,
+      labelPt: 'Pacote 8 Aulas',
+      labelEn: '8 Lessons Pack',
+      discountPercent: 10,
+      baseTotalUsd: 8 * safeUsd,
+      baseTotalBrl: 8 * safeBrl,
+      priceUsd: calcUsd(8, 10),
+      priceBrl: calcBrl(8, 10),
+      pricePerLessonUsd: Math.round((calcUsd(8, 10) / 8) * 100) / 100,
+      pricePerLessonBrl: Math.round(calcBrl(8, 10) / 8),
+      discountBadgePt: 'MAIS POPULAR • 10% OFF',
+      discountBadgeEn: 'MOST POPULAR • 10% OFF',
+      isPopular: true,
+      descriptionPt: 'Recomendado para manter encontros regulares e fixar vocabulário real.',
+      descriptionEn: 'Recommended for regular sessions and solid routine retention.',
+    },
+    {
+      lessonsCount: 12,
+      labelPt: 'Pacote 12 Aulas',
+      labelEn: '12 Lessons Pack',
+      discountPercent: 15,
+      baseTotalUsd: 12 * safeUsd,
+      baseTotalBrl: 12 * safeBrl,
+      priceUsd: calcUsd(12, 15),
+      priceBrl: calcBrl(12, 15),
+      pricePerLessonUsd: Math.round((calcUsd(12, 15) / 12) * 100) / 100,
+      pricePerLessonBrl: Math.round(calcBrl(12, 15) / 12),
+      discountBadgePt: 'MELHOR VALOR • 15% OFF',
+      discountBadgeEn: 'BEST VALUE • 15% OFF',
+      isBestValue: true,
+      descriptionPt: 'Imersão completa para alcançar fluência conversacional acelerada.',
+      descriptionEn: 'Full immersion to reach conversational fluency faster.',
+    },
+  ];
+
+  return { monthly, flexible };
+}
+
+const defaultPackageSet = generateLessonPackages(15);
+export const MONTHLY_PACKAGES: LessonPackageOption[] = defaultPackageSet.monthly;
+export const FLEXIBLE_PACKAGES: LessonPackageOption[] = defaultPackageSet.flexible;
 const LESSON_PACKAGES: LessonPackageOption[] = [...MONTHLY_PACKAGES, ...FLEXIBLE_PACKAGES];
 
 interface ManageSubscriptionModalProps {
@@ -216,7 +271,33 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
   // Find matching tutor info if available
   const currentTutor = tutorsList.find(
     (t) => t.email.toLowerCase() === currentTeacherEmail
-  );
+  ) || (currentTeacherEmail ? {
+    id: `tutor-${currentTeacherEmail}`,
+    name: currentTeacherName || currentTeacherEmail.split('@')[0],
+    email: currentTeacherEmail,
+    pricePerSessionUsd: 15,
+    pricePerSessionBrl: 83,
+  } as NativeFriendTutor : undefined);
+
+  // Active base lesson rates dynamically derived from selected tutor (or current tutor / fallback 15 USD)
+  const activeBaseRateUsd = Number(selectedTutorForPurchase?.pricePerSessionUsd) > 0
+    ? Number(selectedTutorForPurchase?.pricePerSessionUsd)
+    : (Number(currentTutor?.pricePerSessionUsd) > 0 ? Number(currentTutor?.pricePerSessionUsd) : 15);
+
+  const activeBaseRateBrl = Number(selectedTutorForPurchase?.pricePerSessionBrl) > 0
+    ? Number(selectedTutorForPurchase?.pricePerSessionBrl)
+    : (Number(currentTutor?.pricePerSessionBrl) > 0 ? Number(currentTutor?.pricePerSessionBrl) : Math.round(activeBaseRateUsd * 5.5));
+
+  // Dynamically calculate packages strictly with 5%, 10%, 15% volume discounts based on the tutor's registered base rate
+  const { monthly: dynamicMonthlyPackages, flexible: dynamicFlexiblePackages } = useMemo(() => {
+    return generateLessonPackages(activeBaseRateUsd, activeBaseRateBrl);
+  }, [activeBaseRateUsd, activeBaseRateBrl]);
+
+  const activePackageList = packageCategoryTab === 'monthly' ? dynamicMonthlyPackages : dynamicFlexiblePackages;
+
+  const selectedPkg = activePackageList.find((p) => p.lessonsCount === selectedPackageLessons)
+    || activePackageList.find((p) => p.lessonsCount === 8)
+    || activePackageList[0];
 
   const approvedTutors = useMemo(() => {
     return tutorsList.filter((t) => (t.approvalStatus || 'approved') === 'approved');
@@ -283,7 +364,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
   const handleConfirmPurchase = async () => {
     if (!selectedTutorForPurchase) return;
 
-    const pkg = LESSON_PACKAGES.find((p) => p.lessonsCount === selectedPackageLessons) || LESSON_PACKAGES[2];
+    const pkg = selectedPkg;
     setIsProcessing(true);
     try {
       if (onPurchasePackage) {
@@ -294,6 +375,8 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
           packagePriceBrl: pkg.priceBrl,
           packagePriceUsd: pkg.priceUsd,
           paymentMethod: selectedPaymentMethod,
+          isRecurringMonthly: pkg.isRecurringMonthly,
+          monthlyFrequency: pkg.frequency,
         });
       } else {
         // Fallback: update subscription directly
@@ -304,7 +387,7 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
       setFeedbackMsg({
         type: 'success',
         text: isEn
-          ? `Package purchased! ${selectedTutorForPurchase.name} is now your fixed Native Friend.`
+          ? `Package of ${pkg.lessonsCount} lessons purchased! ${selectedTutorForPurchase.name} is now your fixed Native Friend.`
           : `Pacote de ${pkg.lessonsCount} aulas adquirido com sucesso! ${selectedTutorForPurchase.name} agora é seu Amigo Nativo fixo.`,
       });
 
@@ -322,8 +405,6 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
       setIsProcessing(false);
     }
   };
-
-  const selectedPkg = LESSON_PACKAGES.find((p) => p.lessonsCount === selectedPackageLessons) || LESSON_PACKAGES[2];
 
   if (!isOpen) return null;
 
@@ -447,23 +528,23 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                     {isEn ? 'Lesson Rate' : 'Valor Base'}
                   </span>
                   <span className="text-base font-black text-[#000035]">
-                    ${selectedTutorForPurchase.pricePerSessionUsd || 15} USD
+                    ${activeBaseRateUsd} USD
                   </span>
                   <span className="text-[10px] text-[#607EC9] font-semibold block">/ {isEn ? 'session' : 'sessão'}</span>
                 </div>
               </div>
 
-              {/* Informational Banner about Fixed Binding */}
+              {/* Informational Banner about Fixed Binding & Volume Discounts */}
               <div className="p-3.5 bg-blue-50/70 rounded-2xl border border-[#9AB4FF]/50 flex items-start gap-2.5 text-xs text-[#062863]">
                 <ShieldCheck className="w-5 h-5 text-[#1C4C96] shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold block">
-                    {isEn ? 'Fixed Assignment on Purchase' : 'Vínculo Fixo Garantido'}
+                    {isEn ? 'Fixed Assignment on Purchase • Volume Discounts' : 'Vínculo Fixo Garantido • Descontos Progressivos'}
                   </span>
                   <span>
                     {isEn
-                      ? `By completing the purchase of any package below, ${selectedTutorForPurchase.name} will be permanently assigned as your fixed Native Friend for your daily routine tracking and live sessions.`
-                      : `Ao confirmar a compra de qualquer pacote abaixo, ${selectedTutorForPurchase.name} passará a ser automaticamente seu Amigo Nativo fixo na plataforma para acompanhamento diário e aulas ao vivo.`}
+                      ? `By completing the purchase of any package below, ${selectedTutorForPurchase.name} will be permanently assigned as your fixed Native Friend. Package prices are based strictly on their rate of $${activeBaseRateUsd} USD/session with automatic volume discounts (4 lessons: 5% OFF, 8 lessons: 10% OFF, 12 lessons: 15% OFF).`
+                      : `Ao confirmar a compra de qualquer pacote abaixo, ${selectedTutorForPurchase.name} passará a ser automaticamente seu Amigo Nativo fixo na plataforma. Os valores são baseados na taxa de $${activeBaseRateUsd} USD/aula do professor com descontos progressivos (4 aulas: 5% OFF, 8 aulas: 10% OFF, 12 aulas: 15% OFF).`}
                   </span>
                 </div>
               </div>
@@ -474,7 +555,9 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                   type="button"
                   onClick={() => {
                     setPackageCategoryTab('monthly');
-                    setSelectedPackageLessons(8);
+                    if (selectedPackageLessons === 1) {
+                      setSelectedPackageLessons(8);
+                    }
                   }}
                   className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                     packageCategoryTab === 'monthly'
@@ -489,7 +572,6 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                   type="button"
                   onClick={() => {
                     setPackageCategoryTab('flexible');
-                    setSelectedPackageLessons(10);
                   }}
                   className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                     packageCategoryTab === 'flexible'
@@ -521,11 +603,11 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {(packageCategoryTab === 'monthly' ? MONTHLY_PACKAGES : FLEXIBLE_PACKAGES).map((pkg) => {
+                  {activePackageList.map((pkg) => {
                     const isSelected = selectedPackageLessons === pkg.lessonsCount;
                     return (
                       <div
-                        key={pkg.lessonsCount}
+                        key={`${packageCategoryTab}-${pkg.lessonsCount}`}
                         onClick={() => setSelectedPackageLessons(pkg.lessonsCount)}
                         className={`p-4 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
                           isSelected
@@ -563,22 +645,38 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                             </div>
                           </div>
 
-                          <div className="flex items-baseline gap-1.5 pt-1">
+                          <div className="flex items-baseline gap-1.5 pt-1 flex-wrap">
                             <span className="text-xl font-black text-[#000035]">
-                              ${pkg.priceUsd} USD
+                              ${pkg.priceUsd % 1 === 0 ? pkg.priceUsd : pkg.priceUsd.toFixed(2)} USD
                             </span>
+                            {pkg.discountPercent > 0 && (
+                              <span className="text-xs text-slate-400 line-through font-semibold">
+                                ${pkg.baseTotalUsd}
+                              </span>
+                            )}
                             <span className="text-xs text-[#607EC9] font-medium">
                               {pkg.isRecurringMonthly ? (isEn ? '/mo' : '/mês') : ''}
                             </span>
                           </div>
 
-                          <p className="text-[11px] text-[#062863] font-bold">
-                            ${Math.round(pkg.priceUsd / pkg.lessonsCount)} USD {isEn ? '/ lesson' : '/ aula'}
-                          </p>
+                          <div className="flex items-center gap-1.5 pt-0.5">
+                            <p className="text-[11px] text-[#062863] font-bold">
+                              ${pkg.pricePerLessonUsd % 1 === 0 ? pkg.pricePerLessonUsd : pkg.pricePerLessonUsd.toFixed(2)} USD {isEn ? '/ lesson' : '/ aula'}
+                            </p>
+                            {pkg.discountPercent > 0 && (
+                              <span className="text-[10px] text-emerald-700 font-extrabold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                                -{pkg.discountPercent}%
+                              </span>
+                            )}
+                          </div>
 
                           <p className="text-xs text-slate-600 pt-1 leading-relaxed">
                             {isEn ? pkg.descriptionEn : pkg.descriptionPt}
                           </p>
+
+                          <span className="text-[10px] text-slate-400 font-medium block pt-0.5">
+                            ≈ R$ {pkg.priceBrl} BRL
+                          </span>
                         </div>
                       </div>
                     );
@@ -650,19 +748,32 @@ export const ManageSubscriptionModal: React.FC<ManageSubscriptionModalProps> = (
                 <div className="flex items-center justify-between text-xs border-b border-[#1C4C96] pb-2">
                   <span className="text-[#9AB4FF] font-medium">{isEn ? 'Package:' : 'Pacote Escolhido:'}</span>
                   <span className="font-bold text-white">
-                    {selectedPkg.lessonsCount} {isEn ? 'Lessons (50 min)' : 'Aulas de 50 min'}
+                    {selectedPkg.lessonsCount === 1
+                      ? (isEn ? '1 Single Lesson (50 min)' : '1 Aula Avulsa (50 min)')
+                      : `${selectedPkg.lessonsCount} ${isEn ? 'Lessons (50 min)' : 'Aulas de 50 min'}`}
+                    {selectedPkg.discountPercent > 0 ? ` (${selectedPkg.discountPercent}% OFF)` : ''}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <div>
                     <span className="text-[10px] text-[#9AB4FF] font-bold uppercase block">Total</span>
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-xl font-black text-white">${selectedPkg.priceUsd} USD</span>
+                    <div className="flex items-baseline gap-1.5 flex-wrap">
+                      <span className="text-xl font-black text-white">
+                        ${selectedPkg.priceUsd % 1 === 0 ? selectedPkg.priceUsd : selectedPkg.priceUsd.toFixed(2)} USD
+                      </span>
+                      {selectedPkg.discountPercent > 0 && (
+                        <span className="text-xs text-[#9AB4FF]/70 line-through">
+                          ${selectedPkg.baseTotalUsd}
+                        </span>
+                      )}
                       {selectedPkg.isRecurringMonthly && (
                         <span className="text-xs text-[#9AB4FF]">{isEn ? '/month' : '/mês'}</span>
                       )}
                     </div>
+                    <span className="text-[10px] text-[#9AB4FF]/80 block">
+                      ≈ R$ {selectedPkg.priceBrl} BRL
+                    </span>
                   </div>
 
                   <button

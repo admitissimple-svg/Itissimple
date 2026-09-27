@@ -1419,6 +1419,12 @@ export default function App() {
         const data = await res.json();
         const newCount = Number(data.contractedLessons || params.packageLessons);
 
+        // Align weekly live lesson target with purchased frequency (4 -> 1x, 8 -> 2x, 12 -> 3x)
+        let newWeeklyTarget = userProfile.weeklyNativeLessonsTarget || 1;
+        if (params.packageLessons === 4) newWeeklyTarget = 1;
+        else if (params.packageLessons === 8) newWeeklyTarget = 2;
+        else if (params.packageLessons === 12) newWeeklyTarget = 3;
+
         // Update userProfile with fixed teacher and updated lesson balance
         setUserProfile((prev) => ({
           ...prev,
@@ -1426,6 +1432,7 @@ export default function App() {
           teacherName: params.teacherName,
           enrollmentStatus: 'active',
           contractedLessons: newCount,
+          weeklyNativeLessonsTarget: newWeeklyTarget,
         }));
 
         // Update contractedLessons map
@@ -1446,6 +1453,7 @@ export default function App() {
                     teacherEmail: params.teacherEmail,
                     teacherName: params.teacherName,
                     contractedLessons: newCount,
+                    weeklyNativeLessonsTarget: newWeeklyTarget,
                     status: 'active',
                   }
                 : st
@@ -1462,6 +1470,7 @@ export default function App() {
               teacherEmail: params.teacherEmail,
               teacherName: params.teacherName,
               contractedLessons: newCount,
+              weeklyNativeLessonsTarget: newWeeklyTarget,
               status: 'active',
               level: userProfile.level || 'iniciante',
             },
