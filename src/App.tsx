@@ -390,13 +390,13 @@ export default function App() {
 
   // Teacher Filter & Minimalist Activity Toggle
   const [selectedStudentFilter, setSelectedStudentFilter] = useState<string>('all');
-  const [activeStudentActivity, setActiveStudentActivity] = useState<'insights' | 'notes' | 'videos_songs' | null>('insights');
+  const [activeStudentActivity, setActiveStudentActivity] = useState<'insights' | 'notes' | 'videos_songs' | null>(null);
   const [videosAndSongsSubTab, setVideosAndSongsSubTab] = useState<'videos' | 'songs'>('videos');
 
   const handleSelectStudentFilter = (studentEmail: string) => {
     setSelectedStudentFilter(studentEmail);
+    setActiveStudentActivity(null);
     if (studentEmail !== 'all') {
-      setActiveStudentActivity('insights');
       setTimeout(() => {
         const el = document.getElementById('filtered-student-workspace');
         if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -4187,36 +4187,15 @@ export default function App() {
                               </div>
                             )}
                             <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">
-                                  {stName}
-                                </h2>
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                  <ShieldCheck className="w-3 h-3" />
-                                  Active Student
-                                </span>
-                              </div>
+                              <h2 className="text-lg sm:text-xl font-black text-white tracking-tight">
+                                {stName}
+                              </h2>
                               <p className="text-xs text-slate-300 mt-0.5">{stEmail}</p>
                             </div>
                           </div>
 
-                          {/* Student Badges & Clear Filter Button */}
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10 capitalize">
-                              Level: {stLevel}
-                            </span>
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
-                              {stActiveDaysCount} study days/wk
-                            </span>
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/10">
-                              Week {stWeeklyCycle}
-                            </span>
-                            {studentLessons.length > 0 && (
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                                {studentLessons.length} lesson{studentLessons.length > 1 ? 's' : ''} scheduled
-                              </span>
-                            )}
-
+                          {/* Action Button: Clear Filter */}
+                          <div className="flex items-center gap-2">
                             <button
                               type="button"
                               onClick={() => setSelectedStudentFilter('all')}
@@ -4232,24 +4211,23 @@ export default function App() {
                         {/* Minimalist 3 Activity Buttons */}
                         <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200/80">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                            <div className="flex items-center gap-1 text-xs font-bold text-slate-500">
+                            <div className="text-xs font-bold text-slate-700">
                               <span>Student Activity:</span>
-                              <span className="text-[11px] font-normal text-slate-400">(Click to view or toggle)</span>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full sm:w-auto">
-                              {/* 1. Insights e Icebreaks Button */}
+                              {/* 1. Insights & Icebreaks Button */}
                               <button
                                 type="button"
                                 onClick={() => handleToggleStudentActivity('insights')}
                                 className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-xs ${
                                   activeStudentActivity === 'insights'
-                                    ? 'bg-[#0A0F24] text-white shadow-slate-300 ring-2 ring-[#0A0F24]/50 ring-offset-1'
-                                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200/90 hover:border-slate-300'
+                                    ? 'bg-[#000035] text-white ring-2 ring-[#1C4C96]/60 shadow-xs'
+                                    : 'bg-white hover:bg-slate-50 text-[#000035] border border-slate-200'
                                 }`}
                               >
-                                <Sparkles className={`w-4 h-4 ${activeStudentActivity === 'insights' ? 'text-amber-300' : 'text-[#0A0F24]'}`} />
-                                <span>Insights e Icebreaks</span>
+                                <Sparkles className={`w-4 h-4 ${activeStudentActivity === 'insights' ? 'text-amber-300' : 'text-[#1C4C96]'}`} />
+                                <span>Insights & Icebreaks</span>
                                 {activeStudentActivity === 'insights' && (
                                   <span className="w-2 h-2 rounded-full bg-amber-300 animate-pulse" />
                                 )}
@@ -4261,32 +4239,32 @@ export default function App() {
                                 onClick={() => handleToggleStudentActivity('notes')}
                                 className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-xs ${
                                   activeStudentActivity === 'notes'
-                                    ? 'bg-[#0A0F24] text-white shadow-slate-300 ring-2 ring-[#0A0F24]/50 ring-offset-1'
-                                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200/90 hover:border-slate-300'
+                                    ? 'bg-[#000035] text-white ring-2 ring-[#1C4C96]/60 shadow-xs'
+                                    : 'bg-white hover:bg-slate-50 text-[#000035] border border-slate-200'
                                 }`}
                               >
-                                <BookOpen className={`w-4 h-4 ${activeStudentActivity === 'notes' ? 'text-[#9AB4FF]' : 'text-[#0A0F24]'}`} />
+                                <BookOpen className={`w-4 h-4 ${activeStudentActivity === 'notes' ? 'text-[#9AB4FF]' : 'text-[#1C4C96]'}`} />
                                 <span>Live Lesson Notes</span>
                                 {activeStudentActivity === 'notes' && (
-                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                  <span className="w-2 h-2 rounded-full bg-[#9AB4FF] animate-pulse" />
                                 )}
                               </button>
 
-                              {/* 3. Videos and Songs Button */}
+                              {/* 3. Videos & Songs Button */}
                               <button
                                 type="button"
                                 onClick={() => handleToggleStudentActivity('videos_songs')}
                                 className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition cursor-pointer shadow-xs ${
                                   activeStudentActivity === 'videos_songs'
-                                    ? 'bg-[#0A0F24] text-white shadow-slate-300 ring-2 ring-[#0A0F24]/50 ring-offset-1'
-                                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200/90 hover:border-slate-300'
+                                    ? 'bg-[#000035] text-white ring-2 ring-[#1C4C96]/60 shadow-xs'
+                                    : 'bg-white hover:bg-slate-50 text-[#000035] border border-slate-200'
                                 }`}
                               >
                                 <div className="flex items-center gap-1">
-                                  <Video className={`w-4 h-4 ${activeStudentActivity === 'videos_songs' ? 'text-white' : 'text-[#0A0F24]'}`} />
+                                  <Video className={`w-4 h-4 ${activeStudentActivity === 'videos_songs' ? 'text-white' : 'text-[#1C4C96]'}`} />
                                   <Headphones className={`w-3.5 h-3.5 ${activeStudentActivity === 'videos_songs' ? 'text-white' : 'text-[#1DB954]'}`} />
                                 </div>
-                                <span>Videos and Songs</span>
+                                <span>Videos & Songs</span>
                                 {activeStudentActivity === 'videos_songs' && (
                                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                                 )}
@@ -4342,7 +4320,7 @@ export default function App() {
                                 onClick={() => setVideosAndSongsSubTab('videos')}
                                 className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
                                   videosAndSongsSubTab === 'videos'
-                                    ? 'bg-rose-600 text-white shadow-xs'
+                                    ? 'bg-[#062863] text-white shadow-xs border border-[#9AB4FF]/30'
                                     : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                                 }`}
                               >
@@ -4391,17 +4369,6 @@ export default function App() {
                               activeStudyDaysCount={stActiveDaysCount}
                             />
                           )}
-                        </div>
-                      )}
-
-                      {activeStudentActivity === null && (
-                        <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500 shadow-2xs">
-                          <p className="text-sm font-semibold text-slate-700">
-                            Atividade minimizada para visualização limpa.
-                          </p>
-                          <p className="text-xs text-slate-500 mt-1">
-                            Clique em um dos 3 botões acima (<strong>Insights e Icebreaks</strong>, <strong>Live Lesson Notes</strong> ou <strong>Videos and Songs</strong>) para abrir a atividade de {stName}.
-                          </p>
                         </div>
                       )}
                     </div>

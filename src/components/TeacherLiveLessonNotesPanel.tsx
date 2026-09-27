@@ -750,7 +750,7 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
                               <button
                                 type="button"
                                 onClick={() => handleRemoveVocab(item.id)}
-                                className="text-slate-300 hover:text-rose-500 transition p-1.5 rounded-md hover:bg-rose-50 cursor-pointer"
+                                className="text-slate-400 hover:text-slate-700 transition p-1.5 rounded-md hover:bg-slate-100 cursor-pointer"
                                 title="Delete word"
                               >
                                 <Trash2 className="w-4 h-4" />

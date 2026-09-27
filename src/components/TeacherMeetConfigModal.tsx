@@ -519,10 +519,10 @@ export const TeacherMeetConfigModal: React.FC<TeacherMeetConfigModalProps> = ({
                 type="button"
                 onClick={handleClearActiveDay}
                 id="clear-day-slots-btn"
-                className="px-2.5 py-1.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
                 title="Clear all slots for this day"
               >
-                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                <Trash2 className="w-3.5 h-3.5 text-slate-500" />
                 <span>Clear Day</span>
               </button>
 

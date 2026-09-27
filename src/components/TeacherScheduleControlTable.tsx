@@ -104,7 +104,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
     }
   };
 
-  const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('active');
 
   const availableStudentsForFilter = React.useMemo(() => {
     const map = new Map<string, { email: string; name: string }>();
@@ -221,24 +221,24 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       }
     }
     if (selectedStatusFilter !== 'all') {
-      if (selectedStatusFilter === 'scheduled') {
-        const isScheduledOrTrial =
+      if (selectedStatusFilter === 'active') {
+        if (
+          lesson.status === 'cancelled' ||
+          lesson.status === 'completed' ||
+          lesson.status === 'not_completed'
+        ) {
+          return false;
+        }
+        const isActiveOrScheduledOrTrial =
           lesson.status === 'scheduled' ||
           lesson.status === 'trial_lesson' ||
           lesson.status === 'trial' ||
           lesson.status === 'free_trial' ||
           lesson.status === 'pending' ||
+          lesson.status === 'active' ||
           (lesson as any).isTrial ||
           lesson.title?.toLowerCase().includes('trial');
-        if (!isScheduledOrTrial) return false;
-      } else if (selectedStatusFilter === 'trial_lesson') {
-        const isTrial =
-          lesson.status === 'trial_lesson' ||
-          lesson.status === 'trial' ||
-          lesson.status === 'free_trial' ||
-          (lesson as any).isTrial ||
-          lesson.title?.toLowerCase().includes('trial');
-        if (!isTrial) return false;
+        if (!isActiveOrScheduledOrTrial) return false;
       } else if (lesson.status !== selectedStatusFilter) {
         return false;
       }
@@ -320,9 +320,6 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
               <h3 className="font-black text-sm sm:text-base text-[#000035] tracking-tight">
                 Native Friend Master Schedule Control
               </h3>
-              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-[#062863]/10 text-[#062863] border border-[#607EC9]/40">
-                Master Control
-              </span>
             </div>
             <p className="text-xs text-slate-500">
               Chronological schedule of all your 1-on-1 English practice sessions.
@@ -395,8 +392,8 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                 }}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                   activeStudentActivity === 'insights'
-                    ? 'bg-[#0A0F24] text-white shadow-xs ring-1 ring-[#0A0F24]'
-                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200'
+                    ? 'bg-[#000035] text-white shadow-xs ring-1 ring-[#000035]'
+                    : 'bg-white hover:bg-slate-50 text-[#000035] border border-slate-200'
                 }`}
                 title="View Lessons Insights and Icebreaker Topics"
               >
@@ -413,8 +410,8 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                 }}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                   activeStudentActivity === 'notes'
-                    ? 'bg-[#0A0F24] text-white shadow-xs ring-1 ring-[#0A0F24]'
-                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200'
+                    ? 'bg-[#000035] text-white shadow-xs ring-1 ring-[#000035]'
+                    : 'bg-white hover:bg-slate-50 text-[#000035] border border-slate-200'
                 }`}
                 title="View Live Lesson Notes"
               >
@@ -431,8 +428,8 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                 }}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                   activeStudentActivity === 'videos_songs'
-                    ? 'bg-[#0A0F24] text-white shadow-xs ring-1 ring-[#0A0F24]'
-                    : 'bg-white hover:bg-slate-50 text-[#0A0F24] border border-slate-200'
+                    ? 'bg-[#000035] text-white shadow-xs ring-1 ring-[#000035]'
+                    : 'bg-white hover:bg-slate-50 text-[#000035] border border-slate-200'
                 }`}
                 title="View Videos and Spotify Songs"
               >
@@ -452,12 +449,11 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
             onChange={(e) => setSelectedStatusFilter(e.target.value)}
             className="px-3 py-1.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
           >
-            <option value="all">All Statuses</option>
-            <option value="scheduled">Scheduled / Active / Trial</option>
-            <option value="trial_lesson">Trial Lessons (1st Session)</option>
+            <option value="active">Active</option>
             <option value="completed">Completed</option>
             <option value="not_completed">Not Completed</option>
             <option value="cancelled">Cancelled</option>
+            <option value="all">All Statuses</option>
           </select>
         </div>
       </div>
@@ -484,15 +480,23 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
               </tr>
             ) : (
               filteredLessons.map((lesson) => {
-                const isTrial =
-                  lesson.status === 'trial_lesson' ||
-                  lesson.status === 'trial' ||
-                  lesson.status === 'free_trial' ||
-                  (lesson as any).isTrial ||
-                  lesson.title?.toLowerCase().includes('trial');
-                const isScheduled = lesson.status === 'scheduled';
+                const isCancelled = lesson.status === 'cancelled';
                 const isCompleted = lesson.status === 'completed';
                 const isNotCompleted = lesson.status === 'not_completed';
+                const isTrial =
+                  !isCancelled &&
+                  !isCompleted &&
+                  !isNotCompleted &&
+                  (lesson.status === 'trial_lesson' ||
+                    lesson.status === 'trial' ||
+                    lesson.status === 'free_trial' ||
+                    (lesson as any).isTrial ||
+                    lesson.title?.toLowerCase().includes('trial'));
+                const isScheduled =
+                  !isCancelled &&
+                  !isCompleted &&
+                  !isNotCompleted &&
+                  !isTrial;
 
                 // Look up student photo
                 const studentData = students.find(
@@ -556,30 +560,26 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
 
                     {/* Status */}
                     <td className="p-3.5 whitespace-nowrap">
-                      {isTrial && !isCompleted && !isNotCompleted && (
+                      {isCancelled ? (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-700 border border-slate-300">
+                          Cancelled
+                        </span>
+                      ) : isCompleted ? (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-700 text-white">
+                          ✓ Completed
+                        </span>
+                      ) : isNotCompleted ? (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                          Not Completed
+                        </span>
+                      ) : isTrial ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
                           <Sparkles className="w-2.5 h-2.5 text-amber-600" />
                           <span>Trial Lesson • Active</span>
                         </span>
-                      )}
-                      {isScheduled && !isTrial && (
+                      ) : (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-[#9AB4FF]/25 text-[#062863] border border-[#9AB4FF]">
                           Scheduled
-                        </span>
-                      )}
-                      {isCompleted && (
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-700 text-white">
-                          ✓ Completed
-                        </span>
-                      )}
-                      {isNotCompleted && (
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
-                          Not Completed
-                        </span>
-                      )}
-                      {lesson.status === 'cancelled' && (
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 border border-rose-200">
-                          Cancelled
                         </span>
                       )}
 
@@ -692,15 +692,15 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                               <RotateCcw className="w-3.5 h-3.5 text-[#1C4C96]" />
                             </button>
 
-                            {/* Cancel - somente o símbolo da lixeira e o botão vermelho */}
+                            {/* Cancel - formato quadrado neutro com lixeira */}
                             {onCancelLesson && (
                               <button
                                 type="button"
                                 onClick={() => handleCancelClick(lesson)}
-                                className="w-7 h-7 bg-rose-600 hover:bg-rose-700 text-white rounded-lg transition cursor-pointer shadow-2xs flex items-center justify-center shrink-0"
+                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg border border-slate-300 transition cursor-pointer shadow-2xs flex items-center justify-center shrink-0"
                                 title="Cancel Lesson"
                               >
-                                <Trash2 className="w-3.5 h-3.5 text-white" />
+                                <Trash2 className="w-3.5 h-3.5 text-slate-600" />
                               </button>
                             )}
                           </>

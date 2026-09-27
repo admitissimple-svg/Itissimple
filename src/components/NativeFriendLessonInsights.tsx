@@ -374,11 +374,11 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
             <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 text-rose-600 font-semibold text-xs">
+                  <div className="flex items-center gap-2 text-[#1C4C96] font-semibold text-xs">
                     <Video className="w-4 h-4" />
                     <span>YouTube Topics</span>
                   </div>
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#062863] border border-[#9AB4FF]/30">
                     {consumedVideos.length} watched
                   </span>
                 </div>
@@ -522,7 +522,7 @@ export const NativeFriendLessonInsights: React.FC<NativeFriendLessonInsightsProp
                 const isLive = entry.type === 'tutor_live' || entry.type === 'lesson';
 
                 const badgeBg = isVideo
-                  ? 'bg-rose-50 border-rose-200 text-rose-700'
+                  ? 'bg-[#9AB4FF]/20 border-[#9AB4FF]/40 text-[#062863]'
                   : isAudio
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
                   : isSentence
