@@ -106,10 +106,28 @@ const lastSyncedSignatureMap = new Map<string, string>();
 
 /**
  * Normalizes a student ID/email to a safe Firestore document path token.
+ * Prioritizes the authenticated Firebase Auth user UID when available.
  */
 export function normalizeStudentIdForPath(rawIdOrEmail: string): string {
-  if (!rawIdOrEmail) return '';
-  return rawIdOrEmail.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!rawIdOrEmail) {
+    return auth?.currentUser?.uid || '';
+  }
+  const trimmed = rawIdOrEmail.trim();
+  if (
+    trimmed !== '' &&
+    !trimmed.includes('@') &&
+    !trimmed.startsWith('usr-') &&
+    trimmed !== 'user-default' &&
+    trimmed !== 'anonymous_student' &&
+    trimmed !== 'undefined' &&
+    trimmed !== 'null'
+  ) {
+    return trimmed;
+  }
+  if (auth?.currentUser?.uid) {
+    return auth.currentUser.uid;
+  }
+  return trimmed.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 /**

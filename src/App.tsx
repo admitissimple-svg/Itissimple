@@ -106,6 +106,10 @@ import {
   subscribeToStudentProfile,
   saveStudentWeeklyChecksToFirestore,
   fetchStudentWeeklyChecksFromFirestore,
+  subscribeToStudentWeeklyChecks,
+  subscribeToStudentDailyJournal,
+  subscribeToStudentDailyRoutines,
+  deleteStudentVocabularyFromFirestore,
   recordActivityInStudentJournal,
   removeActivityFromStudentJournal,
   subscribeToStudentJournal,
@@ -125,28 +129,32 @@ import { OnboardingWizardModal, OnboardingResultData } from './components/Onboar
 import { StartLivingEmailModal } from './components/StartLivingEmailModal';
 import { ShieldCheck, Edit3, Sparkles, Headphones, BookOpen, Video, X, User, CheckCircle2, ChevronRight, MessageSquareQuote, Layers } from 'lucide-react';
 
-const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfile => ({
-  id: account?.id || (account?.email ? `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}` : 'user-default'),
-  name: account?.name || '',
-  email: account?.email || '',
-  picture: account?.picture || '',
-  avatar: account?.picture || '',
-  level: EnglishLevel.BEGINNER,
-  streakDays: 0,
-  streakCount: 0,
-  points: 0,
-  dailyGoalMinutes: 30,
-  completedTodayMinutes: 0,
-  targetAudienceCategory: 'general',
-  timezone: DEFAULT_STUDENT_TIMEZONE,
-  contractedLessons: 0,
-  completedLessonsCount: 0,
-  learningGoal: '',
-  routineVideoTime: '',
-  routineAudioTime: '',
-  dailyPhraseTime: '',
-  weeklyNativeLessonsTarget: 1,
-});
+const createDefaultStudentProfile = (account?: GoogleAccount | null): UserProfile => {
+  const effectiveUid = account?.uid || auth?.currentUser?.uid || account?.id || '';
+  return {
+    id: effectiveUid,
+    uid: effectiveUid,
+    name: account?.name || '',
+    email: account?.email || '',
+    picture: account?.picture || '',
+    avatar: account?.picture || '',
+    level: EnglishLevel.BEGINNER,
+    streakDays: 0,
+    streakCount: 0,
+    points: 0,
+    dailyGoalMinutes: 30,
+    completedTodayMinutes: 0,
+    targetAudienceCategory: 'general',
+    timezone: DEFAULT_STUDENT_TIMEZONE,
+    contractedLessons: 0,
+    completedLessonsCount: 0,
+    learningGoal: '',
+    routineVideoTime: '',
+    routineAudioTime: '',
+    dailyPhraseTime: '',
+    weeklyNativeLessonsTarget: 1,
+  };
+};
 
 const isOldAudioActivity = (act: RoutineItem) => {
   const id = String(act?.id || '');
@@ -855,11 +863,13 @@ export default function App() {
             apiProfileData?.enrollmentStatus ||
             (effectiveTeacherEmail ? 'active' : 'not_enrolled');
 
+          const effectiveStudentUid = currentAccount?.uid || auth.currentUser?.uid || uid;
           loadedProfile = {
             ...baseProfile,
             ...(apiProfileData || {}),
             ...(fsProfile || {}),
-            id: fsProfile?.id || apiProfileData?.id || currentAccount!.id || `usr-${currentAccount!.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            id: effectiveStudentUid,
+            uid: effectiveStudentUid,
             name: fsProfile?.name || apiProfileData?.name || currentAccount!.name || '',
             email: currentAccount!.email,
             picture: cleanPic,
@@ -1086,9 +1096,104 @@ export default function App() {
     };
   }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter, userProfile?.email]);
 
+  // Real-time synchronization of student profile and assigned Native Friend across all devices & sessions
+  useEffect(() => {
+    const uid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
+    const email = currentAccount?.email || userProfile?.email || '';
+    if (!uid) return;
+
+    const unsub = subscribeToStudentProfile(uid, email, (updated) => {
+      if (updated) {
+        setUserProfile((prev) => ({
+          ...prev,
+          ...updated,
+          id: uid,
+          uid: uid,
+          teacherEmail: updated.teacherEmail !== undefined ? updated.teacherEmail : prev.teacherEmail,
+          teacherName: updated.teacherName !== undefined ? updated.teacherName : prev.teacherName,
+          teacherUid: updated.teacherUid !== undefined ? updated.teacherUid : prev.teacherUid,
+          assignedNativeFriendUID: updated.assignedNativeFriendUID !== undefined ? updated.assignedNativeFriendUID : prev.assignedNativeFriendUID,
+          nativeFriendUID: updated.nativeFriendUID !== undefined ? updated.nativeFriendUID : prev.nativeFriendUID,
+          enrollmentStatus: updated.enrollmentStatus || prev.enrollmentStatus,
+        }));
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email]);
+
+  // Real-time synchronization of student S-Path weekly checks across all devices (Mobile <-> Desktop)
+  useEffect(() => {
+    const uid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
+    const email = currentAccount?.email || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    const unsub = subscribeToStudentWeeklyChecks(uid, email, (data) => {
+      if (data && data.checks) {
+        setWeeklyChecks((prev) => ({
+          ...prev,
+          ...data.checks,
+        }));
+      }
+      if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
+        setUserProfile((prev) => ({
+          ...prev,
+          weeklyNativeLessonsTarget: data.weeklyNativeLessonsTarget,
+        }));
+      }
+      if (typeof data.weeklyStudyDaysTarget === 'number' && data.weeklyStudyDaysTarget > 0) {
+        setUserProfile((prev) => ({
+          ...prev,
+          weeklyStudyDaysTarget: data.weeklyStudyDaysTarget,
+        }));
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email, userProfile?.id]);
+
+  // Real-time synchronization of student daily routines across all devices
+  useEffect(() => {
+    const uid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
+    const email = currentAccount?.email || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    const unsub = subscribeToStudentDailyRoutines(uid, email, (cloudRoutines) => {
+      if (cloudRoutines && typeof cloudRoutines === 'object' && Object.keys(cloudRoutines).length > 0) {
+        setRoutinesByDay((prev) => {
+          const merged = { ...prev };
+          (Object.keys(cloudRoutines) as DayOfWeek[]).forEach((day) => {
+            const dayItems = cloudRoutines[day];
+            if (Array.isArray(dayItems) && dayItems.length > 0) {
+              merged[day] = dayItems;
+            }
+          });
+          return merged;
+        });
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email, userProfile?.id]);
+
+  // Real-time synchronization of daily journal entries (Daily Sentence & Reflections) across all devices
+  useEffect(() => {
+    const uid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
+    const email = currentAccount?.email || userProfile?.email || '';
+    if (!uid && !email) return;
+
+    const unsub = subscribeToStudentDailyJournal(uid, email, (entries) => {
+      if (Array.isArray(entries)) {
+        setDailyJournalEntries(entries);
+      }
+    });
+
+    return () => unsub();
+  }, [currentAccount?.uid, currentAccount?.email, userProfile?.id]);
+
   // Real-time synchronization of studentJournal across all devices (Mobile <-> Desktop)
   useEffect(() => {
-    const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const uid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
     const email = currentAccount?.email || userProfile?.email || '';
     if (!uid && !email) return;
 
@@ -1105,7 +1210,7 @@ export default function App() {
 
   // Real-time synchronization of student homework and activity progress across all devices (Mobile <-> Desktop)
   useEffect(() => {
-    const uid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const uid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
     const email = currentAccount?.email || userProfile?.email || '';
     if (!uid && !email) return;
 
@@ -1144,17 +1249,9 @@ export default function App() {
     if (!uid && !email) return;
 
     const unsub = subscribeToStudentVocabulary(uid, email, (cloudEntries) => {
-      if (Array.isArray(cloudEntries) && cloudEntries.length > 0) {
-        setStudentDictionaryEntries((prev) => {
-          const map = new Map<string, StudentDictionaryEntry>();
-          prev.forEach((e) => {
-            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
-          });
-          cloudEntries.forEach((e) => {
-            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
-          });
-          return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
-        });
+      if (Array.isArray(cloudEntries)) {
+        // Direct authoritative reflection from Cloud Firestore guarantees deletion and addition instant sync across devices!
+        setStudentDictionaryEntries(cloudEntries);
       }
     });
 
@@ -3644,9 +3741,14 @@ export default function App() {
       );
     }
 
-    const studentUid = currentAccount?.uid || userProfile?.id || (cleanProfile.email ? `usr-${cleanProfile.email.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
-    if (studentUid && cleanProfile.email) {
-      saveStudentProfileToFirestore(studentUid, cleanProfile, cleanProfile.email).catch((err) =>
+    const studentUid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
+    if (studentUid) {
+      const profileToSave: UserProfile = {
+        ...cleanProfile,
+        id: studentUid,
+        uid: studentUid,
+      };
+      saveStudentProfileToFirestore(studentUid, profileToSave, cleanProfile.email).catch((err) =>
         console.warn('Firestore profile save notice:', err)
       );
       if (cleanProfile.teacherEmail !== undefined) {
@@ -3654,6 +3756,8 @@ export default function App() {
           teacherEmail: cleanProfile.teacherEmail,
           teacherName: cleanProfile.teacherName,
           teacherUid: cleanProfile.teacherUid,
+          assignedNativeFriendUID: cleanProfile.assignedNativeFriendUID,
+          nativeFriendUID: cleanProfile.nativeFriendUID,
           enrollmentStatus: cleanProfile.enrollmentStatus,
         }).catch(() => {});
       }

@@ -36,7 +36,7 @@ export function useStudentSpotifySync(params: {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
-  const effectiveUid = studentUid || studentEmail || '';
+  const effectiveUid = normalizeStudentIdForPath(studentUid || studentEmail || '');
 
   // 1. Persist current track whenever it is computed/displayed
   useEffect(() => {

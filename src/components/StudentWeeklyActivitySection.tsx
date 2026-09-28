@@ -37,6 +37,7 @@ import {
   getTodayIsoDate,
   mapStepIdToJournalType,
   deriveWeeklyChecksFromJournal,
+  normalizeUid,
 } from '../utils/studentPersistence';
 
 interface StudentWeeklyActivitySectionProps {
@@ -124,7 +125,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   const isEn = currentLanguage === 'en';
   const t = getTranslations(currentLanguage);
   const studentEmail = userProfile?.email || '';
-  const studentUid = userProfile?.uid || userProfile?.id || '';
+  const studentUid = normalizeUid(userProfile?.uid || userProfile?.id, studentEmail);
   const todayDay = getTodayDayOfWeek();
 
   // Active study days from student's single source of truth plan

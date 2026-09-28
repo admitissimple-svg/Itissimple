@@ -290,6 +290,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         resolvedProfile = {
           ...(data.profile || {}),
           id: account.uid,
+          uid: account.uid,
           name: account.name,
           email: account.email,
           nativeFriendUID:

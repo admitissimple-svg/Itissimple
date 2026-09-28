@@ -663,6 +663,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             resolvedProfile = {
               ...(data.profile || {}),
               id: account.uid,
+              uid: account.uid,
               name: account.name,
               email: account.email,
               nativeFriendUID:

@@ -9,7 +9,7 @@ import {
   deleteDoc,
   onSnapshot,
 } from 'firebase/firestore';
-import { getDb } from '../firebase';
+import { getDb, auth } from '../firebase';
 import {
   StudentDictionaryEntry,
   DailyJournalEntry,
@@ -23,13 +23,37 @@ import {
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
 
 export function normalizeUid(rawId?: string | null, email?: string | null): string {
-  if (rawId && typeof rawId === 'string' && rawId.trim()) {
+  // 1. If a valid, non-placeholder, non-email UID was provided, use it
+  if (
+    rawId &&
+    typeof rawId === 'string' &&
+    rawId.trim() !== '' &&
+    !rawId.includes('@') &&
+    !rawId.startsWith('usr-') &&
+    rawId !== 'user-default' &&
+    rawId !== 'anonymous_student' &&
+    rawId !== 'undefined' &&
+    rawId !== 'null'
+  ) {
     return rawId.trim();
   }
+
+  // 2. Prioritize authenticated user UID from Firebase Auth
+  if (auth.currentUser?.uid) {
+    return auth.currentUser.uid;
+  }
+
+  // 3. Fallback to provided rawId if no active auth session
+  if (rawId && typeof rawId === 'string' && rawId.trim() && rawId !== 'user-default' && rawId !== 'anonymous_student') {
+    return rawId.trim();
+  }
+
+  // 4. Fallback to normalized email only if completely unauthenticated
   if (email && typeof email === 'string' && email.trim()) {
     return email.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
   }
-  return 'anonymous_student';
+
+  return '';
 }
 
 /**
@@ -43,7 +67,6 @@ export function getCachedLocalVocabulary(studentUid?: string | null, studentEmai
     const keysToCheck = [
       cleanUid ? `its_simple_vocabulary_${cleanUid}` : '',
       cleanEmail ? `its_simple_vocabulary_${cleanEmail}` : '',
-      'its_simple_vocabulary_cached',
     ].filter(Boolean);
 
     for (const key of keysToCheck) {
@@ -74,7 +97,6 @@ export function cacheVocabularyLocally(
     const jsonStr = JSON.stringify(entries);
     if (cleanUid) localStorage.setItem(`its_simple_vocabulary_${cleanUid}`, jsonStr);
     if (cleanEmail) localStorage.setItem(`its_simple_vocabulary_${cleanEmail}`, jsonStr);
-    localStorage.setItem('its_simple_vocabulary_cached', jsonStr);
   } catch {}
 }
 
@@ -93,56 +115,46 @@ export async function saveStudentVocabularyToFirestore(
   if (!db) return false;
   if (!entries || entries.length === 0) return true;
 
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
-  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
-  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!cleanUid) return false;
 
   try {
     const sanitizedEntries: StudentDictionaryEntry[] = JSON.parse(JSON.stringify(entries || []));
-    const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId].filter(Boolean)));
 
-    // Step A: Load all existing words from local cache + Firestore to guarantee 100% accumulation
+    // Step A: Load all existing words strictly from Firestore users/{cleanUid} & subcollection (no stale local cache contamination)
     const masterMap = new Map<string, StudentDictionaryEntry>();
 
-    // 1. Pre-seed with local cache
-    const cached = getCachedLocalVocabulary(cleanUid, cleanEmail);
-    cached.forEach((item) => {
-      if (item && item.word) masterMap.set(item.word.toLowerCase().trim(), item);
-    });
-
-    // 2. Fetch existing words from Firestore users doc & subcollection across all target IDs
-    for (const docId of targetDocIds) {
-      try {
-        const userRef = doc(db, 'users', docId);
-        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
-        if (userSnap && userSnap.exists()) {
-          const data = userSnap.data();
-          if (Array.isArray(data?.vocabulary)) {
-            data.vocabulary.forEach((item: StudentDictionaryEntry) => {
-              if (item?.word) {
-                const key = item.word.toLowerCase().trim();
-                masterMap.set(key, { ...(masterMap.get(key) || {}), ...item });
-              }
-            });
-          }
-        }
-      } catch {}
-
-      try {
-        const subColRef = collection(db, 'users', docId, 'vocabulary');
-        const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2000, null);
-        if (subSnap && !subSnap.empty) {
-          subSnap.forEach((docItem) => {
-            const item = docItem.data() as StudentDictionaryEntry;
-            if (item && item.word) {
+    // 1. Fetch existing words from Firestore users/{cleanUid} & subcollection
+    try {
+      const userRef = doc(db, 'users', cleanUid);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+      if (userSnap && userSnap.exists()) {
+        const data = userSnap.data();
+        if (Array.isArray(data?.vocabulary)) {
+          data.vocabulary.forEach((item: StudentDictionaryEntry) => {
+            if (item?.word) {
               const key = item.word.toLowerCase().trim();
               masterMap.set(key, { ...(masterMap.get(key) || {}), ...item });
             }
           });
         }
-      } catch {}
-    }
+      }
+    } catch {}
+
+    try {
+      const subColRef = collection(db, 'users', cleanUid, 'vocabulary');
+      const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2000, null);
+      if (subSnap && !subSnap.empty) {
+        subSnap.forEach((docItem) => {
+          const item = docItem.data() as StudentDictionaryEntry;
+          if (item && item.word) {
+            const key = item.word.toLowerCase().trim();
+            masterMap.set(key, { ...(masterMap.get(key) || {}), ...item });
+          }
+        });
+      }
+    } catch {}
 
     // 3. Merge new entries into masterMap (accumulating, never dropping existing ones)
     sanitizedEntries.forEach((entry) => {
@@ -175,46 +187,39 @@ export async function saveStudentVocabularyToFirestore(
     // Step B: Cache accumulated list locally immediately
     cacheVocabularyLocally(cleanUid, cleanEmail, accumulatedList);
 
-    // Step C: Write to Cloud Firestore permanently
-    const writePromises: Promise<any>[] = [];
+    // Step C: Write strictly to Cloud Firestore users/{cleanUid}
+    const userRef = doc(db, 'users', cleanUid);
+    const writePromises: Promise<any>[] = [
+      setDoc(
+        userRef,
+        {
+          vocabulary: accumulatedList,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ),
+    ];
 
-    for (const docId of targetDocIds) {
-      const userRef = doc(db, 'users', docId);
-
-      // 1. Write the consolidated accumulated list to user doc
+    sanitizedEntries.forEach((entry) => {
+      if (!entry || !entry.word || !entry.word.trim()) return;
+      const key = entry.word.toLowerCase().trim();
+      const fullItem = masterMap.get(key);
+      if (!fullItem) return;
+      const wordDocId = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const itemRef = doc(db, 'users', cleanUid, 'vocabulary', wordDocId);
       writePromises.push(
         setDoc(
-          userRef,
+          itemRef,
           {
-            vocabulary: accumulatedList,
+            ...fullItem,
+            studentUid: cleanUid,
+            studentEmail: cleanEmail,
             updatedAt: new Date().toISOString(),
           },
           { merge: true }
         )
       );
-
-      // 2. Write each entry into subcollection users/{docId}/vocabulary/{wordDocId}
-      sanitizedEntries.forEach((entry) => {
-        if (!entry || !entry.word || !entry.word.trim()) return;
-        const key = entry.word.toLowerCase().trim();
-        const fullItem = masterMap.get(key);
-        if (!fullItem) return;
-        const wordDocId = key.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const itemRef = doc(db, 'users', docId, 'vocabulary', wordDocId);
-        writePromises.push(
-          setDoc(
-            itemRef,
-            {
-              ...fullItem,
-              studentUid: cleanUid,
-              studentEmail: cleanEmail,
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          )
-        );
-      });
-    }
+    });
 
     await withFirestoreTimeout(Promise.all(writePromises), 4500, null);
 
@@ -248,10 +253,8 @@ export async function fetchStudentVocabularyFromFirestore(
   studentEmail?: string
 ): Promise<StudentDictionaryEntry[]> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
-  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
-  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
 
   const entryMap = new Map<string, StudentDictionaryEntry>();
 
@@ -261,46 +264,42 @@ export async function fetchStudentVocabularyFromFirestore(
     if (item && item.word) entryMap.set(item.word.toLowerCase().trim(), item);
   });
 
-  if (!db || (!cleanUid && !cleanEmail)) {
+  if (!db || !cleanUid) {
     return Array.from(entryMap.values());
   }
 
-  const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId].filter(Boolean)));
-
   try {
-    for (const docId of targetDocIds) {
-      // A. Fetch from users/{docId} user profile document
-      try {
-        const userRef = doc(db, 'users', docId);
-        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
-        if (userSnap && userSnap.exists()) {
-          const data = userSnap.data();
-          if (Array.isArray(data?.vocabulary)) {
-            data.vocabulary.forEach((item: StudentDictionaryEntry) => {
-              if (item?.word) {
-                const key = item.word.toLowerCase().trim();
-                entryMap.set(key, { ...(entryMap.get(key) || {}), ...item });
-              }
-            });
-          }
-        }
-      } catch {}
-
-      // B. Fetch from subcollection users/{docId}/vocabulary
-      try {
-        const subColRef = collection(db, 'users', docId, 'vocabulary');
-        const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2500, null);
-        if (subSnap && !subSnap.empty) {
-          subSnap.forEach((docItem) => {
-            const item = docItem.data() as StudentDictionaryEntry;
-            if (item && item.word) {
+    // A. Fetch from users/{cleanUid} user profile document
+    try {
+      const userRef = doc(db, 'users', cleanUid);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
+      if (userSnap && userSnap.exists()) {
+        const data = userSnap.data();
+        if (Array.isArray(data?.vocabulary)) {
+          data.vocabulary.forEach((item: StudentDictionaryEntry) => {
+            if (item?.word) {
               const key = item.word.toLowerCase().trim();
               entryMap.set(key, { ...(entryMap.get(key) || {}), ...item });
             }
           });
         }
-      } catch {}
-    }
+      }
+    } catch {}
+
+    // B. Fetch from subcollection users/{cleanUid}/vocabulary
+    try {
+      const subColRef = collection(db, 'users', cleanUid, 'vocabulary');
+      const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2500, null);
+      if (subSnap && !subSnap.empty) {
+        subSnap.forEach((docItem) => {
+          const item = docItem.data() as StudentDictionaryEntry;
+          if (item && item.word) {
+            const key = item.word.toLowerCase().trim();
+            entryMap.set(key, { ...(entryMap.get(key) || {}), ...item });
+          }
+        });
+      }
+    } catch {}
 
     const result = Array.from(entryMap.values()).sort((a, b) =>
       (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
@@ -318,8 +317,55 @@ export async function fetchStudentVocabularyFromFirestore(
 }
 
 /**
+ * Delete a student vocabulary entry directly from Cloud Firestore and clean up local cache.
+ */
+export async function deleteStudentVocabularyFromFirestore(
+  studentUid: string,
+  word: string,
+  studentEmail?: string
+): Promise<boolean> {
+  const db = getDb();
+  if (!db || !word) return false;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!cleanUid) return false;
+
+  const cleanWord = word.trim().toLowerCase();
+  const wordDocId = cleanWord.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  try {
+    // 1. Delete from subcollection
+    const itemRef = doc(db, 'users', cleanUid, 'vocabulary', wordDocId);
+    await withFirestoreTimeout(deleteDoc(itemRef), 2500, null);
+
+    // 2. Remove from users/{cleanUid}.vocabulary array
+    const userRef = doc(db, 'users', cleanUid);
+    const snap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+    if (snap && snap.exists()) {
+      const data = snap.data();
+      if (Array.isArray(data?.vocabulary)) {
+        const filtered = data.vocabulary.filter(
+          (item: StudentDictionaryEntry) => (item?.word || '').trim().toLowerCase() !== cleanWord
+        );
+        await withFirestoreTimeout(
+          setDoc(userRef, { vocabulary: filtered, updatedAt: new Date().toISOString() }, { merge: true }),
+          2500,
+          null
+        );
+        cacheVocabularyLocally(cleanUid, cleanEmail, filtered);
+      }
+    }
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${cleanUid}/vocabulary/${wordDocId}`);
+    return false;
+  }
+}
+
+/**
  * Real-time subscription to student vocabulary on Firestore.
- * Immediately notifies when any word is added by student, teacher, or routine.
+ * Immediately notifies when any word is added, updated, or removed by student, teacher, or routine across devices.
+ * Firestore is the single authoritative source of truth.
  */
 export function subscribeToStudentVocabulary(
   studentUid: string,
@@ -327,48 +373,53 @@ export function subscribeToStudentVocabulary(
   callback: (entries: StudentDictionaryEntry[]) => void
 ): () => void {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
-  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
 
-  if (!db || (!cleanUid && !cleanEmail)) {
+  if (!db || !cleanUid) {
     return () => {};
   }
 
-  const activeDocId = cleanUid || emailDocId;
-  const vocabColRef = collection(db, 'users', activeDocId, 'vocabulary');
-  const userDocRef = doc(db, 'users', activeDocId);
+  const vocabColRef = collection(db, 'users', cleanUid, 'vocabulary');
+  const userDocRef = doc(db, 'users', cleanUid);
 
-  const accumulatedMap = new Map<string, StudentDictionaryEntry>();
-  // Seed with current cache
-  getCachedLocalVocabulary(cleanUid, cleanEmail).forEach((item) => {
-    if (item && item.word) accumulatedMap.set(item.word.toLowerCase().trim(), item);
-  });
+  let docVocab: StudentDictionaryEntry[] = [];
+  const colMap = new Map<string, StudentDictionaryEntry>();
 
   const notify = () => {
-    const list = Array.from(accumulatedMap.values()).sort((a, b) =>
+    const mergedMap = new Map<string, StudentDictionaryEntry>();
+    // Priority: authoritative userDocRef vocabulary array
+    docVocab.forEach((item) => {
+      if (item && item.word) {
+        mergedMap.set(item.word.toLowerCase().trim(), item);
+      }
+    });
+    // Supplement with subcollection items
+    colMap.forEach((item, key) => {
+      if (!mergedMap.has(key)) {
+        mergedMap.set(key, item);
+      }
+    });
+    const list = Array.from(mergedMap.values()).sort((a, b) =>
       (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
     );
-    if (list.length > 0) {
-      cacheVocabularyLocally(cleanUid, cleanEmail, list);
-      callback(list);
-    }
+    // Passively keep local cache fresh for offline fallback without polluting live Firestore state
+    cacheVocabularyLocally(cleanUid, cleanEmail, list);
+    callback(list);
   };
 
   // Subcollection listener
   const unsubCol = onSnapshot(
     vocabColRef,
     (snapshot) => {
-      if (!snapshot.empty) {
-        snapshot.forEach((d) => {
-          const item = d.data() as StudentDictionaryEntry;
-          if (item && item.word) {
-            const key = item.word.toLowerCase().trim();
-            accumulatedMap.set(key, { ...(accumulatedMap.get(key) || {}), ...item });
-          }
-        });
-        notify();
-      }
+      colMap.clear();
+      snapshot.forEach((d) => {
+        const item = d.data() as StudentDictionaryEntry;
+        if (item && item.word) {
+          colMap.set(item.word.toLowerCase().trim(), item);
+        }
+      });
+      notify();
     },
     (err) => {
       console.warn('Real-time vocabulary subcollection notice:', err);
@@ -382,12 +433,7 @@ export function subscribeToStudentVocabulary(
       if (snap.exists()) {
         const data = snap.data();
         if (Array.isArray(data?.vocabulary)) {
-          data.vocabulary.forEach((item: StudentDictionaryEntry) => {
-            if (item && item.word) {
-              const key = item.word.toLowerCase().trim();
-              accumulatedMap.set(key, { ...(accumulatedMap.get(key) || {}), ...item });
-            }
-          });
+          docVocab = data.vocabulary;
           notify();
         }
       }
@@ -414,14 +460,16 @@ export async function saveStudentJournalEntryToFirestore(
 ): Promise<boolean> {
   const db = getDb();
   if (!db) return false;
-  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!cleanUid) return false;
 
   try {
     const sanitizedEntry: DailyJournalEntry = JSON.parse(
       JSON.stringify({
         ...entry,
         studentUid: cleanUid,
-        studentEmail: studentEmail || '',
+        studentEmail: cleanEmail,
         createdAt: entry.createdAt || new Date().toISOString(),
       })
     );
@@ -458,7 +506,6 @@ export async function saveStudentJournalEntryToFirestore(
     );
 
     // 3. Mirror to server backend API
-    const cleanEmail = (studentEmail || '').toLowerCase().trim();
     fetch('/api/student-journal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -484,7 +531,8 @@ export async function fetchStudentJournalFromFirestore(
   studentEmail?: string
 ): Promise<DailyJournalEntry[]> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
   if (!db || !cleanUid) return [];
 
   try {
@@ -608,9 +656,7 @@ export async function saveStudentNativeFriendToFirestore(
   if (!db) return false;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
-  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
-  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
-  const usrDocId = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+  if (!cleanUid) return false;
 
   const cleanTeacherEmail = (teacherData?.teacherEmail || '').toLowerCase().trim();
   const cleanTeacherUid =
@@ -630,27 +676,9 @@ export async function saveStudentNativeFriendToFirestore(
     updatedAt: new Date().toISOString(),
   };
 
-  const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId, usrDocId, cleanEmail].filter(Boolean)));
   try {
-    const promises = targetDocIds.map((docId) =>
-      withFirestoreTimeout(setDoc(doc(db, 'users', docId), payload, { merge: true }), 3000, null)
-    );
-    await Promise.all(promises);
-
-    // Also update any other docs matching this email in users collection
-    if (cleanEmail) {
-      try {
-        const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
-        const qSnap = await withFirestoreTimeout(getDocs(qUsers), 2500, null);
-        if (qSnap && !qSnap.empty) {
-          const extraPromises = qSnap.docs.map((d) =>
-            withFirestoreTimeout(setDoc(d.ref, payload, { merge: true }), 2500, null)
-          );
-          await Promise.all(extraPromises);
-        }
-      } catch {}
-    }
-
+    // Strictly write to doc(db, 'users', cleanUid) - authenticated user UID single source of truth
+    await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), payload, { merge: true }), 3000, null);
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
@@ -659,7 +687,7 @@ export async function saveStudentNativeFriendToFirestore(
 }
 
 /**
- * Persist the entire student profile directly to Firestore across all canonical user document IDs.
+ * Persist the entire student profile directly to Firestore strictly using users/{cleanUid}.
  */
 export async function saveStudentProfileToFirestore(
   studentUid: string,
@@ -670,9 +698,7 @@ export async function saveStudentProfileToFirestore(
   if (!db) return false;
   const cleanEmail = (profile.email || studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
-  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
-  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
-  const usrDocId = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+  if (!cleanUid) return false;
 
   const cleanTeacherEmail = (profile.teacherEmail || '').toLowerCase().trim();
   const cleanTeacherUid =
@@ -686,7 +712,7 @@ export async function saveStudentProfileToFirestore(
     ...sanitized,
     id: cleanUid,
     uid: cleanUid,
-    email: cleanEmail,
+    email: cleanEmail || sanitized.email || '',
     teacherEmail: profile.teacherEmail !== undefined ? (profile.teacherEmail || null) : null,
     teacherName: profile.teacherName !== undefined ? (profile.teacherName || null) : null,
     teacherUid: cleanTeacherUid || null,
@@ -696,27 +722,9 @@ export async function saveStudentProfileToFirestore(
     updatedAt: new Date().toISOString(),
   };
 
-  const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId, usrDocId, cleanEmail].filter(Boolean)));
   try {
-    const promises = targetDocIds.map((docId) =>
-      withFirestoreTimeout(setDoc(doc(db, 'users', docId), payload, { merge: true }), 3000, null)
-    );
-    await Promise.all(promises);
-
-    // Also update any other docs matching this email in users collection
-    if (cleanEmail) {
-      try {
-        const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
-        const qSnap = await withFirestoreTimeout(getDocs(qUsers), 2500, null);
-        if (qSnap && !qSnap.empty) {
-          const extraPromises = qSnap.docs.map((d) =>
-            withFirestoreTimeout(setDoc(d.ref, payload, { merge: true }), 2500, null)
-          );
-          await Promise.all(extraPromises);
-        }
-      } catch {}
-    }
-
+    // Strictly write to doc(db, 'users', cleanUid) - authenticated user UID single source of truth
+    await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), payload, { merge: true }), 3000, null);
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
@@ -725,9 +733,9 @@ export async function saveStudentProfileToFirestore(
 }
 
 /**
- * Fetch student profile directly from Firestore users/{studentUid}.
- * Searches across all canonical document IDs and merges fields so that
- * assigned Native Friend (e.g. Charles) is never lost due to an unpopulated document shell.
+ * Fetch student profile directly from Firestore users/{cleanUid}.
+ * Reads strictly from users/{cleanUid}. Performs one-time migration if a legacy
+ * email-keyed document exists, ensuring data integrity without fragmenting records.
  */
 export async function fetchStudentProfileFromFirestore(
   studentUid: string,
@@ -737,58 +745,51 @@ export async function fetchStudentProfileFromFirestore(
   if (!db) return null;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
-  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
-  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
-  const usrDocId = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+  if (!cleanUid) return null;
 
-  const targetDocIds = Array.from(new Set([cleanUid, usrDocId, emailDocId, hyphenDocId, cleanEmail].filter(Boolean)));
   try {
-    let mergedProfile: Partial<UserProfile> | null = null;
+    // 1. Strict primary read from users/{cleanUid}
+    const snap = await withFirestoreTimeout(getDoc(doc(db, 'users', cleanUid)), 2500, null);
+    if (snap && snap.exists()) {
+      const data = snap.data() as Partial<UserProfile>;
+      if (data && (data.email || data.name || data.teacherEmail !== undefined)) {
+        return {
+          ...data,
+          id: cleanUid,
+          uid: cleanUid,
+        };
+      }
+    }
 
-    for (const docId of targetDocIds) {
-      const snap = await withFirestoreTimeout(getDoc(doc(db, 'users', docId)), 2500, null);
-      if (snap && snap.exists()) {
-        const data = snap.data() as Partial<UserProfile>;
-        if (data && (data.email || data.name || data.teacherEmail !== undefined)) {
-          if (!mergedProfile) {
-            mergedProfile = { ...data };
-          } else {
-            // Merge fields: if this doc has teacherEmail, prioritize it
-            if (data.teacherEmail && !mergedProfile.teacherEmail) {
-              mergedProfile.teacherEmail = data.teacherEmail;
-              mergedProfile.teacherName = data.teacherName || mergedProfile.teacherName;
-              mergedProfile.teacherUid = data.teacherUid || mergedProfile.teacherUid;
-              mergedProfile.assignedNativeFriendUID = data.assignedNativeFriendUID || mergedProfile.assignedNativeFriendUID;
-              mergedProfile.nativeFriendUID = data.nativeFriendUID || mergedProfile.nativeFriendUID;
-              mergedProfile.enrollmentStatus = data.enrollmentStatus || mergedProfile.enrollmentStatus;
-            } else if (data.updatedAt && mergedProfile.updatedAt && new Date(data.updatedAt) > new Date(mergedProfile.updatedAt)) {
-              mergedProfile = { ...mergedProfile, ...data };
-            } else {
-              mergedProfile = { ...data, ...mergedProfile };
-            }
+    // 2. One-time migration fallback for legacy accounts where user was created under an email doc
+    if (cleanEmail) {
+      const legacyDocIds = [
+        `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        cleanEmail.replace(/[^a-zA-Z0-9]/g, '-'),
+        cleanEmail,
+      ];
+      for (const legacyId of legacyDocIds) {
+        if (legacyId === cleanUid) continue;
+        const legacySnap = await withFirestoreTimeout(getDoc(doc(db, 'users', legacyId)), 2000, null);
+        if (legacySnap && legacySnap.exists()) {
+          const legacyData = legacySnap.data() as Partial<UserProfile>;
+          if (legacyData && (legacyData.email || legacyData.name || legacyData.teacherEmail !== undefined)) {
+            // Migrate to users/{cleanUid}
+            const migrated: Partial<UserProfile> = {
+              ...legacyData,
+              id: cleanUid,
+              uid: cleanUid,
+              email: cleanEmail,
+              updatedAt: new Date().toISOString(),
+            };
+            await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), migrated, { merge: true }), 2500, null);
+            return migrated;
           }
         }
       }
     }
 
-    // Also check query by email if teacherEmail still missing
-    if (cleanEmail && (!mergedProfile || !mergedProfile.teacherEmail)) {
-      try {
-        const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
-        const qSnap = await withFirestoreTimeout(getDocs(qUsers), 2500, null);
-        if (qSnap && !qSnap.empty) {
-          for (const d of qSnap.docs) {
-            const data = d.data() as Partial<UserProfile>;
-            if (data && data.teacherEmail) {
-              mergedProfile = { ...(mergedProfile || {}), ...data };
-              break;
-            }
-          }
-        }
-      } catch {}
-    }
-
-    return mergedProfile;
+    return null;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `users/${cleanUid}`);
     return null;
@@ -1221,6 +1222,7 @@ export async function fetchStudentLessonsFromFirestore(
 
 /**
  * Subscribe to real-time lessons updates in Firestore for a student or teacher.
+ * Robust cross-device sync with query doc mapping across root lessons and user subcollections.
  */
 export function subscribeToStudentLessons(
   studentUid: string,
@@ -1235,54 +1237,54 @@ export function subscribeToStudentLessons(
   const hyphenUid = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
 
   const unsubscribers: (() => void)[] = [];
-  const lessonsMap = new Map<string, LiveLesson>();
+  const queryDocsMap = new Map<string, Map<string, LiveLesson>>();
 
-  const processSnap = (snap: any) => {
-    snap.docChanges().forEach((change: any) => {
-      const data = change.doc.data() as LiveLesson;
-      const lessonId = data.id || change.doc.id;
-      if (change.type === 'removed') {
-        lessonsMap.delete(lessonId);
-      } else {
-        const isCancelled = data.status === 'cancelled' || (data.status as string) === 'canceled' || Boolean(data.cancelledAt);
-        const item: LiveLesson = {
-          ...data,
-          id: lessonId,
-          ...(isCancelled ? { status: 'cancelled', cancelledAt: data.cancelledAt || new Date().toISOString() } : {}),
+  const rebuildAndNotify = () => {
+    const consolidatedMap = new Map<string, LiveLesson>();
+
+    // Merge docs across all active query snapshots
+    queryDocsMap.forEach((docsMap) => {
+      docsMap.forEach((item, id) => {
+        if (!item || !id) return;
+        const isItemCancelled = item.status === 'cancelled' || (item.status as string) === 'canceled' || Boolean(item.cancelledAt);
+        const normalizedItem: LiveLesson = {
+          ...item,
+          id,
+          ...(isItemCancelled ? { status: 'cancelled', cancelledAt: item.cancelledAt || new Date().toISOString() } : {}),
         };
-        const existing = lessonsMap.get(lessonId);
+        const existing = consolidatedMap.get(id);
         if (existing) {
-          const finalCancelled = existing.status === 'cancelled' || item.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(item.cancelledAt);
-          const cancelledAt = existing.cancelledAt || item.cancelledAt;
-          const cancelledBy = existing.cancelledBy || item.cancelledBy;
-          const cancellationReason = existing.cancellationReason || item.cancellationReason;
-          const merged: LiveLesson = { ...existing, ...item };
+          const finalCancelled = existing.status === 'cancelled' || normalizedItem.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(normalizedItem.cancelledAt);
+          const cancelledAt = existing.cancelledAt || normalizedItem.cancelledAt;
+          const cancelledBy = existing.cancelledBy || normalizedItem.cancelledBy;
+          const cancellationReason = existing.cancellationReason || normalizedItem.cancellationReason;
+          const merged: LiveLesson = { ...existing, ...normalizedItem };
           if (finalCancelled) {
             merged.status = 'cancelled';
             merged.cancelledAt = cancelledAt || new Date().toISOString();
             if (cancelledBy) merged.cancelledBy = cancelledBy;
             if (cancellationReason) merged.cancellationReason = cancellationReason;
           }
-          lessonsMap.set(lessonId, merged);
+          consolidatedMap.set(id, merged);
         } else {
-          lessonsMap.set(lessonId, item);
+          consolidatedMap.set(id, normalizedItem);
         }
-      }
+      });
     });
 
     // Cross-deduplicate cancelled slots
     const cancelledSlots = new Set<string>();
-    lessonsMap.forEach((l) => {
+    consolidatedMap.forEach((l) => {
       if (l.status === 'cancelled' || l.cancelledAt) {
         const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
         cancelledSlots.add(slotKey);
       }
     });
 
-    lessonsMap.forEach((l, id) => {
+    consolidatedMap.forEach((l, id) => {
       const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
       if (cancelledSlots.has(slotKey) && l.status !== 'cancelled') {
-        lessonsMap.set(id, {
+        consolidatedMap.set(id, {
           ...l,
           status: 'cancelled',
           cancelledAt: l.cancelledAt || new Date().toISOString(),
@@ -1290,41 +1292,61 @@ export function subscribeToStudentLessons(
       }
     });
 
-    const list = Array.from(lessonsMap.values());
+    const list = Array.from(consolidatedMap.values());
     list.sort((a, b) => {
       const tA = new Date(a.startDateTime).getTime();
       const tB = new Date(b.startDateTime).getTime();
       return tB - tA;
     });
+
     callback(list);
+  };
+
+  const handleQuerySnap = (queryKey: string, snap: any) => {
+    const docsMap = new Map<string, LiveLesson>();
+    snap.forEach((d: any) => {
+      const data = d.data() as LiveLesson;
+      const lessonId = data.id || d.id;
+      docsMap.set(lessonId, { ...data, id: lessonId });
+    });
+    queryDocsMap.set(queryKey, docsMap);
+    rebuildAndNotify();
   };
 
   try {
     if (isTeacher) {
       if (cleanEmail) {
         const qEmail = query(collection(db, 'lessons'), where('teacherEmail', '==', cleanEmail));
-        unsubscribers.push(onSnapshot(qEmail, processSnap, (err) => console.warn('Teacher lessons snapshot notice:', err)));
+        unsubscribers.push(onSnapshot(qEmail, (snap) => handleQuerySnap('t_email', snap), (err) => console.warn('Teacher lessons snapshot notice:', err)));
       }
       if (cleanUid) {
         const qUid = query(collection(db, 'lessons'), where('teacherUid', '==', cleanUid));
-        unsubscribers.push(onSnapshot(qUid, processSnap, (err) => console.warn('Teacher UID lessons snapshot notice:', err)));
+        unsubscribers.push(onSnapshot(qUid, (snap) => handleQuerySnap('t_uid', snap), (err) => console.warn('Teacher UID lessons snapshot notice:', err)));
       }
       if (hyphenUid && hyphenUid !== cleanUid) {
         const qHyphen = query(collection(db, 'lessons'), where('teacherUid', '==', hyphenUid));
-        unsubscribers.push(onSnapshot(qHyphen, processSnap, (err) => console.warn('Teacher hyphen lessons snapshot notice:', err)));
+        unsubscribers.push(onSnapshot(qHyphen, (snap) => handleQuerySnap('t_hyphen', snap), (err) => console.warn('Teacher hyphen lessons snapshot notice:', err)));
+      }
+      if (cleanUid) {
+        const subCol = collection(db, 'users', cleanUid, 'lessons');
+        unsubscribers.push(onSnapshot(subCol, (snap) => handleQuerySnap('t_subcol', snap), () => {}));
       }
     } else {
       if (cleanEmail) {
         const qEmail = query(collection(db, 'lessons'), where('studentEmail', '==', cleanEmail));
-        unsubscribers.push(onSnapshot(qEmail, processSnap, (err) => console.warn('Student email lessons snapshot notice:', err)));
+        unsubscribers.push(onSnapshot(qEmail, (snap) => handleQuerySnap('s_email', snap), (err) => console.warn('Student email lessons snapshot notice:', err)));
       }
       if (cleanUid) {
         const qUid = query(collection(db, 'lessons'), where('studentUid', '==', cleanUid));
-        unsubscribers.push(onSnapshot(qUid, processSnap, (err) => console.warn('Student UID lessons snapshot notice:', err)));
+        unsubscribers.push(onSnapshot(qUid, (snap) => handleQuerySnap('s_uid', snap), (err) => console.warn('Student UID lessons snapshot notice:', err)));
       }
       if (hyphenUid && hyphenUid !== cleanUid) {
         const qHyphen = query(collection(db, 'lessons'), where('studentUid', '==', hyphenUid));
-        unsubscribers.push(onSnapshot(qHyphen, processSnap, (err) => console.warn('Student hyphen lessons snapshot notice:', err)));
+        unsubscribers.push(onSnapshot(qHyphen, (snap) => handleQuerySnap('s_hyphen', snap), (err) => console.warn('Student hyphen lessons snapshot notice:', err)));
+      }
+      if (cleanUid) {
+        const subCol = collection(db, 'users', cleanUid, 'lessons');
+        unsubscribers.push(onSnapshot(subCol, (snap) => handleQuerySnap('s_subcol', snap), () => {}));
       }
     }
   } catch (err) {
@@ -1337,7 +1359,7 @@ export function subscribeToStudentLessons(
 }
 
 /**
- * Subscribe to real-time student profile updates in Firestore across all canonical doc IDs.
+ * Subscribe to real-time student profile updates in Firestore strictly using users/{cleanUid}.
  */
 export function subscribeToStudentProfile(
   studentUid: string,
@@ -1349,39 +1371,77 @@ export function subscribeToStudentProfile(
   const cleanUid = normalizeUid(studentUid, cleanEmail);
   if (!db || !cleanUid) return () => {};
 
-  const unsubscribers: (() => void)[] = [];
-  const targetDocIds = Array.from(
-    new Set([
-      cleanUid,
-      cleanEmail,
-      cleanEmail ? normalizeUid(null, cleanEmail) : '',
-      cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '',
-      cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '',
-    ].filter(Boolean))
-  );
-
-  targetDocIds.forEach((docId) => {
-    try {
-      const userRef = doc(db, 'users', docId);
-      const unsub = onSnapshot(
-        userRef,
-        (snap) => {
-          if (snap.exists()) {
-            const data = snap.data();
-            if (data && (data.teacherEmail !== undefined || data.enrollmentStatus || data.name)) {
-              callback(data as Partial<UserProfile>);
-            }
+  try {
+    const userRef = doc(db, 'users', cleanUid);
+    const unsub = onSnapshot(
+      userRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data) {
+            callback({
+              ...data,
+              id: cleanUid,
+              uid: cleanUid,
+            } as Partial<UserProfile>);
           }
-        },
-        (err) => console.warn(`subscribeToStudentProfile notice for ${docId}:`, err)
-      );
-      unsubscribers.push(unsub);
-    } catch {}
-  });
+        }
+      },
+      (err) => console.warn(`subscribeToStudentProfile notice for ${cleanUid}:`, err)
+    );
+    return unsub;
+  } catch {
+    return () => {};
+  }
+}
 
-  return () => {
-    unsubscribers.forEach((unsub) => unsub());
-  };
+/**
+ * Real-time subscription to student S-Path (Gráfico S) weekly checks on Firestore document users/{studentUID}
+ * Guarantees instantaneous cross-device reflection whenever a checkmark or target is updated.
+ */
+export function subscribeToStudentWeeklyChecks(
+  studentUid: string,
+  studentEmail: string | undefined,
+  callback: (data: {
+    checks: Record<string, boolean>;
+    weeklyNativeLessonsTarget?: number;
+    weeklyStudyDaysTarget?: number;
+  }) => void
+): () => void {
+  const db = getDb();
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!db || !cleanUid) return () => {};
+
+  try {
+    const userRef = doc(db, 'users', cleanUid);
+    const unsub = onSnapshot(
+      userRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (
+            data?.weeklyChecks ||
+            data?.sPathChecks ||
+            data?.weeklyNativeLessonsTarget !== undefined ||
+            data?.weeklyStudyDaysTarget !== undefined
+          ) {
+            callback({
+              checks: data?.weeklyChecks || data?.sPathChecks || {},
+              weeklyNativeLessonsTarget: data?.weeklyNativeLessonsTarget,
+              weeklyStudyDaysTarget: data?.weeklyStudyDaysTarget,
+            });
+          }
+        }
+      },
+      (err) => {
+        console.warn('Real-time weeklyChecks notice:', err);
+      }
+    );
+    return unsub;
+  } catch {
+    return () => {};
+  }
 }
 
 /**
@@ -1399,13 +1459,13 @@ export async function saveStudentWeeklyChecksToFirestore(
   weeklyStudyDaysTarget?: number
 ): Promise<boolean> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
 
   try {
     const sanitizedChecks: Record<string, boolean> = JSON.parse(JSON.stringify(checks || {}));
 
-    // 1. Direct write to Firestore document users/{studentUID}
+    // 1. Direct write strictly to Firestore document users/{cleanUid}
     if (db && cleanUid) {
       const userRef = doc(db, 'users', cleanUid);
       const payload: Record<string, any> = {
@@ -1421,19 +1481,6 @@ export async function saveStudentWeeklyChecksToFirestore(
       }
 
       await withFirestoreTimeout(setDoc(userRef, payload, { merge: true }), 3500, null);
-
-      // If email differs from cleanUid, also mirror to email-based doc for multi-id lookup redundancy
-      if (cleanEmail) {
-        const emailDocId = normalizeUid(null, cleanEmail);
-        if (emailDocId && emailDocId !== cleanUid) {
-          const altRef = doc(db, 'users', emailDocId);
-          await withFirestoreTimeout(
-            setDoc(altRef, payload, { merge: true }),
-            2000,
-            null
-          );
-        }
-      }
     }
 
     // 2. Mirror to backend server API for disk persistence & multi-device sync
@@ -1470,10 +1517,10 @@ export async function fetchStudentWeeklyChecksFromFirestore(
   weeklyStudyDaysTarget?: number;
 }> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
 
-  // 1. Try reading directly from Firestore users/{studentUID}
+  // 1. Try reading directly strictly from Firestore users/{cleanUid}
   if (db && cleanUid) {
     try {
       const userRef = doc(db, 'users', cleanUid);
@@ -1493,21 +1540,32 @@ export async function fetchStudentWeeklyChecksFromFirestore(
     }
   }
 
-  // 2. Try email-based doc fallback
+  // 2. Check legacy email doc once if not found on cleanUid
   if (db && cleanEmail) {
-    const emailDocId = normalizeUid(null, cleanEmail);
-    if (emailDocId && emailDocId !== cleanUid) {
+    const legacyDocId = `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    if (legacyDocId !== cleanUid) {
       try {
-        const altRef = doc(db, 'users', emailDocId);
+        const altRef = doc(db, 'users', legacyDocId);
         const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
         if (altSnap && altSnap.exists()) {
           const altData = altSnap.data();
           if (altData?.weeklyChecks || altData?.sPathChecks) {
-            return {
+            const result = {
               checks: altData.weeklyChecks || altData.sPathChecks || {},
               weeklyNativeLessonsTarget: altData.weeklyNativeLessonsTarget,
               weeklyStudyDaysTarget: altData.weeklyStudyDaysTarget,
             };
+            // Migrate to cleanUid
+            if (cleanUid) {
+              setDoc(doc(db, 'users', cleanUid), {
+                weeklyChecks: result.checks,
+                sPathChecks: result.checks,
+                weeklyNativeLessonsTarget: result.weeklyNativeLessonsTarget,
+                weeklyStudyDaysTarget: result.weeklyStudyDaysTarget,
+                updatedAt: new Date().toISOString(),
+              }, { merge: true }).catch(() => {});
+            }
+            return result;
           }
         }
       } catch {}
@@ -1515,10 +1573,10 @@ export async function fetchStudentWeeklyChecksFromFirestore(
   }
 
   // 3. Fallback to server API
-  if (cleanEmail) {
+  if (cleanEmail || cleanUid) {
     try {
       const res = await fetch(
-        `/api/routines/weekly-checks?studentEmail=${encodeURIComponent(cleanEmail)}`
+        `/api/routines/weekly-checks?studentEmail=${encodeURIComponent(cleanEmail)}&uid=${encodeURIComponent(cleanUid)}`
       );
       if (res.ok) {
         const apiData = await res.json();
@@ -1734,15 +1792,6 @@ export async function recordActivityInStudentJournal(
       const entryRef = doc(db, 'users', cleanUid, 'studentJournal', sanitizedEntry.id);
       await withFirestoreTimeout(setDoc(entryRef, sanitizedEntry, { merge: true }), 2000, null);
 
-      // Also mirror to emailDocId if different for dual-device lookup resilience
-      if (cleanEmail) {
-        const emailDocId = normalizeUid(null, cleanEmail);
-        if (emailDocId && emailDocId !== cleanUid) {
-          const altRef = doc(db, 'users', emailDocId);
-          await withFirestoreTimeout(setDoc(altRef, payload, { merge: true }), 2000, null);
-        }
-      }
-
       // Mirror to server backend API
       fetch('/api/student-journal/activity', {
         method: 'POST',
@@ -1775,8 +1824,8 @@ export async function removeActivityFromStudentJournal(
   studentEmail?: string
 ): Promise<{ success: boolean; updatedJournal: StudentJournalEntry[] }> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
 
   try {
     let updatedJournal: StudentJournalEntry[] = [];
@@ -1818,15 +1867,6 @@ export async function removeActivityFromStudentJournal(
           }
         }
 
-        // Email doc mirror
-        if (cleanEmail) {
-          const emailDocId = normalizeUid(null, cleanEmail);
-          if (emailDocId && emailDocId !== cleanUid) {
-            const altRef = doc(db, 'users', emailDocId);
-            await withFirestoreTimeout(setDoc(altRef, payload, { merge: true }), 2000, null);
-          }
-        }
-
         // Mirror delete to server
         fetch('/api/student-journal/activity', {
           method: 'DELETE',
@@ -1858,8 +1898,8 @@ export async function fetchStudentJournalActivitiesFromFirestore(
   studentEmail?: string
 ): Promise<StudentJournalEntry[]> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
   if (!db || !cleanUid) return [];
 
   try {
@@ -1889,11 +1929,11 @@ export async function fetchStudentJournalActivitiesFromFirestore(
       });
     }
 
-    // 3. Fallback: check email doc if different
+    // 3. Fallback: check legacy email doc if different and migrate
     if (journalMap.size === 0 && cleanEmail) {
-      const emailDocId = normalizeUid(null, cleanEmail);
-      if (emailDocId !== cleanUid) {
-        const altRef = doc(db, 'users', emailDocId);
+      const legacyDocId = `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+      if (legacyDocId !== cleanUid) {
+        const altRef = doc(db, 'users', legacyDocId);
         const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
         if (altSnap && altSnap.exists()) {
           const altData = altSnap.data();
@@ -1901,6 +1941,13 @@ export async function fetchStudentJournalActivitiesFromFirestore(
             altData.studentJournal.forEach((entry: StudentJournalEntry) => {
               if (entry && entry.id) journalMap.set(entry.id, entry);
             });
+            // Migrate to cleanUid
+            if (journalMap.size > 0 && cleanUid) {
+              setDoc(doc(db, 'users', cleanUid), {
+                studentJournal: Array.from(journalMap.values()),
+                updatedAt: new Date().toISOString(),
+              }, { merge: true }).catch(() => {});
+            }
           }
         }
       }
@@ -2022,18 +2069,9 @@ export async function saveStudentHomeworkProgressToFirestore(
         3000,
         null
       );
-
-      // 4. Redundant mirror if email differs
-      if (cleanEmail) {
-        const emailDocId = normalizeUid(null, cleanEmail);
-        if (emailDocId && emailDocId !== cleanUid) {
-          const altDocRef = doc(db, 'users', emailDocId, 'homework', weekId);
-          await withFirestoreTimeout(setDoc(altDocRef, payload, { merge: true }), 2000, null);
-        }
-      }
     }
 
-    // 5. Mirror to server API for backup persistence
+    // 4. Mirror to server API for backup persistence
     if (cleanEmail || cleanUid) {
       fetch('/api/homework', {
         method: 'POST',
@@ -2056,7 +2094,7 @@ export async function saveStudentHomeworkProgressToFirestore(
 /**
  * Fetch student weekly homework and activity progress directly from Cloud Firestore.
  * Prioritizes Firestore users/{cleanUid}/homework/{weekId}, then users/{cleanUid}.weeklyHomework,
- * then top-level student_homework/{cleanUid}, with fallbacks to alternate email IDs and server API.
+ * then top-level student_homework/{cleanUid}.
  */
 export async function fetchStudentHomeworkProgressFromFirestore(
   studentUid: string,
@@ -2064,8 +2102,8 @@ export async function fetchStudentHomeworkProgressFromFirestore(
   weekId: string = 'current_week'
 ): Promise<WeeklyHomeworkData | null> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
 
   if (!db || !cleanUid) return null;
 
@@ -2100,22 +2138,7 @@ export async function fetchStudentHomeworkProgressFromFirestore(
       }
     }
 
-    // 4. Fallback: check email doc if different
-    if (cleanEmail) {
-      const emailDocId = normalizeUid(null, cleanEmail);
-      if (emailDocId && emailDocId !== cleanUid) {
-        const altRef = doc(db, 'users', emailDocId, 'homework', weekId);
-        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
-        if (altSnap && altSnap.exists()) {
-          const data = altSnap.data();
-          if (data && (data.completedPartsByDay || data.studentAnswers)) {
-            return data as WeeklyHomeworkData;
-          }
-        }
-      }
-    }
-
-    // 5. Server API fallback
+    // 4. Server API fallback
     if (cleanEmail || cleanUid) {
       try {
         const res = await fetch(`/api/homework?studentEmail=${encodeURIComponent(cleanEmail)}&uid=${encodeURIComponent(cleanUid)}`);
@@ -2151,23 +2174,206 @@ export function subscribeToStudentHomeworkProgress(
     return () => {};
   }
 
-  const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
-  const unsubscribe = onSnapshot(
-    hwDocRef,
-    (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data && (data.completedPartsByDay || data.studentAnswers || data.matchingPairs)) {
-          callback(data as WeeklyHomeworkData);
-        }
-      }
-    },
-    (err) => {
-      console.warn('Real-time notice for student homework listener:', err);
-    }
-  );
+  const unsubs: (() => void)[] = [];
 
-  return unsubscribe;
+  // 1. Subcollection users/{cleanUid}/homework/{weekId}
+  try {
+    const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
+    unsubs.push(
+      onSnapshot(
+        hwDocRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data && (data.completedPartsByDay || data.studentAnswers || data.matchingPairs)) {
+              callback(data as WeeklyHomeworkData);
+            }
+          }
+        },
+        (err) => {
+          console.warn('Real-time notice for student homework subcollection listener:', err);
+        }
+      )
+    );
+  } catch {}
+
+  // 2. Parent doc users/{cleanUid} field weeklyHomework
+  try {
+    const userRef = doc(db, 'users', cleanUid);
+    unsubs.push(
+      onSnapshot(
+        userRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (
+              data?.weeklyHomework &&
+              (data.weeklyHomework.completedPartsByDay ||
+                data.weeklyHomework.studentAnswers ||
+                data.weeklyHomework.matchingPairs)
+            ) {
+              callback(data.weeklyHomework as WeeklyHomeworkData);
+            }
+          }
+        },
+        () => {}
+      )
+    );
+  } catch {}
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}
+
+/**
+ * Real-time subscription to student daily journal entries (Sentence of the Day).
+ * Synchronizes instantly across devices when sentences are created, edited, or deleted.
+ */
+export function subscribeToStudentDailyJournal(
+  studentUid: string,
+  studentEmail: string | undefined,
+  callback: (entries: DailyJournalEntry[]) => void
+): () => void {
+  const db = getDb();
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!db || !cleanUid) return () => {};
+
+  const unsubscribers: (() => void)[] = [];
+  const journalMap = new Map<string, DailyJournalEntry>();
+
+  const rebuildAndNotify = () => {
+    const list = Array.from(journalMap.values());
+    list.sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.date).getTime();
+      const timeB = new Date(b.createdAt || b.date).getTime();
+      return timeB - timeA;
+    });
+    callback(list);
+  };
+
+  try {
+    const subCol = collection(db, 'users', cleanUid, 'journal');
+    unsubscribers.push(
+      onSnapshot(
+        subCol,
+        (snap) => {
+          journalMap.clear();
+          snap.forEach((d) => {
+            const item = d.data() as DailyJournalEntry;
+            if (item?.id) journalMap.set(item.id, item);
+          });
+          rebuildAndNotify();
+        },
+        () => {}
+      )
+    );
+
+    const userRef = doc(db, 'users', cleanUid);
+    unsubscribers.push(
+      onSnapshot(
+        userRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (Array.isArray(data?.dailyJournalEntries)) {
+              data.dailyJournalEntries.forEach((item: DailyJournalEntry) => {
+                if (item?.id) journalMap.set(item.id, item);
+              });
+              rebuildAndNotify();
+            }
+          }
+        },
+        () => {}
+      )
+    );
+  } catch {}
+
+  return () => {
+    unsubscribers.forEach((u) => u());
+  };
+}
+
+/**
+ * Delete a student daily journal entry directly from Cloud Firestore and sync across all devices.
+ */
+export async function deleteStudentJournalEntryFromFirestore(
+  studentUid: string,
+  entryId: string,
+  studentEmail?: string
+): Promise<boolean> {
+  const db = getDb();
+  if (!db || !entryId) return false;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!cleanUid) return false;
+
+  try {
+    // 1. Delete from subcollection
+    const entryRef = doc(db, 'users', cleanUid, 'journal', entryId);
+    await withFirestoreTimeout(deleteDoc(entryRef), 2000, null);
+
+    // 2. Remove from user profile doc dailyJournalEntries array
+    const userRef = doc(db, 'users', cleanUid);
+    const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+    if (userSnap && userSnap.exists()) {
+      const data = userSnap.data();
+      if (Array.isArray(data?.dailyJournalEntries)) {
+        const filtered = data.dailyJournalEntries.filter((e: DailyJournalEntry) => e.id !== entryId);
+        await withFirestoreTimeout(
+          setDoc(userRef, { dailyJournalEntries: filtered, updatedAt: new Date().toISOString() }, { merge: true }),
+          2000,
+          null
+        );
+      }
+    }
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${cleanUid}/journal/${entryId}`);
+    return false;
+  }
+}
+
+/**
+ * Real-time subscription to student daily routine video/topic selections across Monday-Sunday.
+ * Ensures that topic choices or custom video suggestions made on one device appear instantly on other devices.
+ */
+export function subscribeToStudentDailyRoutines(
+  studentUid: string,
+  callback: (routines: Partial<Record<DayOfWeek, any>>) => void
+): () => void {
+  const db = getDb();
+  const cleanUid = normalizeUid(studentUid);
+  if (!db || !cleanUid) return () => {};
+
+  const unsubs: (() => void)[] = [];
+  const routinesMap: Partial<Record<DayOfWeek, any>> = {};
+
+  const ALL_DAYS: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+  ALL_DAYS.forEach((day) => {
+    try {
+      const dayRef = doc(db, 'users', cleanUid, 'routines', day);
+      unsubs.push(
+        onSnapshot(
+          dayRef,
+          (snap) => {
+            if (snap.exists()) {
+              const data = snap.data();
+              routinesMap[day] = data;
+              callback({ ...routinesMap });
+            }
+          },
+          () => {}
+        )
+      );
+    } catch {}
+  });
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
 }
 
 
