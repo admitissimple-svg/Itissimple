@@ -62,8 +62,15 @@ export async function testConnection(): Promise<boolean> {
     await getDoc(testDoc);
     return true;
   } catch (error) {
-    console.warn('Firestore connection test notice:', error);
-    return false;
+    try {
+      const firestore = getDb();
+      const fallbackDoc = doc(firestore, 'test', 'ping');
+      await getDoc(fallbackDoc);
+      return true;
+    } catch {
+      console.warn('Firestore connection test notice:', error);
+      return false;
+    }
   }
 }
 

@@ -80,10 +80,36 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
       .sort((a, b) => new Date(a.startDateTime).getTime() - new Date(b.startDateTime).getTime());
   }, [lessons, studentEmail, studentUid]);
 
-  // Native Friend assigned to this student from userProfile or from scheduled/completed lessons
-  const fallbackTeacherFromLesson = studentLessons.find((l) => l.teacherEmail && (l.status === 'scheduled' || l.status === 'completed'));
-  const assignedTeacherEmail = (userProfile?.teacherEmail || fallbackTeacherFromLesson?.teacherEmail || '').toLowerCase().trim();
-  const assignedTeacherName = userProfile?.teacherName || fallbackTeacherFromLesson?.teacherName || '';
+  // Native Friend assigned to this student from userProfile or from scheduled lessons
+  const isCancelledOrUnenrolled = userProfile?.enrollmentStatus === 'cancelled' || userProfile?.enrollmentStatus === 'not_enrolled';
+  const disallowedTeacherEmails = [
+    'adm.itissimple@gmail.com',
+    'estilobeeforkids@gmail.com',
+    'adm.itssimple@gmail.com',
+    'estilobeeadm@gmail.com',
+    'admin@itissimple.com',
+  ];
+
+  const fallbackTeacherFromLesson = !isCancelledOrUnenrolled
+    ? studentLessons.find(
+        (l) =>
+          l.teacherEmail &&
+          l.status === 'scheduled' &&
+          !l.cancelledAt &&
+          !disallowedTeacherEmails.includes((l.teacherEmail || '').toLowerCase().trim())
+      )
+    : undefined;
+
+  const rawAssignedTeacherEmail = (userProfile?.teacherEmail || (!isCancelledOrUnenrolled && fallbackTeacherFromLesson?.teacherEmail) || '').toLowerCase().trim();
+  const rawAssignedTeacherName = userProfile?.teacherName || (!isCancelledOrUnenrolled && fallbackTeacherFromLesson?.teacherName) || '';
+
+  const assignedTeacherEmail = disallowedTeacherEmails.includes(rawAssignedTeacherEmail) || rawAssignedTeacherName.toLowerCase().includes('simple')
+    ? ''
+    : rawAssignedTeacherEmail;
+  const assignedTeacherName = disallowedTeacherEmails.includes(rawAssignedTeacherEmail) || rawAssignedTeacherName.toLowerCase().includes('simple')
+    ? ''
+    : rawAssignedTeacherName;
+
   const assignedTeacher = assignedTeacherEmail
     ? (teachers.find((tc) => tc.email.toLowerCase() === assignedTeacherEmail) || {
         name: assignedTeacherName || assignedTeacherEmail.split('@')[0],

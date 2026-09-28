@@ -18,6 +18,7 @@ import {
   StudentJournalActivityType,
   DayOfWeek,
   WeeklyHomeworkData,
+  UserProfile,
 } from '../types';
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
 
@@ -587,26 +588,393 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
 }
 
 /**
+ * Persist student's assigned Native Friend and enrollment status directly to Firestore.
+ * Updates all canonical user doc representations (UID, cleanEmail, emailDocId, hyphenDocId, usrDocId),
+ * ensuring immediate and permanent persistence across reloads.
+ */
+export async function saveStudentNativeFriendToFirestore(
+  studentUid: string,
+  studentEmail?: string,
+  teacherData?: {
+    teacherEmail?: string | null;
+    teacherName?: string | null;
+    teacherUid?: string | null;
+    assignedNativeFriendUID?: string | null;
+    nativeFriendUID?: string | null;
+    enrollmentStatus?: string;
+  }
+): Promise<boolean> {
+  const db = getDb();
+  if (!db) return false;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+  const usrDocId = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+
+  const cleanTeacherEmail = (teacherData?.teacherEmail || '').toLowerCase().trim();
+  const cleanTeacherUid =
+    teacherData?.teacherUid ||
+    teacherData?.assignedNativeFriendUID ||
+    teacherData?.nativeFriendUID ||
+    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+
+  const payload: Record<string, any> = {
+    teacherEmail: teacherData?.teacherEmail || null,
+    teacherName: teacherData?.teacherName || null,
+    teacherUid: cleanTeacherUid || null,
+    assignedNativeFriendUID: cleanTeacherUid || null,
+    nativeFriendUID: cleanTeacherUid || null,
+    enrollmentStatus: teacherData?.enrollmentStatus || (cleanTeacherEmail ? 'active' : 'cancelled'),
+    status: teacherData?.enrollmentStatus || (cleanTeacherEmail ? 'active' : 'cancelled'),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId, usrDocId, cleanEmail].filter(Boolean)));
+  try {
+    const promises = targetDocIds.map((docId) =>
+      withFirestoreTimeout(setDoc(doc(db, 'users', docId), payload, { merge: true }), 3000, null)
+    );
+    await Promise.all(promises);
+
+    // Also update any other docs matching this email in users collection
+    if (cleanEmail) {
+      try {
+        const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const qSnap = await withFirestoreTimeout(getDocs(qUsers), 2500, null);
+        if (qSnap && !qSnap.empty) {
+          const extraPromises = qSnap.docs.map((d) =>
+            withFirestoreTimeout(setDoc(d.ref, payload, { merge: true }), 2500, null)
+          );
+          await Promise.all(extraPromises);
+        }
+      } catch {}
+    }
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
+    return false;
+  }
+}
+
+/**
+ * Persist the entire student profile directly to Firestore across all canonical user document IDs.
+ */
+export async function saveStudentProfileToFirestore(
+  studentUid: string,
+  profile: Partial<UserProfile>,
+  studentEmail?: string
+): Promise<boolean> {
+  const db = getDb();
+  if (!db) return false;
+  const cleanEmail = (profile.email || studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+  const usrDocId = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+
+  const cleanTeacherEmail = (profile.teacherEmail || '').toLowerCase().trim();
+  const cleanTeacherUid =
+    profile.teacherUid ||
+    profile.assignedNativeFriendUID ||
+    profile.nativeFriendUID ||
+    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+
+  const sanitized = JSON.parse(JSON.stringify(profile));
+  const payload: Record<string, any> = {
+    ...sanitized,
+    id: cleanUid,
+    uid: cleanUid,
+    email: cleanEmail,
+    teacherEmail: profile.teacherEmail !== undefined ? (profile.teacherEmail || null) : null,
+    teacherName: profile.teacherName !== undefined ? (profile.teacherName || null) : null,
+    teacherUid: cleanTeacherUid || null,
+    assignedNativeFriendUID: cleanTeacherUid || null,
+    nativeFriendUID: cleanTeacherUid || null,
+    enrollmentStatus: profile.enrollmentStatus || (cleanTeacherEmail ? 'active' : 'not_enrolled'),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const targetDocIds = Array.from(new Set([cleanUid, emailDocId, hyphenDocId, usrDocId, cleanEmail].filter(Boolean)));
+  try {
+    const promises = targetDocIds.map((docId) =>
+      withFirestoreTimeout(setDoc(doc(db, 'users', docId), payload, { merge: true }), 3000, null)
+    );
+    await Promise.all(promises);
+
+    // Also update any other docs matching this email in users collection
+    if (cleanEmail) {
+      try {
+        const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const qSnap = await withFirestoreTimeout(getDocs(qUsers), 2500, null);
+        if (qSnap && !qSnap.empty) {
+          const extraPromises = qSnap.docs.map((d) =>
+            withFirestoreTimeout(setDoc(d.ref, payload, { merge: true }), 2500, null)
+          );
+          await Promise.all(extraPromises);
+        }
+      } catch {}
+    }
+
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
+    return false;
+  }
+}
+
+/**
+ * Fetch student profile directly from Firestore users/{studentUid}.
+ * Searches across all canonical document IDs and merges fields so that
+ * assigned Native Friend (e.g. Charles) is never lost due to an unpopulated document shell.
+ */
+export async function fetchStudentProfileFromFirestore(
+  studentUid: string,
+  studentEmail?: string
+): Promise<Partial<UserProfile> | null> {
+  const db = getDb();
+  if (!db) return null;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  const emailDocId = cleanEmail ? normalizeUid(null, cleanEmail) : '';
+  const hyphenDocId = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+  const usrDocId = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+
+  const targetDocIds = Array.from(new Set([cleanUid, usrDocId, emailDocId, hyphenDocId, cleanEmail].filter(Boolean)));
+  try {
+    let mergedProfile: Partial<UserProfile> | null = null;
+
+    for (const docId of targetDocIds) {
+      const snap = await withFirestoreTimeout(getDoc(doc(db, 'users', docId)), 2500, null);
+      if (snap && snap.exists()) {
+        const data = snap.data() as Partial<UserProfile>;
+        if (data && (data.email || data.name || data.teacherEmail !== undefined)) {
+          if (!mergedProfile) {
+            mergedProfile = { ...data };
+          } else {
+            // Merge fields: if this doc has teacherEmail, prioritize it
+            if (data.teacherEmail && !mergedProfile.teacherEmail) {
+              mergedProfile.teacherEmail = data.teacherEmail;
+              mergedProfile.teacherName = data.teacherName || mergedProfile.teacherName;
+              mergedProfile.teacherUid = data.teacherUid || mergedProfile.teacherUid;
+              mergedProfile.assignedNativeFriendUID = data.assignedNativeFriendUID || mergedProfile.assignedNativeFriendUID;
+              mergedProfile.nativeFriendUID = data.nativeFriendUID || mergedProfile.nativeFriendUID;
+              mergedProfile.enrollmentStatus = data.enrollmentStatus || mergedProfile.enrollmentStatus;
+            } else if (data.updatedAt && mergedProfile.updatedAt && new Date(data.updatedAt) > new Date(mergedProfile.updatedAt)) {
+              mergedProfile = { ...mergedProfile, ...data };
+            } else {
+              mergedProfile = { ...data, ...mergedProfile };
+            }
+          }
+        }
+      }
+    }
+
+    // Also check query by email if teacherEmail still missing
+    if (cleanEmail && (!mergedProfile || !mergedProfile.teacherEmail)) {
+      try {
+        const qUsers = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const qSnap = await withFirestoreTimeout(getDocs(qUsers), 2500, null);
+        if (qSnap && !qSnap.empty) {
+          for (const d of qSnap.docs) {
+            const data = d.data() as Partial<UserProfile>;
+            if (data && data.teacherEmail) {
+              mergedProfile = { ...(mergedProfile || {}), ...data };
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return mergedProfile;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${cleanUid}`);
+    return null;
+  }
+}
+
+/**
  * Update an existing lesson in Firestore.
+ * Automatically mirrors the updated or cancelled status across root `lessons`,
+ * the student's subcollection `users/{studentUid}/lessons`, user doc `scheduledLessons`,
+ * teacher subcollection, and eliminates any duplicate/conflicting active slots.
  */
 export async function updateLiveLessonInFirestore(
   lessonId: string,
   updates: Partial<LiveLesson>,
-  studentUid?: string
+  studentUid?: string,
+  teacherUid?: string,
+  lessonData?: Partial<LiveLesson>,
+  studentEmail?: string
 ): Promise<boolean> {
   const db = getDb();
   if (!db || !lessonId) return false;
 
   try {
     const sanitized = JSON.parse(JSON.stringify(updates));
-    const lessonRef = doc(db, 'lessons', lessonId);
-    await withFirestoreTimeout(setDoc(lessonRef, sanitized, { merge: true }), 3000, null);
+    const nowIso = new Date().toISOString();
+    const isCancelling = sanitized.status === 'cancelled' || sanitized.status === 'canceled' || Boolean(sanitized.cancelledAt);
+    const fullUpdates = {
+      ...sanitized,
+      ...(isCancelling ? { status: 'cancelled', cancelledAt: sanitized.cancelledAt || nowIso } : {}),
+      updatedAt: nowIso,
+    };
 
-    if (studentUid) {
-      const cleanUid = normalizeUid(studentUid);
-      const userLessonRef = doc(db, 'users', cleanUid, 'lessons', lessonId);
-      await withFirestoreTimeout(setDoc(userLessonRef, sanitized, { merge: true }), 2500, null);
+    // 1. Fetch current lesson doc if studentUid or teacherUid is missing
+    let effStudentUid = studentUid ? normalizeUid(studentUid, studentEmail) : '';
+    let effStudentEmail = (studentEmail || '').toLowerCase().trim();
+    let effTeacherUid = teacherUid ? normalizeUid(teacherUid) : '';
+    let effTeacherEmail = (lessonData?.teacherEmail || '').toLowerCase().trim();
+    let effStartDateTime = lessonData?.startDateTime || '';
+
+    const lessonRef = doc(db, 'lessons', lessonId);
+    const lessonSnap = await withFirestoreTimeout(getDoc(lessonRef), 2000, null);
+    if (lessonSnap && lessonSnap.exists()) {
+      const lData = lessonSnap.data();
+      if (!effStudentUid && lData.studentUid) effStudentUid = normalizeUid(lData.studentUid, lData.studentEmail);
+      if (!effStudentEmail && lData.studentEmail) effStudentEmail = (lData.studentEmail || '').toLowerCase().trim();
+      if (!effTeacherUid && lData.teacherUid) effTeacherUid = normalizeUid(lData.teacherUid, lData.teacherEmail);
+      if (!effTeacherEmail && lData.teacherEmail) effTeacherEmail = (lData.teacherEmail || '').toLowerCase().trim();
+      if (!effStartDateTime && lData.startDateTime) effStartDateTime = lData.startDateTime;
+    } else if (lessonData) {
+      if (!effStudentUid && lessonData.studentUid) effStudentUid = normalizeUid(lessonData.studentUid, lessonData.studentEmail);
+      if (!effStudentEmail && lessonData.studentEmail) effStudentEmail = (lessonData.studentEmail || '').toLowerCase().trim();
+      if (!effTeacherUid && lessonData.teacherUid) effTeacherUid = normalizeUid(lessonData.teacherUid, lessonData.teacherEmail);
+      if (!effTeacherEmail && lessonData.teacherEmail) effTeacherEmail = (lessonData.teacherEmail || '').toLowerCase().trim();
+      if (!effStartDateTime && lessonData.startDateTime) effStartDateTime = lessonData.startDateTime;
     }
+
+    // 2. Prepare complete root lesson payload
+    const rootPayload = {
+      ...(lessonData || {}),
+      id: lessonId,
+      ...(effStudentUid ? { studentUid: effStudentUid } : {}),
+      ...(effStudentEmail ? { studentEmail: effStudentEmail } : {}),
+      ...(effTeacherUid ? { teacherUid: effTeacherUid } : {}),
+      ...(effTeacherEmail ? { teacherEmail: effTeacherEmail } : {}),
+      ...(effStartDateTime ? { startDateTime: effStartDateTime } : {}),
+      ...fullUpdates,
+    };
+
+    // Update root lessons/{lessonId}
+    await withFirestoreTimeout(setDoc(lessonRef, rootPayload, { merge: true }), 3000, null);
+
+    // 3. Update student subcollection and scheduledLessons array across all canonical doc IDs
+    const studentDocIds = Array.from(
+      new Set(
+        [
+          effStudentUid,
+          effStudentEmail,
+          effStudentEmail ? normalizeUid(null, effStudentEmail) : '',
+          effStudentEmail ? effStudentEmail.replace(/[^a-zA-Z0-9]/g, '-') : '',
+          effStudentEmail ? `usr-${effStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '',
+        ].filter(Boolean)
+      )
+    );
+
+    for (const docId of studentDocIds) {
+      try {
+        const userLessonRef = doc(db, 'users', docId, 'lessons', lessonId);
+        await withFirestoreTimeout(setDoc(userLessonRef, rootPayload, { merge: true }), 2500, null);
+
+        // Also update scheduledLessons array on student user doc
+        const userRef = doc(db, 'users', docId);
+        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        if (userSnap && userSnap.exists()) {
+          const uData = userSnap.data();
+          if (Array.isArray(uData?.scheduledLessons)) {
+            let updatedScheduled: LiveLesson[];
+            if (isCancelling) {
+              // Remove cancelled lesson from scheduledLessons array permanently so it never reappears on reload
+              updatedScheduled = uData.scheduledLessons.filter((l: LiveLesson) => l.id !== lessonId);
+            } else {
+              updatedScheduled = uData.scheduledLessons.map((l: LiveLesson) =>
+                l.id === lessonId ? { ...l, ...fullUpdates } : l
+              );
+            }
+            await withFirestoreTimeout(
+              setDoc(userRef, { scheduledLessons: updatedScheduled, updatedAt: nowIso }, { merge: true }),
+              2000,
+              null
+            );
+          }
+        }
+      } catch (subErr) {
+        console.warn(`Notice updating student doc ${docId} for lesson:`, subErr);
+      }
+    }
+
+    // 4. Update teacher subcollection and scheduledLessons array if applicable
+    const teacherDocIds = Array.from(
+      new Set(
+        [
+          effTeacherUid,
+          effTeacherEmail,
+          effTeacherEmail ? normalizeUid(null, effTeacherEmail) : '',
+          effTeacherEmail ? effTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-') : '',
+          effTeacherEmail ? `usr-${effTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '',
+        ].filter(Boolean)
+      )
+    );
+
+    for (const tDocId of teacherDocIds) {
+      try {
+        const teacherLessonRef = doc(db, 'users', tDocId, 'lessons', lessonId);
+        await withFirestoreTimeout(setDoc(teacherLessonRef, rootPayload, { merge: true }), 2000, null);
+
+        const tUserRef = doc(db, 'users', tDocId);
+        const tUserSnap = await withFirestoreTimeout(getDoc(tUserRef), 2000, null);
+        if (tUserSnap && tUserSnap.exists()) {
+          const tData = tUserSnap.data();
+          if (Array.isArray(tData?.scheduledLessons)) {
+            const updatedScheduled = isCancelling
+              ? tData.scheduledLessons.filter((l: LiveLesson) => l.id !== lessonId)
+              : tData.scheduledLessons.map((l: LiveLesson) => (l.id === lessonId ? { ...l, ...fullUpdates } : l));
+            await withFirestoreTimeout(
+              setDoc(tUserRef, { scheduledLessons: updatedScheduled, updatedAt: nowIso }, { merge: true }),
+              2000,
+              null
+            );
+          }
+        }
+      } catch {}
+    }
+
+    // 5. If cancelling, also cancel any duplicate root lesson entries for this student at the same startDateTime
+    if (isCancelling && effStudentEmail && effStartDateTime) {
+      try {
+        const qDuplicate = query(
+          collection(db, 'lessons'),
+          where('studentEmail', '==', effStudentEmail),
+          where('startDateTime', '==', effStartDateTime)
+        );
+        const dupSnap = await withFirestoreTimeout(getDocs(qDuplicate), 2000, null);
+        if (dupSnap && !dupSnap.empty) {
+          for (const d of dupSnap.docs) {
+            if (d.id !== lessonId) {
+              await withFirestoreTimeout(
+                setDoc(
+                  d.ref,
+                  {
+                    status: 'cancelled',
+                    cancelledAt: nowIso,
+                    cancelledBy: fullUpdates.cancelledBy || 'user',
+                    cancellationReason: fullUpdates.cancellationReason || 'Cancelled',
+                    updatedAt: nowIso,
+                  },
+                  { merge: true }
+                ),
+                1500,
+                null
+              );
+            }
+          }
+        }
+      } catch {}
+    }
+
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `lessons/${lessonId}`);
@@ -615,23 +983,63 @@ export async function updateLiveLessonInFirestore(
 }
 
 /**
- * Delete a lesson in Firestore.
+ * Delete a lesson in Firestore permanently.
  */
 export async function deleteLiveLessonFromFirestore(
   lessonId: string,
-  studentUid?: string
+  studentUid?: string,
+  studentEmail?: string
 ): Promise<boolean> {
   const db = getDb();
   if (!db || !lessonId) return false;
 
   try {
+    let effStudentUid = studentUid ? normalizeUid(studentUid, studentEmail) : '';
+    let effStudentEmail = (studentEmail || '').toLowerCase().trim();
     const lessonRef = doc(db, 'lessons', lessonId);
+    if (!effStudentUid) {
+      const lessonSnap = await withFirestoreTimeout(getDoc(lessonRef), 2000, null);
+      if (lessonSnap && lessonSnap.exists()) {
+        const lData = lessonSnap.data();
+        effStudentUid = normalizeUid(lData.studentUid, lData.studentEmail);
+        if (!effStudentEmail && lData.studentEmail) effStudentEmail = (lData.studentEmail || '').toLowerCase().trim();
+      }
+    }
+
     await withFirestoreTimeout(deleteDoc(lessonRef), 2500, null);
 
-    if (studentUid) {
-      const cleanUid = normalizeUid(studentUid);
-      const userLessonRef = doc(db, 'users', cleanUid, 'lessons', lessonId);
-      await withFirestoreTimeout(deleteDoc(userLessonRef), 2000, null);
+    const studentDocIds = Array.from(
+      new Set(
+        [
+          effStudentUid,
+          effStudentEmail,
+          effStudentEmail ? normalizeUid(null, effStudentEmail) : '',
+          effStudentEmail ? effStudentEmail.replace(/[^a-zA-Z0-9]/g, '-') : '',
+          effStudentEmail ? `usr-${effStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '',
+        ].filter(Boolean)
+      )
+    );
+
+    for (const docId of studentDocIds) {
+      try {
+        const userLessonRef = doc(db, 'users', docId, 'lessons', lessonId);
+        await withFirestoreTimeout(deleteDoc(userLessonRef), 2000, null);
+
+        // Remove from user doc scheduledLessons
+        const userRef = doc(db, 'users', docId);
+        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        if (userSnap && userSnap.exists()) {
+          const uData = userSnap.data();
+          if (Array.isArray(uData?.scheduledLessons)) {
+            const filtered = uData.scheduledLessons.filter((l: LiveLesson) => l.id !== lessonId);
+            await withFirestoreTimeout(
+              setDoc(userRef, { scheduledLessons: filtered, updatedAt: new Date().toISOString() }, { merge: true }),
+              2000,
+              null
+            );
+          }
+        }
+      } catch {}
     }
     return true;
   } catch (error) {
@@ -641,85 +1049,161 @@ export async function deleteLiveLessonFromFirestore(
 }
 
 /**
- * Fetch all lessons for a student directly from Firestore.
+ * Fetch all lessons for a student or teacher directly from Firestore.
+ * Supports both student and teacher queries, prioritizing root `lessons` and
+ * ensuring cancelled status is never overwritten by stale local snapshots.
  */
 export async function fetchStudentLessonsFromFirestore(
-  studentUid: string,
-  studentEmail?: string
+  uid: string,
+  email?: string,
+  isTeacher?: boolean
 ): Promise<LiveLesson[]> {
   const db = getDb();
-  const cleanUid = normalizeUid(studentUid, studentEmail);
-  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(uid, email);
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const hyphenUid = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+  const rawHyphen = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
   if (!db) return [];
 
   try {
     const lessonsMap = new Map<string, LiveLesson>();
 
-    // 1. Query root collection by studentUid
+    const addOrUpdate = (item: LiveLesson) => {
+      if (!item || !item.id) return;
+      const isItemCancelled = item.status === 'cancelled' || (item.status as string) === 'canceled' || Boolean(item.cancelledAt);
+      const normalizedItem: LiveLesson = {
+        ...item,
+        ...(isItemCancelled ? { status: 'cancelled', cancelledAt: item.cancelledAt || new Date().toISOString() } : {}),
+      };
+
+      const existing = lessonsMap.get(normalizedItem.id);
+      if (existing) {
+        // Strict invariant: If existing or item is cancelled, strictly keep cancelled!
+        const isCancelled = existing.status === 'cancelled' || normalizedItem.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(normalizedItem.cancelledAt);
+        const cancelledAt = existing.cancelledAt || normalizedItem.cancelledAt;
+        const cancelledBy = existing.cancelledBy || normalizedItem.cancelledBy;
+        const cancellationReason = existing.cancellationReason || normalizedItem.cancellationReason;
+        const merged: LiveLesson = { ...existing, ...normalizedItem };
+        if (isCancelled) {
+          merged.status = 'cancelled';
+          merged.cancelledAt = cancelledAt || new Date().toISOString();
+          if (cancelledBy) merged.cancelledBy = cancelledBy;
+          if (cancellationReason) merged.cancellationReason = cancellationReason;
+        }
+        lessonsMap.set(normalizedItem.id, merged);
+      } else {
+        lessonsMap.set(normalizedItem.id, normalizedItem);
+      }
+    };
+
+    // 1. If teacher or admin, query root lessons by teacherUid / teacherEmail
+    if (isTeacher) {
+      if (cleanUid) {
+        try {
+          const qTeacherUid = query(collection(db, 'lessons'), where('teacherUid', '==', cleanUid));
+          const snap = await withFirestoreTimeout(getDocs(qTeacherUid), 2500, null);
+          if (snap && !snap.empty) {
+            snap.forEach((d) => addOrUpdate(d.data() as LiveLesson));
+          }
+        } catch {}
+      }
+      if (cleanEmail) {
+        try {
+          const qTeacherEmail = query(collection(db, 'lessons'), where('teacherEmail', '==', cleanEmail));
+          const snap = await withFirestoreTimeout(getDocs(qTeacherEmail), 2500, null);
+          if (snap && !snap.empty) {
+            snap.forEach((d) => addOrUpdate(d.data() as LiveLesson));
+          }
+        } catch {}
+      }
+      if (hyphenUid && hyphenUid !== cleanUid) {
+        try {
+          const qTeacherHyphen = query(collection(db, 'lessons'), where('teacherUid', '==', hyphenUid));
+          const snap = await withFirestoreTimeout(getDocs(qTeacherHyphen), 2500, null);
+          if (snap && !snap.empty) {
+            snap.forEach((d) => addOrUpdate(d.data() as LiveLesson));
+          }
+        } catch {}
+      }
+    }
+
+    // 2. Query root collection by studentUid
     if (cleanUid) {
       try {
         const qUid = query(collection(db, 'lessons'), where('studentUid', '==', cleanUid));
         const snapUid = await withFirestoreTimeout(getDocs(qUid), 2500, null);
         if (snapUid && !snapUid.empty) {
-          snapUid.forEach((d) => {
-            const lesson = d.data() as LiveLesson;
-            if (lesson?.id) lessonsMap.set(lesson.id, lesson);
-          });
+          snapUid.forEach((d) => addOrUpdate(d.data() as LiveLesson));
         }
-      } catch (err) {
-        // Fall back to subcollection or email query
-      }
+      } catch {}
     }
 
-    // 2. Query root collection by studentEmail
+    // 3. Query root collection by studentEmail
     if (cleanEmail) {
       try {
         const qEmail = query(collection(db, 'lessons'), where('studentEmail', '==', cleanEmail));
         const snapEmail = await withFirestoreTimeout(getDocs(qEmail), 2500, null);
         if (snapEmail && !snapEmail.empty) {
-          snapEmail.forEach((d) => {
-            const lesson = d.data() as LiveLesson;
-            if (lesson?.id) lessonsMap.set(lesson.id, lesson);
-          });
+          snapEmail.forEach((d) => addOrUpdate(d.data() as LiveLesson));
         }
-      } catch (err) {
-        // Fall back
-      }
+      } catch {}
     }
 
-    // 3. Query student's subcollection `users/{cleanUid}/lessons`
-    if (cleanUid) {
+    // 3b. Query root collection by hyphenUid (legacy format e.g. usr-reginahelena1980-gmail-com)
+    if (hyphenUid && hyphenUid !== cleanUid) {
       try {
-        const subCol = collection(db, 'users', cleanUid, 'lessons');
+        const qHyphen = query(collection(db, 'lessons'), where('studentUid', '==', hyphenUid));
+        const snapHyphen = await withFirestoreTimeout(getDocs(qHyphen), 2500, null);
+        if (snapHyphen && !snapHyphen.empty) {
+          snapHyphen.forEach((d) => addOrUpdate(d.data() as LiveLesson));
+        }
+      } catch {}
+    }
+
+    // 4. Query student's subcollection users/{cleanUid}/lessons
+    const targetStudentDocIds = Array.from(new Set([cleanUid, hyphenUid, rawHyphen, cleanEmail].filter(Boolean)));
+    for (const sDocId of targetStudentDocIds) {
+      try {
+        const subCol = collection(db, 'users', sDocId, 'lessons');
         const subSnap = await withFirestoreTimeout(getDocs(subCol), 2000, null);
         if (subSnap && !subSnap.empty) {
-          subSnap.forEach((d) => {
-            const lesson = d.data() as LiveLesson;
-            if (lesson?.id) lessonsMap.set(lesson.id, lesson);
-          });
+          subSnap.forEach((d) => addOrUpdate(d.data() as LiveLesson));
         }
-      } catch (err) {
-        // Ignore
-      }
-    }
+      } catch {}
 
-    // 4. Query user doc scheduledLessons
-    if (cleanUid) {
+      // 5. Query user doc scheduledLessons
       try {
-        const userRef = doc(db, 'users', cleanUid);
+        const userRef = doc(db, 'users', sDocId);
         const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
         if (userSnap && userSnap.exists()) {
           const data = userSnap.data();
           if (Array.isArray(data?.scheduledLessons)) {
-            data.scheduledLessons.forEach((l: LiveLesson) => {
-              if (l?.id) lessonsMap.set(l.id, l);
-            });
+            data.scheduledLessons.forEach((l: LiveLesson) => addOrUpdate(l));
           }
         }
-      } catch (err) {
-        // Ignore
-      }
+      } catch {}
     }
+
+    // Invariant: If a student has a cancelled lesson at a specific startDateTime,
+    // any duplicate active lesson at that startDateTime must also be marked cancelled!
+    const cancelledSlots = new Set<string>();
+    lessonsMap.forEach((l) => {
+      if (l.status === 'cancelled' || l.cancelledAt) {
+        const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
+        cancelledSlots.add(slotKey);
+      }
+    });
+
+    lessonsMap.forEach((l, id) => {
+      const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
+      if (cancelledSlots.has(slotKey) && l.status !== 'cancelled') {
+        lessonsMap.set(id, {
+          ...l,
+          status: 'cancelled',
+          cancelledAt: l.cancelledAt || new Date().toISOString(),
+        });
+      }
+    });
 
     const list = Array.from(lessonsMap.values());
     list.sort((a, b) => {
@@ -733,6 +1217,171 @@ export async function fetchStudentLessonsFromFirestore(
     handleFirestoreError(error, OperationType.LIST, 'lessons');
     return [];
   }
+}
+
+/**
+ * Subscribe to real-time lessons updates in Firestore for a student or teacher.
+ */
+export function subscribeToStudentLessons(
+  studentUid: string,
+  studentEmail: string | undefined,
+  isTeacher: boolean,
+  callback: (lessons: LiveLesson[]) => void
+): () => void {
+  const db = getDb();
+  if (!db) return () => {};
+  const cleanUid = normalizeUid(studentUid, studentEmail);
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const hyphenUid = cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+
+  const unsubscribers: (() => void)[] = [];
+  const lessonsMap = new Map<string, LiveLesson>();
+
+  const processSnap = (snap: any) => {
+    snap.docChanges().forEach((change: any) => {
+      const data = change.doc.data() as LiveLesson;
+      const lessonId = data.id || change.doc.id;
+      if (change.type === 'removed') {
+        lessonsMap.delete(lessonId);
+      } else {
+        const isCancelled = data.status === 'cancelled' || (data.status as string) === 'canceled' || Boolean(data.cancelledAt);
+        const item: LiveLesson = {
+          ...data,
+          id: lessonId,
+          ...(isCancelled ? { status: 'cancelled', cancelledAt: data.cancelledAt || new Date().toISOString() } : {}),
+        };
+        const existing = lessonsMap.get(lessonId);
+        if (existing) {
+          const finalCancelled = existing.status === 'cancelled' || item.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(item.cancelledAt);
+          const cancelledAt = existing.cancelledAt || item.cancelledAt;
+          const cancelledBy = existing.cancelledBy || item.cancelledBy;
+          const cancellationReason = existing.cancellationReason || item.cancellationReason;
+          const merged: LiveLesson = { ...existing, ...item };
+          if (finalCancelled) {
+            merged.status = 'cancelled';
+            merged.cancelledAt = cancelledAt || new Date().toISOString();
+            if (cancelledBy) merged.cancelledBy = cancelledBy;
+            if (cancellationReason) merged.cancellationReason = cancellationReason;
+          }
+          lessonsMap.set(lessonId, merged);
+        } else {
+          lessonsMap.set(lessonId, item);
+        }
+      }
+    });
+
+    // Cross-deduplicate cancelled slots
+    const cancelledSlots = new Set<string>();
+    lessonsMap.forEach((l) => {
+      if (l.status === 'cancelled' || l.cancelledAt) {
+        const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
+        cancelledSlots.add(slotKey);
+      }
+    });
+
+    lessonsMap.forEach((l, id) => {
+      const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
+      if (cancelledSlots.has(slotKey) && l.status !== 'cancelled') {
+        lessonsMap.set(id, {
+          ...l,
+          status: 'cancelled',
+          cancelledAt: l.cancelledAt || new Date().toISOString(),
+        });
+      }
+    });
+
+    const list = Array.from(lessonsMap.values());
+    list.sort((a, b) => {
+      const tA = new Date(a.startDateTime).getTime();
+      const tB = new Date(b.startDateTime).getTime();
+      return tB - tA;
+    });
+    callback(list);
+  };
+
+  try {
+    if (isTeacher) {
+      if (cleanEmail) {
+        const qEmail = query(collection(db, 'lessons'), where('teacherEmail', '==', cleanEmail));
+        unsubscribers.push(onSnapshot(qEmail, processSnap, (err) => console.warn('Teacher lessons snapshot notice:', err)));
+      }
+      if (cleanUid) {
+        const qUid = query(collection(db, 'lessons'), where('teacherUid', '==', cleanUid));
+        unsubscribers.push(onSnapshot(qUid, processSnap, (err) => console.warn('Teacher UID lessons snapshot notice:', err)));
+      }
+      if (hyphenUid && hyphenUid !== cleanUid) {
+        const qHyphen = query(collection(db, 'lessons'), where('teacherUid', '==', hyphenUid));
+        unsubscribers.push(onSnapshot(qHyphen, processSnap, (err) => console.warn('Teacher hyphen lessons snapshot notice:', err)));
+      }
+    } else {
+      if (cleanEmail) {
+        const qEmail = query(collection(db, 'lessons'), where('studentEmail', '==', cleanEmail));
+        unsubscribers.push(onSnapshot(qEmail, processSnap, (err) => console.warn('Student email lessons snapshot notice:', err)));
+      }
+      if (cleanUid) {
+        const qUid = query(collection(db, 'lessons'), where('studentUid', '==', cleanUid));
+        unsubscribers.push(onSnapshot(qUid, processSnap, (err) => console.warn('Student UID lessons snapshot notice:', err)));
+      }
+      if (hyphenUid && hyphenUid !== cleanUid) {
+        const qHyphen = query(collection(db, 'lessons'), where('studentUid', '==', hyphenUid));
+        unsubscribers.push(onSnapshot(qHyphen, processSnap, (err) => console.warn('Student hyphen lessons snapshot notice:', err)));
+      }
+    }
+  } catch (err) {
+    console.warn('subscribeToStudentLessons init notice:', err);
+  }
+
+  return () => {
+    unsubscribers.forEach((unsub) => unsub());
+  };
+}
+
+/**
+ * Subscribe to real-time student profile updates in Firestore across all canonical doc IDs.
+ */
+export function subscribeToStudentProfile(
+  studentUid: string,
+  studentEmail: string | undefined,
+  callback: (profile: Partial<UserProfile>) => void
+): () => void {
+  const db = getDb();
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!db || !cleanUid) return () => {};
+
+  const unsubscribers: (() => void)[] = [];
+  const targetDocIds = Array.from(
+    new Set([
+      cleanUid,
+      cleanEmail,
+      cleanEmail ? normalizeUid(null, cleanEmail) : '',
+      cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '',
+      cleanEmail ? `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '',
+    ].filter(Boolean))
+  );
+
+  targetDocIds.forEach((docId) => {
+    try {
+      const userRef = doc(db, 'users', docId);
+      const unsub = onSnapshot(
+        userRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data && (data.teacherEmail !== undefined || data.enrollmentStatus || data.name)) {
+              callback(data as Partial<UserProfile>);
+            }
+          }
+        },
+        (err) => console.warn(`subscribeToStudentProfile notice for ${docId}:`, err)
+      );
+      unsubscribers.push(unsub);
+    } catch {}
+  });
+
+  return () => {
+    unsubscribers.forEach((unsub) => unsub());
+  };
 }
 
 /**

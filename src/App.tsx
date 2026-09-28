@@ -99,6 +99,11 @@ import {
   updateLiveLessonInFirestore,
   deleteLiveLessonFromFirestore,
   fetchStudentLessonsFromFirestore,
+  subscribeToStudentLessons,
+  saveStudentNativeFriendToFirestore,
+  saveStudentProfileToFirestore,
+  fetchStudentProfileFromFirestore,
+  subscribeToStudentProfile,
   saveStudentWeeklyChecksToFirestore,
   fetchStudentWeeklyChecksFromFirestore,
   recordActivityInStudentJournal,
@@ -416,9 +421,8 @@ export default function App() {
   useEffect(() => {
     async function loadInitialData() {
       try {
-        const [routinesRes, lessonsRes, studentsRes, settingsRes, landingRes, tutorsRes] = await Promise.all([
+        const [routinesRes, studentsRes, settingsRes, landingRes, tutorsRes] = await Promise.all([
           fetch('/api/routines').catch(() => null),
-          fetch('/api/lessons').catch(() => null),
           fetch('/api/students').catch(() => null),
           fetch('/api/teacher-settings').catch(() => null),
           fetch('/api/landing-content').catch(() => null),
@@ -429,13 +433,6 @@ export default function App() {
           const data = await routinesRes.json();
           if (data && typeof data === 'object' && Object.keys(data).length > 0) {
             setRoutinesByDay(data);
-          }
-        }
-
-        if (lessonsRes && lessonsRes.ok) {
-          const data = await lessonsRes.json();
-          if (Array.isArray(data)) {
-            setLessons(data);
           }
         }
 
@@ -721,31 +718,59 @@ export default function App() {
     const uid = currentAccount.uid || '';
     const queryParams = `email=${encodeURIComponent(email)}&role=${encodeURIComponent(role)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`;
 
-    // 1. Fetch user-isolated lessons directly from Firestore + API
-    fetchStudentLessonsFromFirestore(uid, email).then((fsLessons) => {
-      if (Array.isArray(fsLessons) && fsLessons.length > 0) {
+    const isTeacherRole = role === 'teacher' || role === 'admin';
+
+    // 1. Fetch user-isolated lessons directly from Firestore + API atomically (Firestore is authoritative)
+    Promise.all([
+      fetchStudentLessonsFromFirestore(uid, email, isTeacherRole).catch(() => []),
+      fetch(`/api/lessons?${queryParams}`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    ]).then(([fsLessons, apiLessons]) => {
+      const map = new Map<string, LiveLesson>();
+      // Put API data first
+      (Array.isArray(apiLessons) ? apiLessons : []).forEach((l: LiveLesson) => {
+        if (l?.id) map.set(l.id, l);
+      });
+      // Put fsLessons over API data (Firestore takes absolute priority!)
+      (Array.isArray(fsLessons) ? fsLessons : []).forEach((l: LiveLesson) => {
+        if (!l?.id) return;
+        const existing = map.get(l.id);
+        if (existing && (existing.status === 'cancelled' || existing.cancelledAt) && l.status !== 'cancelled' && !l.cancelledAt) {
+          // Keep cancelled
+        } else {
+          map.set(l.id, { ...existing, ...l });
+        }
+      });
+      // Strict invariant: any cancelled lesson is permanently marked cancelled
+      map.forEach((l, id) => {
+        if (l.status === 'cancelled' || l.cancelledAt) {
+          map.set(id, {
+            ...l,
+            status: 'cancelled',
+            cancelledAt: l.cancelledAt || new Date().toISOString(),
+          });
+        }
+      });
+      setLessons(Array.from(map.values()));
+    });
+
+    // Real-time synchronization for lessons from Firestore
+    const unsubLessons = subscribeToStudentLessons(uid, email, isTeacherRole, (realtimeLessons) => {
+      if (Array.isArray(realtimeLessons) && realtimeLessons.length > 0) {
         setLessons((prev) => {
           const map = new Map<string, LiveLesson>();
-          fsLessons.forEach((l) => map.set(l.id, l));
           prev.forEach((l) => map.set(l.id, l));
+          realtimeLessons.forEach((l) => {
+            const existing = map.get(l.id);
+            if (existing && (existing.status === 'cancelled' || existing.cancelledAt) && l.status !== 'cancelled' && !l.cancelledAt) {
+              // Keep cancelled
+            } else {
+              map.set(l.id, { ...existing, ...l });
+            }
+          });
           return Array.from(map.values());
         });
       }
     });
-
-    fetch(`/api/lessons?${queryParams}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setLessons((prev) => {
-            const map = new Map<string, LiveLesson>();
-            prev.forEach((l) => map.set(l.id, l));
-            data.forEach((l: LiveLesson) => map.set(l.id, l));
-            return Array.from(map.values());
-          });
-        }
-      })
-      .catch((err) => console.warn('Could not fetch isolated lessons:', err));
 
     // 2. Fetch user-isolated students list (for teachers and admin)
     if (role === 'teacher' || role === 'admin') {
@@ -772,29 +797,81 @@ export default function App() {
 
       async function loadStudentData() {
         try {
-          const profileRes = await fetch(`/api/user-profile?email=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`);
-          let loadedProfile: UserProfile | null = null;
-          if (profileRes.ok) {
-            const data = await profileRes.json();
-            if (data.profile) {
-              const cleanPic =
-                (data.profile.picture && data.profile.picture.trim() !== '' ? data.profile.picture : '') ||
-                (data.profile.avatar && data.profile.avatar.trim() !== '' ? data.profile.avatar : '') ||
-                (currentAccount!.picture && currentAccount!.picture.trim() !== '' ? currentAccount!.picture : '') ||
-                '';
+          // A. Fetch directly from Firestore first (master source of truth for assigned Native Friend & profile)
+          const [fsProfile, profileRes] = await Promise.all([
+            fetchStudentProfileFromFirestore(uid, email).catch(() => null),
+            fetch(`/api/user-profile?email=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`).catch(() => null),
+          ]);
 
-              loadedProfile = {
-                ...createDefaultStudentProfile(currentAccount),
-                ...data.profile,
-                id: data.profile.id || currentAccount!.id || `usr-${currentAccount!.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
-                name: data.profile.name || currentAccount!.name || '',
-                email: currentAccount!.email,
-                picture: cleanPic,
-                avatar: cleanPic,
-              };
-              setUserProfile(loadedProfile);
-            }
+          let loadedProfile: UserProfile | null = null;
+          let apiProfileData: any = null;
+          if (profileRes && profileRes.ok) {
+            const data = await profileRes.json();
+            apiProfileData = data.profile;
           }
+
+          const baseProfile = createDefaultStudentProfile(currentAccount);
+          const cleanPic =
+            (fsProfile?.picture && fsProfile.picture.trim() !== '' ? fsProfile.picture : '') ||
+            (apiProfileData?.picture && apiProfileData.picture.trim() !== '' ? apiProfileData.picture : '') ||
+            (currentAccount!.picture && currentAccount!.picture.trim() !== '' ? currentAccount!.picture : '') ||
+            '';
+
+          const isDisallowedDefaultTeacher = (e?: string | null, n?: string | null): boolean => {
+            if (!e && !n) return false;
+            const cleanE = (e || '').toLowerCase().trim();
+            const cleanN = (n || '').toLowerCase().trim();
+            const adminEmails = [
+              'adm.itissimple@gmail.com',
+              'estilobeeforkids@gmail.com',
+              'adm.itssimple@gmail.com',
+              'estilobeeadm@gmail.com',
+              'admin@itissimple.com',
+            ];
+            if (adminEmails.includes(cleanE)) return true;
+            if (cleanN.includes('adm') && cleanN.includes('simple')) return true;
+            return false;
+          };
+
+          // Critical: Firestore assigned Native Friend and status take absolute precedence over default/stale API data!
+          let effectiveTeacherEmail =
+            fsProfile?.teacherEmail !== undefined
+              ? fsProfile.teacherEmail
+              : apiProfileData?.teacherEmail || null;
+
+          let effectiveTeacherName =
+            fsProfile?.teacherName !== undefined
+              ? fsProfile.teacherName
+              : apiProfileData?.teacherName || null;
+
+          // Prevent fallback to default hardcoded values (like adm.itissimple or estilobeeforkids) on initialization
+          if (isDisallowedDefaultTeacher(effectiveTeacherEmail, effectiveTeacherName)) {
+            effectiveTeacherEmail = null;
+            effectiveTeacherName = null;
+          }
+
+          const effectiveEnrollment =
+            fsProfile?.enrollmentStatus ||
+            apiProfileData?.enrollmentStatus ||
+            (effectiveTeacherEmail ? 'active' : 'not_enrolled');
+
+          loadedProfile = {
+            ...baseProfile,
+            ...(apiProfileData || {}),
+            ...(fsProfile || {}),
+            id: fsProfile?.id || apiProfileData?.id || currentAccount!.id || `usr-${currentAccount!.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: fsProfile?.name || apiProfileData?.name || currentAccount!.name || '',
+            email: currentAccount!.email,
+            picture: cleanPic,
+            avatar: cleanPic,
+            teacherEmail: effectiveTeacherEmail,
+            teacherName: effectiveTeacherName,
+            teacherUid: fsProfile?.teacherUid || apiProfileData?.teacherUid || (effectiveTeacherEmail ? `usr-${effectiveTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : null),
+            assignedNativeFriendUID: fsProfile?.assignedNativeFriendUID || fsProfile?.nativeFriendUID || apiProfileData?.assignedNativeFriendUID || null,
+            nativeFriendUID: fsProfile?.nativeFriendUID || fsProfile?.assignedNativeFriendUID || apiProfileData?.nativeFriendUID || null,
+            enrollmentStatus: effectiveEnrollment,
+          };
+          setUserProfile(loadedProfile);
 
           // Fetch student-specific routines
           const routinesRes = await fetch(`/api/student-routines?studentEmail=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`).catch(() => null);
@@ -1003,6 +1080,10 @@ export default function App() {
         })
         .catch(() => {});
     }
+
+    return () => {
+      unsubLessons();
+    };
   }, [currentAccount?.email, currentAccount?.role, currentAccount?.uid, selectedStudentFilter, userProfile?.email]);
 
   // Real-time synchronization of studentJournal across all devices (Mobile <-> Desktop)
@@ -1132,40 +1213,84 @@ export default function App() {
 
   // Handler: Manage/Update Native Friend Subscription
   const handleUpdateSubscription = async (teacherEmail: string | null, teacherName: string | null) => {
+    const cleanTeacherEmail = teacherEmail ? teacherEmail.trim().toLowerCase() : null;
+    const cleanTeacherName = teacherName ? teacherName.trim() : null;
+    const matchedTutor = tutors.find((t) => (t.email || '').toLowerCase().trim() === cleanTeacherEmail);
+    const resolvedTeacherUid = matchedTutor?.uid || (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : null);
+    const newEnrollmentStatus = cleanTeacherEmail ? 'active' : 'cancelled';
+
     setUserProfile((prev) => ({
       ...prev,
-      teacherEmail: teacherEmail || undefined,
-      teacherName: teacherName || undefined,
-      enrollmentStatus: teacherEmail ? 'active' : 'cancelled',
+      teacherEmail: cleanTeacherEmail || undefined,
+      teacherName: cleanTeacherName || undefined,
+      teacherUid: resolvedTeacherUid || undefined,
+      assignedNativeFriendUID: resolvedTeacherUid || undefined,
+      nativeFriendUID: resolvedTeacherUid || undefined,
+      enrollmentStatus: newEnrollmentStatus,
     }));
 
     if (currentAccount?.email) {
       const cleanStEmail = currentAccount.email.toLowerCase().trim();
+      const stUid = currentAccount.uid || userProfile?.id || cleanStEmail;
+
+      // 1. Immediately write to Firestore
+      saveStudentNativeFriendToFirestore(stUid, cleanStEmail, {
+        teacherEmail: cleanTeacherEmail,
+        teacherName: cleanTeacherName,
+        teacherUid: resolvedTeacherUid,
+        assignedNativeFriendUID: resolvedTeacherUid,
+        nativeFriendUID: resolvedTeacherUid,
+        enrollmentStatus: newEnrollmentStatus,
+      }).catch((err) => console.warn('Firestore subscription update notice:', err));
+
+      saveStudentProfileToFirestore(
+        stUid,
+        {
+          ...userProfile,
+          teacherEmail: cleanTeacherEmail || undefined,
+          teacherName: cleanTeacherName || undefined,
+          teacherUid: resolvedTeacherUid || undefined,
+          assignedNativeFriendUID: resolvedTeacherUid || undefined,
+          nativeFriendUID: resolvedTeacherUid || undefined,
+          enrollmentStatus: newEnrollmentStatus,
+        },
+        cleanStEmail
+      ).catch((err) => console.warn('Firestore profile update notice on subscription change:', err));
+
+      // 2. Update students state
       setStudents((prev) => {
         const exists = prev.some((s) => (s.email || s.studentEmail || '').toLowerCase().trim() === cleanStEmail);
         if (exists) {
           return prev.map((s) =>
             (s.email || s.studentEmail || '').toLowerCase().trim() === cleanStEmail
-              ? { ...s, teacherEmail: teacherEmail || '', teacherName: teacherName || '', status: teacherEmail ? 'active' : 'cancelled' }
+              ? {
+                  ...s,
+                  teacherEmail: cleanTeacherEmail || '',
+                  teacherName: cleanTeacherName || '',
+                  teacherUid: resolvedTeacherUid || '',
+                  status: newEnrollmentStatus,
+                }
               : s
           );
         }
         return [
           ...prev,
           {
-            id: `st-${Date.now()}`,
+            id: stUid,
             name: userProfile.name || currentAccount.name || cleanStEmail.split('@')[0],
             studentName: userProfile.name || currentAccount.name || cleanStEmail.split('@')[0],
             email: cleanStEmail,
             studentEmail: cleanStEmail,
-            teacherEmail: teacherEmail || '',
-            teacherName: teacherName || '',
-            status: teacherEmail ? 'active' : 'cancelled',
+            teacherEmail: cleanTeacherEmail || '',
+            teacherName: cleanTeacherName || '',
+            teacherUid: resolvedTeacherUid || '',
+            status: newEnrollmentStatus,
             level: userProfile.level || 'iniciante',
           },
         ];
       });
 
+      // 3. Mirror to server API
       try {
         await fetch('/api/user-profile', {
           method: 'POST',
@@ -1173,9 +1298,12 @@ export default function App() {
           body: JSON.stringify({
             email: currentAccount.email,
             profile: {
-              teacherEmail: teacherEmail || null,
-              teacherName: teacherName || null,
-              enrollmentStatus: teacherEmail ? 'active' : 'cancelled',
+              teacherEmail: cleanTeacherEmail,
+              teacherName: cleanTeacherName,
+              teacherUid: resolvedTeacherUid,
+              assignedNativeFriendUID: resolvedTeacherUid,
+              nativeFriendUID: resolvedTeacherUid,
+              enrollmentStatus: newEnrollmentStatus,
             },
           }),
         });
@@ -1370,6 +1498,16 @@ export default function App() {
           }
 
           if (cleanEmail) {
+            if (studentUid) {
+              saveStudentProfileToFirestore(studentUid, updatedProfile, cleanEmail).catch(() => {});
+              if (data.selectedTutor?.email) {
+                saveStudentNativeFriendToFirestore(studentUid, cleanEmail, {
+                  teacherEmail: data.selectedTutor.email,
+                  teacherName: data.selectedTutor.name,
+                  enrollmentStatus: 'active',
+                }).catch(() => {});
+              }
+            }
             await fetch('/api/user-profile', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1434,6 +1572,38 @@ export default function App() {
           contractedLessons: newCount,
           weeklyNativeLessonsTarget: newWeeklyTarget,
         }));
+
+        const cleanStEmail = currentAccount.email.toLowerCase().trim();
+        const stUid = currentAccount.uid || userProfile?.id || cleanStEmail;
+        const cleanTeacherEmail = params.teacherEmail ? params.teacherEmail.trim().toLowerCase() : null;
+        const cleanTeacherName = params.teacherName ? params.teacherName.trim() : null;
+        const matchedTutor = tutors.find((t) => (t.email || '').toLowerCase().trim() === cleanTeacherEmail);
+        const resolvedTeacherUid = matchedTutor?.uid || (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : null);
+
+        saveStudentNativeFriendToFirestore(stUid, cleanStEmail, {
+          teacherEmail: cleanTeacherEmail,
+          teacherName: cleanTeacherName,
+          teacherUid: resolvedTeacherUid,
+          assignedNativeFriendUID: resolvedTeacherUid,
+          nativeFriendUID: resolvedTeacherUid,
+          enrollmentStatus: 'active',
+        }).catch((err) => console.warn('Firestore subscription update notice on purchase:', err));
+
+        saveStudentProfileToFirestore(
+          stUid,
+          {
+            ...userProfile,
+            teacherEmail: cleanTeacherEmail || undefined,
+            teacherName: cleanTeacherName || undefined,
+            teacherUid: resolvedTeacherUid || undefined,
+            assignedNativeFriendUID: resolvedTeacherUid || undefined,
+            nativeFriendUID: resolvedTeacherUid || undefined,
+            enrollmentStatus: 'active',
+            contractedLessons: newCount,
+            weeklyNativeLessonsTarget: newWeeklyTarget,
+          },
+          cleanStEmail
+        ).catch((err) => console.warn('Firestore profile update notice on purchase:', err));
 
         // Update contractedLessons map
         setContractedLessons((prev) => ({
@@ -2585,6 +2755,26 @@ export default function App() {
         [finalStudentEmail]: Math.max(prev[finalStudentEmail] || 0, 1),
       }));
 
+      saveStudentNativeFriendToFirestore(finalStudentUid, finalStudentEmail, {
+        teacherEmail: lessonData.teacherEmail,
+        teacherName: lessonData.teacherName,
+        enrollmentStatus: 'active',
+      }).catch(() => {});
+
+      saveStudentProfileToFirestore(
+        finalStudentUid,
+        {
+          id: finalStudentUid,
+          name: finalStudentName,
+          email: finalStudentEmail,
+          teacherEmail: lessonData.teacherEmail,
+          teacherName: lessonData.teacherName,
+          enrollmentStatus: 'active',
+          contractedLessons: Math.max(userProfile?.contractedLessons || 0, 1),
+        },
+        finalStudentEmail
+      ).catch(() => {});
+
       fetch('/api/user-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2675,8 +2865,13 @@ export default function App() {
         ? 'Cancelled for personal reasons'
         : 'Cancelado por motivo próprio');
 
+    const target = lessons.find((l) => l.id === lessonId);
+    const targetStudentUid = target?.studentUid || (!isTeacher ? currentAccount?.uid : undefined);
+    const targetStudentEmail = target?.studentEmail || (!isTeacher ? currentAccount?.email : undefined);
+    const targetTeacherUid = target?.teacherUid || (isTeacher ? currentAccount?.uid : undefined);
+    const nowIso = new Date().toISOString();
+
     setLessons((prev) => {
-      const target = prev.find((l) => l.id === lessonId);
       return prev.map((l) =>
         l.id === lessonId ||
         (target &&
@@ -2686,7 +2881,7 @@ export default function App() {
           ? {
               ...l,
               status: 'cancelled',
-              cancelledAt: l.cancelledAt || new Date().toISOString(),
+              cancelledAt: l.cancelledAt || nowIso,
               cancelledBy: finalCancelledBy,
               cancellationReason: finalReason,
             }
@@ -2694,13 +2889,20 @@ export default function App() {
       );
     });
 
-    // Persist cancellation in Firestore
-    updateLiveLessonInFirestore(lessonId, {
-      status: 'cancelled',
-      cancelledAt: new Date().toISOString(),
-      cancelledBy: finalCancelledBy,
-      cancellationReason: finalReason,
-    }, currentAccount?.uid);
+    // Persist cancellation in Firestore with complete lesson metadata
+    updateLiveLessonInFirestore(
+      lessonId,
+      {
+        status: 'cancelled',
+        cancelledAt: nowIso,
+        cancelledBy: finalCancelledBy,
+        cancellationReason: finalReason,
+      },
+      targetStudentUid,
+      targetTeacherUid,
+      target,
+      targetStudentEmail
+    );
 
     try {
       await fetch(`/api/lessons/${lessonId}/cancel`, {
@@ -3440,6 +3642,21 @@ export default function App() {
       setRoutinesByDay((prev) =>
         applyProfileTimesToRoutines(prev, cleanProfile.routineVideoTime, cleanProfile.routineAudioTime)
       );
+    }
+
+    const studentUid = currentAccount?.uid || userProfile?.id || (cleanProfile.email ? `usr-${cleanProfile.email.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+    if (studentUid && cleanProfile.email) {
+      saveStudentProfileToFirestore(studentUid, cleanProfile, cleanProfile.email).catch((err) =>
+        console.warn('Firestore profile save notice:', err)
+      );
+      if (cleanProfile.teacherEmail !== undefined) {
+        saveStudentNativeFriendToFirestore(studentUid, cleanProfile.email, {
+          teacherEmail: cleanProfile.teacherEmail,
+          teacherName: cleanProfile.teacherName,
+          teacherUid: cleanProfile.teacherUid,
+          enrollmentStatus: cleanProfile.enrollmentStatus,
+        }).catch(() => {});
+      }
     }
 
     try {

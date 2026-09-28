@@ -3134,7 +3134,22 @@ app.get('/api/user-profile', (req, res) => {
     (s) => (s.email || s.studentEmail || '').toLowerCase() === email
   );
 
+  const isDisallowedAdminTeacher = (em?: string, nm?: string) => {
+    const cE = (em || '').toLowerCase().trim();
+    const cN = (nm || '').toLowerCase().trim();
+    return (
+      cE === 'adm.itissimple@gmail.com' ||
+      cE === 'estilobeeforkids@gmail.com' ||
+      cE === 'adm.itssimple@gmail.com' ||
+      cE === 'estilobeeadm@gmail.com' ||
+      cE === 'admin@itissimple.com' ||
+      cN.includes('simple')
+    );
+  };
+
   if (profile && student) {
+    const fallbackTeacherEmail = isDisallowedAdminTeacher(student.teacherEmail, student.teacherName) ? null : student.teacherEmail;
+    const fallbackTeacherName = isDisallowedAdminTeacher(student.teacherEmail, student.teacherName) ? null : student.teacherName;
     // Fill in any missing fields from student without overwriting existing profile data
     profile = {
       ...profile,
@@ -3146,19 +3161,21 @@ app.get('/api/user-profile', (req, res) => {
       dailyPhraseTime: profile.dailyPhraseTime || student.dailyPhraseTime || '20:00',
       contractedLessons: profile.contractedLessons ?? student.contractedLessons ?? db.contractedLessons?.[email] ?? 5,
       completedLessonsCount: profile.completedLessonsCount ?? student.completedLessonsCount ?? 0,
-      teacherEmail: profile.teacherEmail || student.teacherEmail,
-      teacherName: profile.teacherName || student.teacherName,
+      teacherEmail: profile.teacherEmail !== undefined ? profile.teacherEmail : fallbackTeacherEmail,
+      teacherName: profile.teacherName !== undefined ? profile.teacherName : fallbackTeacherName,
     };
     db.userProfiles[email] = profile;
     writeDb(db);
   } else if (!profile && student) {
+    const fallbackTeacherEmail = isDisallowedAdminTeacher(student.teacherEmail, student.teacherName) ? null : student.teacherEmail;
+    const fallbackTeacherName = isDisallowedAdminTeacher(student.teacherEmail, student.teacherName) ? null : student.teacherName;
     profile = {
       id: student.id || `usr-${Date.now()}`,
       name: student.name || student.studentName,
       email,
       level: student.level || student.studentLevel || 'iniciante',
-      teacherEmail: student.teacherEmail,
-      teacherName: student.teacherName,
+      teacherEmail: fallbackTeacherEmail,
+      teacherName: fallbackTeacherName,
       routineVideoTime: student.routineVideoTime || '09:00',
       routineAudioTime: student.routineAudioTime || '14:00',
       dailyPhraseTime: student.dailyPhraseTime || '20:00',
@@ -3457,6 +3474,7 @@ app.post('/api/students/purchase-package', async (req, res) => {
   db.transactions.unshift(transaction);
 
   await writeDbSync(db);
+  saveUserToFirestore(db.userProfiles[cleanStudentEmail]).catch(() => {});
 
   res.json({
     success: true,
@@ -5527,6 +5545,24 @@ app.post('/api/routines/teacher-video', (req, res) => {
 
     if (email) db.studentRoutinesMap[email] = existingRoutines;
     if (uid) db.studentRoutinesMap[uid] = existingRoutines;
+
+    const targetUid = uid || (email ? email.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_') : '');
+    if (targetUid) {
+      targetDays.forEach((d: string) => {
+        const dayActs = existingRoutines[d] || [];
+        const videoAct = dayActs.find((a: any) => a.teacherVideos && a.teacherVideos.length > 0) || dayActs[0];
+        if (videoAct) {
+          saveRoutineVideoSubcollection(targetUid, d, videoAct).catch(() => {});
+        }
+      });
+      saveStudentAssignmentsByUid(targetUid, {
+        uid: targetUid,
+        email,
+        videoAssignments: (email && db.studentVideoAssignments[email]) || (uid && db.studentVideoAssignments[uid]) || [],
+        spotifyAssignments: (email && db.studentSpotifyAssignments[email]) || (uid && db.studentSpotifyAssignments[uid]) || [],
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
   }
 
   writeDb(db);
@@ -5655,6 +5691,17 @@ app.post('/api/routines/teacher-spotify', (req, res) => {
 
     if (email) db.studentRoutinesMap[email] = existingRoutines;
     if (uid) db.studentRoutinesMap[uid] = existingRoutines;
+
+    const targetUid = uid || (email ? email.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_') : '');
+    if (targetUid) {
+      saveStudentAssignmentsByUid(targetUid, {
+        uid: targetUid,
+        email,
+        videoAssignments: (email && db.studentVideoAssignments[email]) || (uid && db.studentVideoAssignments[uid]) || [],
+        spotifyAssignments: (email && db.studentSpotifyAssignments[email]) || (uid && db.studentSpotifyAssignments[uid]) || [],
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
   }
 
   writeDb(db);

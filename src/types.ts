@@ -225,6 +225,7 @@ export interface UserProfile {
   englishLevel?: EnglishLevel | string;
   teacherEmail?: string;
   teacherName?: string;
+  teacherUid?: string;
   assignedNativeFriendUID?: string;
   nativeFriendUID?: string;
   routineVideoTime?: string;
@@ -232,6 +233,8 @@ export interface UserProfile {
   dailyPhraseTime?: string;
   enrollmentStatus?: 'active' | 'not_enrolled' | 'cancelled';
   enrolledAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
   learningGoal?: string;
   timezone?: string;
   notificationLeadMinutes?: number;
