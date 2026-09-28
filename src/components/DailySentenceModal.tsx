@@ -13,7 +13,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { RoutineItem, UserProfile, WritingEvaluationResult, Language } from '../types';
-import { checkStudentWritingApi } from '../utils/writingChecker';
+import { checkDailySentenceAi } from '../utils/writingChecker';
 import { speakText } from '../utils/audio';
 
 interface DailySentenceModalProps {
@@ -62,14 +62,10 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
     if (!sentenceInput.trim() || sentenceInput.trim().length < 4) return;
     setIsChecking(true);
     try {
-      const result = await checkStudentWritingApi({
-        sentence: sentenceInput.trim(),
-        words: allWords,
-        dailyWords: allWords,
-        matchedWords,
-        level: userProfile.level,
-        language: isEn ? 'en' : 'pt',
-      });
+      const result = await checkDailySentenceAi(
+        sentenceInput.trim(),
+        allWords
+      );
       setEvaluation(result);
     } catch {
       // API has fallback
@@ -80,10 +76,33 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sentenceInput.trim() || sentenceInput.trim().length < 4) return;
+    const clean = sentenceInput.trim();
+    if (!clean || clean.length < 4) return;
 
-    const wordsToRecord = matchedWords.length > 0 ? matchedWords : (evaluation?.usedWords || allWords);
-    onSaveDailySentence(sentenceInput.trim(), wordsToRecord, evaluation);
+    let activeEval = evaluation;
+    if (!activeEval) {
+      setIsChecking(true);
+      try {
+        activeEval = await checkDailySentenceAi(clean, allWords);
+        setEvaluation(activeEval);
+      } catch {
+        // API has fallback
+      } finally {
+        setIsChecking(false);
+      }
+
+      if (
+        activeEval &&
+        (activeEval.hasAnyError ||
+          activeEval.isCorrect === false ||
+          (activeEval.correctedSentence && activeEval.correctedSentence.trim() !== clean))
+      ) {
+        return;
+      }
+    }
+
+    const wordsToRecord = matchedWords.length > 0 ? matchedWords : (activeEval?.usedWords || allWords);
+    onSaveDailySentence(clean, wordsToRecord, activeEval);
     setSaveSuccess(true);
     setTimeout(() => {
       setSaveSuccess(false);
@@ -212,7 +231,7 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
 
           {/* AI Feedback */}
           {evaluation && (
-            (evaluation.hasAnyError || !evaluation.isCorrect || (evaluation.correctedSentence && evaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase())) ? (
+            (evaluation.hasAnyError || !evaluation.isCorrect || (evaluation.correctedSentence && evaluation.correctedSentence.trim() !== sentenceInput.trim())) ? (
               <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs space-y-2 text-amber-900 animate-in fade-in">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 font-bold text-amber-950">
@@ -222,7 +241,20 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
                   {evaluation.correctedSentence && (
                     <button
                       type="button"
-                      onClick={() => setSentenceInput(evaluation.correctedSentence || '')}
+                      onClick={() => {
+                        const corrected = evaluation.correctedSentence || '';
+                        setSentenceInput(corrected);
+                        setEvaluation((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                hasAnyError: false,
+                                isCorrect: true,
+                                correctedSentence: corrected,
+                              }
+                            : null
+                        );
+                      }}
                       className="px-2.5 py-1 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-lg font-bold text-[10px] flex items-center gap-1 cursor-pointer"
                     >
                       <Wand2 className="w-3 h-3 text-[#F4CA54]" />

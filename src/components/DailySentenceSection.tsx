@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { RoutineItem, UserProfile, WritingEvaluationResult, Language } from '../types';
 import { Translations } from '../utils/i18n';
-import { checkStudentWritingApi } from '../utils/writingChecker';
+import { checkDailySentenceAi } from '../utils/writingChecker';
 import { speakText } from '../utils/audio';
 import { getLastActivityOfTheDay, getEndOfDayReminderTime } from '../utils/notifications';
 
@@ -79,14 +79,10 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
     if (!sentenceInput.trim() || sentenceInput.trim().length < 4) return;
     setIsCheckingSentence(true);
     try {
-      const evaluation = await checkStudentWritingApi({
-        sentence: sentenceInput.trim(),
-        words: allLearnedWordsToday,
-        dailyWords: allLearnedWordsToday,
-        matchedWords,
-        level: userProfile.level,
-        language: currentLanguage,
-      });
+      const evaluation = await checkDailySentenceAi(
+        sentenceInput.trim(),
+        allLearnedWordsToday
+      );
       setSentenceEvaluation(evaluation);
     } catch (err) {
       console.warn('Error checking sentence:', err);
@@ -95,17 +91,16 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
     }
   };
 
-  const handleSaveConfirmed = (textToSave: string) => {
+  const handleSaveConfirmed = (textToSave: string, activeEval?: WritingEvaluationResult | null) => {
+    const evalToUse = activeEval !== undefined ? activeEval : sentenceEvaluation;
     const finalMatched = allLearnedWordsToday.filter((w) =>
       Boolean(w && textToSave.toLowerCase().includes(w.toLowerCase()))
     );
-    const wordsToSave = finalMatched.length > 0 ? finalMatched : (sentenceEvaluation?.usedWords || allLearnedWordsToday);
-    onSaveDailySentence(textToSave, wordsToSave, sentenceEvaluation);
+    const wordsToSave = finalMatched.length > 0 ? finalMatched : (evalToUse?.usedWords || allLearnedWordsToday);
+    onSaveDailySentence(textToSave, wordsToSave, evalToUse);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
-      setSentenceInput('');
-      setSentenceEvaluation(null);
     }, 2000);
   };
 
@@ -116,18 +111,14 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
 
     setIsCheckingSentence(true);
     try {
-      const evaluation = await checkStudentWritingApi({
-        sentence: cleanText,
-        words: allLearnedWordsToday,
-        dailyWords: allLearnedWordsToday,
-        matchedWords,
-        level: userProfile.level,
-        language: currentLanguage,
-      });
+      const evaluation = await checkDailySentenceAi(
+        cleanText,
+        allLearnedWordsToday
+      );
       setSentenceEvaluation(evaluation);
 
       if (!evaluation.hasAnyError && evaluation.isCorrect !== false) {
-        handleSaveConfirmed(cleanText);
+        handleSaveConfirmed(cleanText, evaluation);
       }
     } catch (err) {
       console.warn('Error during writing check:', err);
@@ -139,8 +130,16 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
 
   const handleApplySentenceCorrection = () => {
     if (sentenceEvaluation && sentenceEvaluation.correctedSentence) {
-      setSentenceInput(sentenceEvaluation.correctedSentence);
-      handleSaveConfirmed(sentenceEvaluation.correctedSentence);
+      const corrected = sentenceEvaluation.correctedSentence;
+      const updatedEval: WritingEvaluationResult = {
+        ...sentenceEvaluation,
+        hasAnyError: false,
+        isCorrect: true,
+        correctedSentence: corrected,
+      };
+      setSentenceInput(corrected);
+      setSentenceEvaluation(updatedEval);
+      handleSaveConfirmed(corrected, updatedEval);
     }
   };
 
@@ -337,7 +336,7 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
       </form>
 
       {/* AI Grammar Feedback Alert */}
-      {sentenceEvaluation && (sentenceEvaluation.hasAnyError || sentenceEvaluation.isCorrect === false || (sentenceEvaluation.correctedSentence && sentenceEvaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase())) && (
+      {sentenceEvaluation && (sentenceEvaluation.hasAnyError || sentenceEvaluation.isCorrect === false || (sentenceEvaluation.correctedSentence && sentenceEvaluation.correctedSentence.trim() !== sentenceInput.trim())) && (
         <div className="p-4.5 bg-[#FFF8F6] rounded-2xl border-2 border-[#FCA5A5] shadow-xs space-y-3 animate-in fade-in">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">

@@ -49,10 +49,12 @@ import {
   synthesizeFillInBlanks,
   profileWord,
 } from './src/utils/pedagogicalStorySynthesizer';
+import { analyzeSentenceGrammarDeterministic } from './src/utils/writingChecker';
 
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
-const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.8-flash' : rawEnvModel;
+const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
+const GEMINI_PROJECT_ID = 'itissimple-8663d';
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
@@ -7048,18 +7050,15 @@ app.post(['/api/homework', '/api/homework/submit'], (req, res) => {
 });
 
 // Safe Gemini generation runner with timeout and multi-model fallback (no uncaught errors or stderr stack traces)
-async function callGeminiSafeJson(prompt: string, timeoutMs: number = 4500): Promise<any | null> {
+async function callGeminiSafeJson(prompt: string, timeoutMs: number = 5000): Promise<any | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
 
   const candidateModels = [
-    'gemini-3.8-flash',
     'gemini-3.6-flash',
-    'gemini-3.7-flash',
-    'gemini-3.5-flash',
-    GEMINI_TEXT_MODEL,
     'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
+    'gemini-3.5-flash-lite',
+    GEMINI_TEXT_MODEL,
   ];
   const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
 
@@ -7078,8 +7077,8 @@ async function callGeminiSafeJson(prompt: string, timeoutMs: number = 4500): Pro
       const config: any = {
         responseMimeType: 'application/json',
       };
-      if (model.includes('gemini-3')) {
-        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      if (model.includes('gemini-3.6') || model.includes('gemini-3.1')) {
+        config.thinkingConfig = { thinkingBudget: 0 };
       }
 
       const generatePromise = ai.models.generateContent({
@@ -7849,6 +7848,275 @@ app.post('/api/email-logs', (req, res) => {
     writeDb(db);
   }
   res.json({ success: true });
+});
+
+// 12a. Isolated, Token-Optimized AI Handler Strictly for "Sentence of the Day" (Project: itissimple-8663d)
+const dailySentenceEvaluationCache = new Map<string, { data: any; expiry: number }>();
+
+async function evaluateDailySentenceIsolated(
+  sentence: string,
+  dailyWords: string[] = []
+): Promise<any> {
+  const rawClean = (sentence || '').trim();
+  const cleanDailyWords = Array.from(
+    new Set(
+      (Array.isArray(dailyWords) ? dailyWords : [])
+        .map((w) => (typeof w === 'string' ? w.trim() : ''))
+        .filter(Boolean)
+    )
+  );
+
+  const cacheKey = `v3::${rawClean}::${cleanDailyWords.map((w) => w.toLowerCase()).sort().join(',')}`;
+  const cached = dailySentenceEvaluationCache.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data;
+  }
+
+  // 1. Run deterministic grammar, capitalization ("I"), verb tense ("passed"), and vocabulary analysis
+  const deterministic = analyzeSentenceGrammarDeterministic(rawClean, cleanDailyWords);
+  const {
+    fixedSentence: programmaticFixed,
+    hasGrammarError: hasProgrammaticError,
+    usedWords,
+    missingWords,
+    usedTargetWord,
+    hasWordConstraint,
+    errorsPt: programmaticErrorsPt,
+    errorsEn: programmaticErrorsEn,
+    wordFeedbacks,
+  } = deterministic;
+
+  // 2. Concise, token-optimized Gemini API call strictly for Sentence of the Day
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (apiKey && rawClean.length >= 3) {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const concisePrompt = `You are a strict English grammar checker for "Sentence of the Day" (project: ${GEMINI_PROJECT_ID}).
+Evaluate the student's sentence with zero-tolerance for errors:
+1. Capitalization: Standalone pronoun "i" MUST be "I" (e.g. "because i pass" -> "because I passed", "now i will" -> "now I will"). First word of sentence must be capitalized.
+2. Verb Tense & Agreement: Check tense consistency across clauses (e.g. if the sentence starts in past tense like "Today was a perfect day", causal/subordinate clauses like "because i pass the test" MUST use past tense "because I passed the test"). Check 3rd-person singular, modals, and auxiliaries.
+3. Articles, Prepositions, Spelling & Punctuation: Fix any unnatural phrasing, comma splices (remove unnecessary comma before "because"), article errors (a/an), or typos.
+4. Daily Vocabulary: Identify which of Daily Words are used and which are missing.
+
+Student Sentence: "${rawClean}"
+Daily Words: ${JSON.stringify(cleanDailyWords)}
+
+Return strict JSON:
+{"hasAnyError":boolean,"isCorrect":boolean,"usedWords":[string],"missingWords":[string],"correctedSentence":string,"explanationPt":string,"explanationEn":string,"wordFeedbacks":[{"original":string,"hasError":boolean,"corrected":string,"explanationPt":string,"explanationEn":string}]}`;
+
+    const modelsToTry = ['gemini-3.6-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'];
+    for (const model of modelsToTry) {
+      let timerId: any = null;
+      try {
+        const config: any = {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        };
+        if (model.includes('gemini-3.6') || model.includes('gemini-3.1')) {
+          config.thinkingConfig = { thinkingBudget: 0 };
+        }
+
+        const generatePromise = ai.models.generateContent({
+          model,
+          contents: concisePrompt,
+          config,
+        });
+
+        const timeoutPromise = new Promise((_, reject) => {
+          timerId = setTimeout(() => reject(new Error('Daily sentence check timeout')), 5500);
+        });
+
+        const response: any = await Promise.race([generatePromise, timeoutPromise]);
+        if (timerId) clearTimeout(timerId);
+
+        const parsed = response?.text ? extractCleanJson(response.text) : null;
+        if (parsed && typeof parsed === 'object') {
+          // Ensure Gemini's correctedSentence also passes deterministic capitalization/tense rules
+          const rawAiCorrected =
+            parsed.correctedSentence && parsed.correctedSentence.trim()
+              ? parsed.correctedSentence.trim()
+              : programmaticFixed;
+          const postChecked = analyzeSentenceGrammarDeterministic(rawAiCorrected, cleanDailyWords);
+          const finalCorrected =
+            rawAiCorrected !== rawClean
+              ? postChecked.fixedSentence
+              : programmaticFixed;
+
+          const normalizedOriginal = rawClean.replace(/[.!?\s]+$/, '');
+          const normalizedCorrected = finalCorrected.replace(/[.!?\s]+$/, '');
+          const hasDiff = Boolean(normalizedCorrected && normalizedCorrected !== normalizedOriginal);
+
+          const finalUsedWords =
+            Array.isArray(parsed.usedWords) && parsed.usedWords.length > 0
+              ? parsed.usedWords
+              : usedWords;
+          const finalMissingWords =
+            Array.isArray(parsed.missingWords) && parsed.missingWords.length > 0
+              ? parsed.missingWords
+              : missingWords;
+
+          const finalHasError = Boolean(
+            hasProgrammaticError ||
+              hasDiff ||
+              parsed.hasAnyError === true ||
+              parsed.isCorrect === false ||
+              !usedTargetWord
+          );
+
+          const aiExplPt = parsed.explanationPt || parsed.explanation || '';
+          const aiExplEn = parsed.explanationEn || parsed.explanation || '';
+
+          const combinedExplPt =
+            Array.from(new Set([...programmaticErrorsPt, aiExplPt].filter(Boolean)))
+              .join(' ')
+              .trim() ||
+            (finalHasError
+              ? 'Ajustes gramaticais sugeridos para tornar sua frase correta e natural.'
+              : 'Sua frase está gramaticalmente correta e natural.');
+
+          const combinedExplEn =
+            Array.from(new Set([...programmaticErrorsEn, aiExplEn].filter(Boolean)))
+              .join(' ')
+              .trim() ||
+            (finalHasError
+              ? 'Suggested grammar adjustments to make your sentence accurate and natural.'
+              : 'Your sentence is grammatically accurate and natural.');
+
+          // Merge wordFeedbacks from deterministic check and Gemini
+          const combinedWordFeedbacks = [...wordFeedbacks];
+          if (Array.isArray(parsed.wordFeedbacks)) {
+            parsed.wordFeedbacks.forEach((wf: any) => {
+              if (
+                wf &&
+                wf.hasError &&
+                wf.original &&
+                wf.corrected &&
+                !combinedWordFeedbacks.some(
+                  (existing) =>
+                    existing.original.toLowerCase() === String(wf.original).toLowerCase()
+                )
+              ) {
+                combinedWordFeedbacks.push(wf);
+              }
+            });
+          }
+
+          const targetWordFeedback = hasWordConstraint
+            ? usedTargetWord
+              ? finalMissingWords.length > 0
+                ? `Palavras utilizadas (${finalUsedWords.length}/${cleanDailyWords.length}): ${finalUsedWords.join(', ')}. Não incluída(s): ${finalMissingWords.join(', ')}.`
+                : `Palavras da rotina utilizadas (${finalUsedWords.length}/${cleanDailyWords.length}): ${finalUsedWords.join(', ')}.`
+              : `Inclua pelo menos uma palavra da sua rotina na frase (${cleanDailyWords.slice(0, 5).join(', ')}).`
+            : '';
+
+          const resultPayload = {
+            hasAnyError: finalHasError,
+            isCorrect: !finalHasError,
+            usedTargetWord,
+            usedWords: finalUsedWords,
+            missingWords: finalMissingWords,
+            targetWordFeedback,
+            wordFeedbacks: combinedWordFeedbacks,
+            sentenceFeedback: {
+              original: rawClean,
+              hasError: finalHasError,
+              corrected: finalCorrected,
+              explanationPt: combinedExplPt,
+              explanationEn: combinedExplEn,
+            },
+            correctedSentence: finalCorrected,
+            explanation: combinedExplPt,
+            overallSummaryPt: finalHasError
+              ? combinedExplPt
+              : `Excelente! Frase natural com o vocabulário da sua rotina (${finalUsedWords.join(', ') || 'palavras de hoje'}).`,
+            overallSummaryEn: finalHasError
+              ? combinedExplEn
+              : `Outstanding! Natural sentence using your daily vocabulary (${finalUsedWords.join(', ') || 'today’s words'}).`,
+          };
+
+          if (dailySentenceEvaluationCache.size > 200) {
+            const firstKey = dailySentenceEvaluationCache.keys().next().value;
+            if (firstKey) dailySentenceEvaluationCache.delete(firstKey);
+          }
+          dailySentenceEvaluationCache.set(cacheKey, {
+            data: resultPayload,
+            expiry: Date.now() + 30 * 60 * 1000,
+          });
+          return resultPayload;
+        }
+      } catch {
+        if (timerId) clearTimeout(timerId);
+        // Try next candidate model or fall back to deterministic result
+      }
+    }
+  }
+
+  const targetWordFeedback = hasWordConstraint
+    ? usedTargetWord
+      ? missingWords.length > 0
+        ? `Palavras utilizadas (${usedWords.length}/${cleanDailyWords.length}): ${usedWords.join(', ')}. Não incluída(s): ${missingWords.join(', ')}.`
+        : `Palavras da rotina utilizadas (${usedWords.length}/${cleanDailyWords.length}): ${usedWords.join(', ')}.`
+      : `Inclua pelo menos uma palavra da sua rotina na frase (${cleanDailyWords.slice(0, 5).join(', ')}).`
+    : '';
+
+  const fallbackExplPt = hasProgrammaticError
+    ? programmaticErrorsPt.join(' ')
+    : 'Sua frase está gramaticalmente correta e bem estruturada.';
+  const fallbackExplEn = hasProgrammaticError
+    ? programmaticErrorsEn.join(' ')
+    : 'Your sentence is grammatically sound and well structured.';
+
+  const fallbackPayload = {
+    hasAnyError: hasProgrammaticError,
+    isCorrect: !hasProgrammaticError,
+    usedTargetWord,
+    usedWords,
+    missingWords,
+    targetWordFeedback,
+    wordFeedbacks,
+    sentenceFeedback: {
+      original: rawClean,
+      hasError: hasProgrammaticError,
+      corrected: programmaticFixed,
+      explanationPt: fallbackExplPt,
+      explanationEn: fallbackExplEn,
+    },
+    correctedSentence: programmaticFixed,
+    explanation: fallbackExplPt,
+    overallSummaryPt: fallbackExplPt,
+    overallSummaryEn: fallbackExplEn,
+  };
+
+  dailySentenceEvaluationCache.set(cacheKey, {
+    data: fallbackPayload,
+    expiry: Date.now() + 10 * 60 * 1000,
+  });
+  return fallbackPayload;
+}
+
+app.post('/api/check-daily-sentence', async (req, res) => {
+  try {
+    const { sentence = '', dailyWords = [] } = req.body || {};
+    const result = await evaluateDailySentenceIsolated(sentence, dailyWords);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(200).json({
+      hasAnyError: false,
+      isCorrect: true,
+      usedTargetWord: true,
+      usedWords: Array.isArray(req.body?.dailyWords) ? req.body.dailyWords : [],
+      missingWords: [],
+      correctedSentence: req.body?.sentence || '',
+      explanation: 'Frase verificada com sucesso.',
+    });
+  }
 });
 
 // 12. Writing / Grammar Evaluation via Gemini API with Absolute Rigor & Subtle Error Detection

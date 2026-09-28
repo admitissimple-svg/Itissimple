@@ -62,7 +62,7 @@ import { useRoutine } from '../hooks/useRoutine';
 import { useBehavioralVideoTracker, useBehavioralAudioTracker } from '../hooks/useBehavioralMediaTracker';
 import { CurrentSpotifyTrack } from '../utils/routineSync';
 import { speakText } from '../utils/audio';
-import { checkStudentWritingApi } from '../utils/writingChecker';
+import { checkDailySentenceAi } from '../utils/writingChecker';
 import { getInstantOrCachedWord, lookupWord, DictionaryLookupResult } from '../utils/dictionaryService';
 import {
   DAYS_OF_WEEK,
@@ -453,21 +453,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     setTimeout(() => setWordsSaveFeedback(false), 2500);
   };
 
-  // Handlers for Sentence of the Day
+  // Handlers for Sentence of the Day (Isolated AI handler sending only sentence and daily vocabulary words)
   const handleCheckGrammar = async () => {
     const clean = sentenceInput.trim();
     if (!clean) return;
     setIsCheckingSentence(true);
     try {
-      const evaluation = await checkStudentWritingApi({
-        sentence: clean,
-        words: displayRoutineWords,
-        dailyWords: displayRoutineWords,
-        matchedWords: matchedSentenceWords,
-        level: userProfile?.level,
-        levelInstruction: activeActivity?.activityName || '',
-        language: currentLanguage,
-      });
+      const evaluation = await checkDailySentenceAi(clean, displayRoutineWords);
       setSentenceEvaluation(evaluation);
     } catch (err) {
       console.warn('Sentence check error:', err);
@@ -478,7 +470,24 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   const handleApplySentenceCorrection = () => {
     if (sentenceEvaluation?.correctedSentence) {
-      setSentenceInput(sentenceEvaluation.correctedSentence);
+      const corrected = sentenceEvaluation.correctedSentence;
+      const updatedEval: WritingEvaluationResult = {
+        ...sentenceEvaluation,
+        hasAnyError: false,
+        isCorrect: true,
+        correctedSentence: corrected,
+      };
+      setSentenceInput(corrected);
+      setSentenceEvaluation(updatedEval);
+      const finalWordsToSave =
+        matchedSentenceWords.length > 0
+          ? matchedSentenceWords
+          : updatedEval.usedWords || displayRoutineWords;
+      onSaveDailySentence(corrected, finalWordsToSave, updatedEval);
+      setSentenceSavedSuccess(true);
+      setTimeout(() => {
+        setSentenceSavedSuccess(false);
+      }, 2500);
     }
   };
 
@@ -486,13 +495,38 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     if (e) e.preventDefault();
     const clean = sentenceInput.trim();
     if (!clean) return;
-    const finalWordsToSave = matchedSentenceWords.length > 0 ? matchedSentenceWords : displayRoutineWords;
-    onSaveDailySentence(clean, finalWordsToSave, sentenceEvaluation);
+
+    let activeEval = sentenceEvaluation;
+    if (!activeEval) {
+      setIsCheckingSentence(true);
+      try {
+        activeEval = await checkDailySentenceAi(clean, displayRoutineWords);
+        setSentenceEvaluation(activeEval);
+      } catch (err) {
+        console.warn('Sentence check error on save:', err);
+      } finally {
+        setIsCheckingSentence(false);
+      }
+    }
+
+    // If the AI detected grammar, capitalization, spelling, or tense errors,
+    // keep the AI Grammar Analysis & Feedback card visible so the student can review or click "Apply & Use".
+    if (
+      activeEval &&
+      (activeEval.hasAnyError ||
+        activeEval.isCorrect === false ||
+        (activeEval.correctedSentence &&
+          activeEval.correctedSentence.trim().replace(/[.!?]+$/, '') !==
+            clean.replace(/[.!?]+$/, '')))
+    ) {
+      return;
+    }
+
+    const finalWordsToSave = matchedSentenceWords.length > 0 ? matchedSentenceWords : (activeEval?.usedWords || displayRoutineWords);
+    onSaveDailySentence(clean, finalWordsToSave, activeEval);
     setSentenceSavedSuccess(true);
     setTimeout(() => {
       setSentenceSavedSuccess(false);
-      setSentenceInput('');
-      setSentenceEvaluation(null);
     }, 2500);
   };
 
@@ -2696,8 +2730,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             {sentenceEvaluation && (
               <div className="mt-3 animate-in fade-in duration-200">
                 {sentenceEvaluation.hasAnyError ||
+                sentenceEvaluation.isCorrect === false ||
                 (sentenceEvaluation.correctedSentence &&
-                  sentenceEvaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase()) ? (
+                  sentenceEvaluation.correctedSentence.trim().replace(/[.!?]+$/, '') !==
+                    sentenceInput.trim().replace(/[.!?]+$/, '')) ? (
                   <div className="p-3.5 sm:p-4 bg-gradient-to-br from-[#FFF8F6] to-white rounded-2xl border-2 border-rose-200 shadow-xs space-y-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
