@@ -16,15 +16,10 @@ export function getFirestoreDb() {
     const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      if (process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID) {
-        config.projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
-      }
-      if (process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY) {
-        config.apiKey = process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY;
-      }
-      if (process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID) {
-        config.firestoreDatabaseId = process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID;
-      }
+      // Enforce active project configuration: itissimple-8663d and dedicated firestore database ID
+      config.projectId = config.projectId || 'itissimple-8663d';
+      config.firestoreDatabaseId = config.firestoreDatabaseId || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
+
       const app = getApps().length === 0 ? initializeApp(config) : getApp();
       dbInstance = config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)'
         ? getFirestore(app, config.firestoreDatabaseId)

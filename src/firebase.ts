@@ -14,16 +14,16 @@ try {
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : ({} as Record<string, string>);
 
 export const effectiveFirebaseConfig = {
-  projectId: env.VITE_FIREBASE_PROJECT_ID || baseFirebaseConfig.projectId,
-  appId: env.VITE_FIREBASE_APP_ID || baseFirebaseConfig.appId,
-  apiKey: env.VITE_FIREBASE_API_KEY || baseFirebaseConfig.apiKey,
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || baseFirebaseConfig.authDomain,
-  firestoreDatabaseId: env.VITE_FIREBASE_DATABASE_ID || baseFirebaseConfig.firestoreDatabaseId,
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || baseFirebaseConfig.storageBucket,
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || baseFirebaseConfig.messagingSenderId,
-  measurementId: env.VITE_FIREBASE_MEASUREMENT_ID || baseFirebaseConfig.measurementId,
-  oAuthClientId: env.VITE_FIREBASE_OAUTH_CLIENT_ID || (baseFirebaseConfig as any).oauthClientId || (baseFirebaseConfig as any).oAuthClientId,
-  recaptchaSiteKey: env.VITE_FIREBASE_RECAPTCHA_SITE_KEY || baseFirebaseConfig.recaptchaSiteKey,
+  projectId: baseFirebaseConfig.projectId || 'itissimple-8663d',
+  appId: baseFirebaseConfig.appId,
+  apiKey: baseFirebaseConfig.apiKey,
+  authDomain: baseFirebaseConfig.authDomain,
+  firestoreDatabaseId: baseFirebaseConfig.firestoreDatabaseId || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e',
+  storageBucket: baseFirebaseConfig.storageBucket,
+  messagingSenderId: baseFirebaseConfig.messagingSenderId,
+  measurementId: baseFirebaseConfig.measurementId,
+  oAuthClientId: (baseFirebaseConfig as any).oauthClientId || (baseFirebaseConfig as any).oAuthClientId,
+  recaptchaSiteKey: baseFirebaseConfig.recaptchaSiteKey,
 };
 
 // Initialize or reuse Firebase App instance
