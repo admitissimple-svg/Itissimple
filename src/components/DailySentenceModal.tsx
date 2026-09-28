@@ -59,13 +59,16 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
   );
 
   const handleManualCheck = async () => {
-    if (!sentenceInput.trim() || sentenceInput.trim().length < 5) return;
+    if (!sentenceInput.trim() || sentenceInput.trim().length < 4) return;
     setIsChecking(true);
     try {
       const result = await checkStudentWritingApi({
         sentence: sentenceInput.trim(),
-        words: matchedWords,
+        words: allWords,
+        dailyWords: allWords,
+        matchedWords,
         level: userProfile.level,
+        language: isEn ? 'en' : 'pt',
       });
       setEvaluation(result);
     } catch {
@@ -77,9 +80,10 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sentenceInput.trim() || sentenceInput.trim().length < 5) return;
+    if (!sentenceInput.trim() || sentenceInput.trim().length < 4) return;
 
-    onSaveDailySentence(sentenceInput.trim(), matchedWords, evaluation);
+    const wordsToRecord = matchedWords.length > 0 ? matchedWords : (evaluation?.usedWords || allWords);
+    onSaveDailySentence(sentenceInput.trim(), wordsToRecord, evaluation);
     setSaveSuccess(true);
     setTimeout(() => {
       setSaveSuccess(false);
@@ -227,18 +231,68 @@ export const DailySentenceModal: React.FC<DailySentenceModalProps> = ({
                   )}
                 </div>
                 {evaluation.correctedSentence && (
-                  <p className="font-bold text-slate-900 bg-white/70 p-2 rounded-lg border border-amber-200/60">
-                    "{evaluation.correctedSentence}"
+                  <div className="p-2 bg-white/70 rounded-lg border border-amber-200/60 flex items-center justify-between gap-2">
+                    <p className="font-bold text-slate-900">
+                      "{evaluation.correctedSentence}"
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => speakText(evaluation.correctedSentence || '')}
+                      className="text-[#1C4C96] hover:text-[#062863] text-[10px] font-bold flex items-center gap-0.5 shrink-0"
+                      title={isEn ? 'Listen' : 'Ouvir'}
+                    >
+                      <Volume2 className="w-3 h-3" />
+                      <span>{isEn ? 'Listen' : 'Ouvir'}</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Word adjustments */}
+                {evaluation.wordFeedbacks && evaluation.wordFeedbacks.some((wf) => wf.hasError) && (
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {evaluation.wordFeedbacks.filter((wf) => wf.hasError).map((wf, idx) => (
+                      <span
+                        key={idx}
+                        className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white border border-amber-300 text-amber-950 font-bold"
+                        title={isEn ? wf.explanationEn : wf.explanationPt}
+                      >
+                        <span className="line-through text-rose-400">{wf.original}</span> → <span className="text-emerald-700">{wf.corrected}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {evaluation.targetWordFeedback && (
+                  <p className="text-[11px] text-amber-950 bg-white/70 p-2 rounded-lg border border-amber-200/60 leading-relaxed">
+                    🎯 <span className="font-semibold">{isEn ? 'Vocabulary Requirement:' : 'Vocabulário da Rotina:'}</span>{' '}
+                    {evaluation.targetWordFeedback}
                   </p>
                 )}
+
                 {evaluation.explanation && <p className="text-[11px] leading-relaxed">{evaluation.explanation}</p>}
+
+                {(evaluation.levelTipsPt || evaluation.levelTipsEn) && (
+                  <div className="text-[10px] text-[#062863] bg-[#9AB4FF]/20 p-2 rounded-lg border border-[#607EC9]/30 flex items-center gap-1.5 font-medium">
+                    <Sparkles className="w-3 h-3 text-[#1C4C96] shrink-0" />
+                    <span>{isEn ? evaluation.levelTipsEn : evaluation.levelTipsPt}</span>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-center gap-2 animate-in fade-in">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="font-bold">
-                  {isEn ? '✨ Your sentence looks great and grammatically sound!' : '✨ Sua frase está ótima e gramaticalmente correta!'}
-                </span>
+              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2 animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <span className="font-bold block">
+                      {isEn ? '✨ Your sentence looks great and grammatically sound!' : '✨ Sua frase está ótima e gramaticalmente correta!'}
+                    </span>
+                    {(evaluation.targetWordFeedback || evaluation.overallSummaryEn || evaluation.overallSummaryPt) && (
+                      <span className="text-[11px] text-emerald-800 block mt-0.5">
+                        {evaluation.targetWordFeedback || (isEn ? evaluation.overallSummaryEn : evaluation.overallSummaryPt)}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
             )
           )}

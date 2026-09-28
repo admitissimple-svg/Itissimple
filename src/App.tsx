@@ -3821,11 +3821,18 @@ export default function App() {
     const studentUid = currentAccount?.uid || userProfile?.id || '';
     const studentEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
 
+    const effectiveWords = (wordsUsed && wordsUsed.length > 0)
+      ? wordsUsed
+      : (evaluationResult?.usedWords && evaluationResult.usedWords.length > 0)
+      ? evaluationResult.usedWords
+      : [];
+
     const newJournalEntry: DailyJournalEntry = {
       id: `journal_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       date: new Date().toISOString().split('T')[0],
       sentence,
-      wordsUsed,
+      wordsUsed: effectiveWords,
+      usedWords: effectiveWords,
       correctedSentence: evaluationResult?.correctedSentence,
       explanation:
         evaluationResult?.explanation ||
@@ -3834,6 +3841,7 @@ export default function App() {
         evaluationResult?.overallSummaryPt ||
         '',
       hasErrors: evaluationResult?.hasAnyError,
+      evaluationResult: evaluationResult || null,
       createdAt: new Date().toISOString(),
       studentUid,
       studentEmail,

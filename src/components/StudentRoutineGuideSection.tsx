@@ -461,8 +461,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     try {
       const evaluation = await checkStudentWritingApi({
         sentence: clean,
-        words: matchedSentenceWords,
+        words: displayRoutineWords,
+        dailyWords: displayRoutineWords,
+        matchedWords: matchedSentenceWords,
         level: userProfile?.level,
+        levelInstruction: activeActivity?.activityName || '',
+        language: currentLanguage,
       });
       setSentenceEvaluation(evaluation);
     } catch (err) {
@@ -482,7 +486,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     if (e) e.preventDefault();
     const clean = sentenceInput.trim();
     if (!clean) return;
-    onSaveDailySentence(clean, matchedSentenceWords, sentenceEvaluation);
+    const finalWordsToSave = matchedSentenceWords.length > 0 ? matchedSentenceWords : displayRoutineWords;
+    onSaveDailySentence(clean, finalWordsToSave, sentenceEvaluation);
     setSentenceSavedSuccess(true);
     setTimeout(() => {
       setSentenceSavedSuccess(false);
@@ -2795,6 +2800,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                       </p>
                     )}
 
+                    {/* Target word feedback */}
+                    {sentenceEvaluation.targetWordFeedback && (
+                      <p className="text-[11px] text-[#062863] bg-[#9AB4FF]/10 p-2.5 rounded-xl leading-relaxed border border-[#607EC9]/25">
+                        🎯 <span className="font-semibold">{isEn ? 'Vocabulary Requirement:' : 'Vocabulário da Rotina:'}</span>{' '}
+                        {sentenceEvaluation.targetWordFeedback}
+                      </p>
+                    )}
+
                     {/* Pedagogical level tip */}
                     {(sentenceEvaluation.levelTipsPt || sentenceEvaluation.levelTipsEn) && (
                       <div className="text-[10px] text-[#062863] bg-[#9AB4FF]/15 p-2 rounded-xl border border-[#607EC9]/30 flex items-center gap-1.5">
@@ -2813,9 +2826,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                             ? '✨ Outstanding! Your sentence is grammatically correct and natural.'
                             : '✨ Excelente! Sua frase está gramaticalmente correta e natural.'}
                         </span>
-                        {(sentenceEvaluation.overallSummaryPt || sentenceEvaluation.overallSummaryEn) && (
+                        {(sentenceEvaluation.targetWordFeedback || sentenceEvaluation.overallSummaryPt || sentenceEvaluation.overallSummaryEn) && (
                           <span className="text-[11px] text-emerald-700 block mt-0.5">
-                            {isEn ? sentenceEvaluation.overallSummaryEn : sentenceEvaluation.overallSummaryPt}
+                            {sentenceEvaluation.targetWordFeedback || (isEn ? sentenceEvaluation.overallSummaryEn : sentenceEvaluation.overallSummaryPt)}
                           </span>
                         )}
                       </div>

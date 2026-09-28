@@ -81,8 +81,11 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
     try {
       const evaluation = await checkStudentWritingApi({
         sentence: sentenceInput.trim(),
-        words: matchedWords,
+        words: allLearnedWordsToday,
+        dailyWords: allLearnedWordsToday,
+        matchedWords,
         level: userProfile.level,
+        language: currentLanguage,
       });
       setSentenceEvaluation(evaluation);
     } catch (err) {
@@ -96,7 +99,8 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
     const finalMatched = allLearnedWordsToday.filter((w) =>
       Boolean(w && textToSave.toLowerCase().includes(w.toLowerCase()))
     );
-    onSaveDailySentence(textToSave, finalMatched, sentenceEvaluation);
+    const wordsToSave = finalMatched.length > 0 ? finalMatched : (sentenceEvaluation?.usedWords || allLearnedWordsToday);
+    onSaveDailySentence(textToSave, wordsToSave, sentenceEvaluation);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -114,12 +118,15 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
     try {
       const evaluation = await checkStudentWritingApi({
         sentence: cleanText,
-        words: matchedWords,
+        words: allLearnedWordsToday,
+        dailyWords: allLearnedWordsToday,
+        matchedWords,
         level: userProfile.level,
+        language: currentLanguage,
       });
       setSentenceEvaluation(evaluation);
 
-      if (!evaluation.hasAnyError) {
+      if (!evaluation.hasAnyError && evaluation.isCorrect !== false) {
         handleSaveConfirmed(cleanText);
       }
     } catch (err) {
@@ -330,7 +337,7 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
       </form>
 
       {/* AI Grammar Feedback Alert */}
-      {sentenceEvaluation && sentenceEvaluation.hasAnyError && (
+      {sentenceEvaluation && (sentenceEvaluation.hasAnyError || sentenceEvaluation.isCorrect === false || (sentenceEvaluation.correctedSentence && sentenceEvaluation.correctedSentence.trim().toLowerCase() !== sentenceInput.trim().toLowerCase())) && (
         <div className="p-4.5 bg-[#FFF8F6] rounded-2xl border-2 border-[#FCA5A5] shadow-xs space-y-3 animate-in fade-in">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -363,13 +370,51 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
 
           {sentenceEvaluation.correctedSentence && (
             <div className="p-3 bg-white rounded-xl border border-[#FECACA] space-y-1.5">
-              <span className="text-[10px] font-bold text-[#991B1B] uppercase tracking-wider block">
-                {currentLanguage === 'en' ? 'Suggested Natural Version:' : 'Versão Natural Sugerida:'}
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-[#991B1B] uppercase tracking-wider block">
+                  {currentLanguage === 'en' ? 'Suggested Natural Version:' : 'Versão Natural Sugerida:'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => speakText(sentenceEvaluation.correctedSentence || '')}
+                  className="text-[#1C4C96] hover:text-[#062863] text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                  title={currentLanguage === 'en' ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>{currentLanguage === 'en' ? 'Listen' : 'Ouvir'}</span>
+                </button>
+              </div>
               <p className="text-xs sm:text-sm font-bold text-[#0F172A] leading-relaxed">
                 "{sentenceEvaluation.correctedSentence}"
               </p>
             </div>
+          )}
+
+          {/* Word-level adjustments */}
+          {sentenceEvaluation.wordFeedbacks && sentenceEvaluation.wordFeedbacks.some((wf) => wf.hasError) && (
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold text-slate-600 block">
+                {currentLanguage === 'en' ? 'Identified Adjustments:' : 'Ajustes Identificados:'}
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {sentenceEvaluation.wordFeedbacks.filter((wf) => wf.hasError).map((wf, i) => (
+                  <span
+                    key={i}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white border border-rose-300 text-rose-900 font-bold"
+                    title={currentLanguage === 'en' ? wf.explanationEn : wf.explanationPt}
+                  >
+                    <span className="line-through text-rose-400">{wf.original}</span> → <span className="text-emerald-700">{wf.corrected}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {sentenceEvaluation.targetWordFeedback && (
+            <p className="text-[11px] text-[#062863] bg-[#9AB4FF]/10 p-2.5 rounded-xl leading-relaxed border border-[#607EC9]/25">
+              🎯 <span className="font-semibold">{currentLanguage === 'en' ? 'Vocabulary Requirement:' : 'Vocabulário da Rotina:'}</span>{' '}
+              {sentenceEvaluation.targetWordFeedback}
+            </p>
           )}
 
           {sentenceEvaluation.explanation && (
@@ -377,24 +422,38 @@ export const DailySentenceSection: React.FC<DailySentenceSectionProps> = ({
               💡 {sentenceEvaluation.explanation}
             </p>
           )}
+
+          {(sentenceEvaluation.levelTipsPt || sentenceEvaluation.levelTipsEn) && (
+            <div className="text-[10px] text-[#062863] bg-[#9AB4FF]/15 p-2 rounded-xl border border-[#607EC9]/30 flex items-center gap-1.5">
+              <Sparkles className="w-3 h-3 text-[#1C4C96] shrink-0" />
+              <span>{currentLanguage === 'en' ? sentenceEvaluation.levelTipsEn : sentenceEvaluation.levelTipsPt}</span>
+            </div>
+          )}
         </div>
       )}
 
       {/* Success Alert */}
-      {sentenceEvaluation && !sentenceEvaluation.hasAnyError && sentenceEvaluation.isCorrect && (
+      {sentenceEvaluation && !sentenceEvaluation.hasAnyError && sentenceEvaluation.isCorrect !== false && (
         <div className="p-3.5 bg-[#9AB4FF]/20 rounded-2xl border border-[#607EC9] text-[#062863] flex items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-[#1C4C96] shrink-0" />
-            <span className="font-bold">
-              {currentLanguage === 'en'
-                ? '✨ Outstanding! Your sentence is grammatically correct and natural.'
-                : '✨ Excelente! Sua frase está gramaticalmente correta e natural.'}
-            </span>
+            <div>
+              <span className="font-bold block">
+                {currentLanguage === 'en'
+                  ? '✨ Outstanding! Your sentence is grammatically correct and natural.'
+                  : '✨ Excelente! Sua frase está gramaticalmente correta e natural.'}
+              </span>
+              {(sentenceEvaluation.targetWordFeedback || sentenceEvaluation.overallSummaryPt || sentenceEvaluation.overallSummaryEn) && (
+                <span className="text-[11px] text-[#062863]/80 block mt-0.5">
+                  {sentenceEvaluation.targetWordFeedback || (currentLanguage === 'en' ? sentenceEvaluation.overallSummaryEn : sentenceEvaluation.overallSummaryPt)}
+                </span>
+              )}
+            </div>
           </div>
           <button
             type="button"
             onClick={() => setSentenceEvaluation(null)}
-            className="text-[#607EC9] hover:text-[#000035] text-[10px] font-bold"
+            className="text-[#607EC9] hover:text-[#000035] text-[10px] font-bold px-2 py-1 rounded-md hover:bg-[#9AB4FF]/20 transition cursor-pointer"
           >
             OK
           </button>

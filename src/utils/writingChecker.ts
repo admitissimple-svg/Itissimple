@@ -3,6 +3,8 @@ import { EnglishLevel, WritingEvaluationResult, WordFeedback, SentenceFeedback, 
 export interface CheckWritingParams {
   words?: string[];
   targetWord?: string;
+  dailyWords?: string[];
+  matchedWords?: string[];
   sentence?: string;
   activityName?: string;
   level?: EnglishLevel | string;
@@ -24,16 +26,25 @@ export async function checkStudentWritingApi(
 
     if (res.ok) {
       const data = await res.json();
-      if (data && typeof data === 'object' && typeof data.hasAnyError === 'boolean') {
+      if (data && typeof data === 'object') {
+        const hasAnyError = typeof data.hasAnyError === 'boolean'
+          ? data.hasAnyError
+          : typeof data.isCorrect === 'boolean'
+          ? !data.isCorrect
+          : Boolean(data.correctedSentence && data.correctedSentence.trim().toLowerCase() !== (params.sentence || '').trim().toLowerCase());
+
         return {
           ...data,
-          isCorrect: typeof data.isCorrect === 'boolean' ? data.isCorrect : !data.hasAnyError,
+          hasAnyError,
+          isCorrect: typeof data.isCorrect === 'boolean' ? data.isCorrect : !hasAnyError,
           explanation:
             data.explanation ||
             data.sentenceFeedback?.explanationPt ||
             data.sentenceFeedback?.explanationEn ||
             data.overallSummaryPt ||
-            'Análise gramatical concluída com sucesso.',
+            data.overallSummaryEn ||
+            (hasAnyError ? 'Identificamos sugestões para aperfeiçoar sua frase.' : 'Sua frase está gramaticalmente correta.'),
+          correctedSentence: data.correctedSentence || params.sentence || '',
         } as WritingEvaluationResult;
       }
     }
@@ -180,10 +191,14 @@ export async function evaluateWeeklyHomeworkApi(params: {
 }
 
 function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
-  const { words = [], targetWord = '', sentence = '', level = 'iniciante', levelInstruction = '', instruction = '', language = 'pt' } = params;
+  const { words = [], targetWord = '', dailyWords = [], sentence = '', level = 'iniciante', levelInstruction = '', instruction = '', language = 'pt' } = params;
 
-  const allWords = targetWord ? Array.from(new Set([targetWord, ...words])) : words;
+  const rawList = dailyWords.length > 0 ? dailyWords : words;
+  const allWords = targetWord ? Array.from(new Set([targetWord, ...rawList])) : rawList;
   const wordFeedbacks: WordFeedback[] = [];
+
+  const sClean = sentence.trim();
+  const lowerSentence = sClean.toLowerCase();
 
   // Common spelling errors map for routine vocabulary
   const COMMON_SPELLING_FIXES: Record<string, { correct: string; explPt: string; explEn: string }> = {
@@ -206,10 +221,21 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     'untill': { correct: 'until', explPt: 'A palavra "until" tem apenas uma letra "l".', explEn: 'The word "until" ends in a single "l".' },
   };
 
+  // Check presence of words
+  const usedWords: string[] = [];
+  const missingWords: string[] = [];
   for (const w of allWords) {
     const clean = w.trim();
     if (!clean) continue;
     const lower = clean.toLowerCase();
+    const targetRoot = lower.replace(/(ing|ed|s|es|d)$/i, '');
+    const isUsed = lowerSentence.includes(lower) || (targetRoot.length >= 4 && lowerSentence.includes(targetRoot));
+
+    if (isUsed) {
+      usedWords.push(clean);
+    } else {
+      missingWords.push(clean);
+    }
 
     if (COMMON_SPELLING_FIXES[lower]) {
       const fix = COMMON_SPELLING_FIXES[lower];
@@ -225,11 +251,25 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
         original: clean,
         hasError: false,
         corrected: clean,
-        explanationPt: 'Ortografia correta.',
-        explanationEn: 'Correct spelling.',
+        explanationPt: isUsed ? 'Palavra incorporada na frase.' : 'Ortografia válida.',
+        explanationEn: isUsed ? 'Word used in sentence.' : 'Valid spelling.',
       });
     }
   }
+
+  // Also check for misspelled words present in the sentence itself
+  Object.entries(COMMON_SPELLING_FIXES).forEach(([wrong, fix]) => {
+    const rx = new RegExp(`\\b${wrong}\\b`, 'i');
+    if (rx.test(lowerSentence) && !wordFeedbacks.some((wf) => wf.original.toLowerCase() === wrong.toLowerCase())) {
+      wordFeedbacks.unshift({
+        original: wrong,
+        hasError: true,
+        corrected: fix.correct,
+        explanationPt: fix.explPt,
+        explanationEn: fix.explEn,
+      });
+    }
+  });
 
   let sentenceFeedback: SentenceFeedback | undefined = undefined;
   let correctedSentence = sentence;
@@ -237,18 +277,15 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
   const errorDetailsPt: string[] = [];
   const errorDetailsEn: string[] = [];
 
-  const sClean = sentence.trim();
-  const lowerSentence = sClean.toLowerCase();
-
   // Target word presence check
   const mainTarget = targetWord || (allWords[0] || '');
   const cleanTarget = mainTarget.trim().toLowerCase();
-  const targetRoot = cleanTarget.replace(/(ing|ed|s|es|d)$/i, '');
-  const usedTargetWord = Boolean(
-    !cleanTarget ||
-    lowerSentence.includes(cleanTarget) ||
-    (targetRoot.length >= 4 && lowerSentence.includes(targetRoot))
-  );
+  const hasWordConstraint = allWords.length > 0;
+  const usedTargetWord = targetWord
+    ? usedWords.some((w) => w.toLowerCase() === cleanTarget)
+    : hasWordConstraint
+    ? usedWords.length > 0
+    : true;
 
   // Trigger check based on levelInstruction
   let usedTrigger: boolean | undefined = undefined;
@@ -306,7 +343,7 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
       errorDetailsEn.push("Missing subject: start with 'It is' for predicate adjectives.");
     }
 
-    // 2. Rigorous Check: Missing infinitive particle "to" after "better" (e.g., "better stop", "better take", "better face")
+    // 2. Rigorous Check: Missing infinitive particle "to" after "better"
     if (/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/i.test(sFixed)) {
       sFixed = sFixed.replace(/\b(it\s+is\s+better|is\s+better)\s+(take|face|leave|stay|go|do|make|get|have|be|stop|start|try|listen|focus|choose)\b/gi, (match, prefix, verb) => {
         const cleanPrefix = prefix.toLowerCase().includes('it') ? prefix : (prefix[0] === 'I' ? 'It is better' : 'it is better');
@@ -329,7 +366,7 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
       errorDetailsEn.push("Gerund usage: to cease an action, use 'stop + gerund' (e.g., 'stop complaining', not 'stop to complain').");
     }
 
-    // 3. Rigorous Check: Incorrect prepositional governance / regência (e.g., "instead to face", "instead face")
+    // 3. Rigorous Check: Incorrect prepositional governance
     if (/\binstead\s+(to\s+([a-z]+)|(face|do|take|make|stay|go|complain|wait)\b)/i.test(sFixed)) {
       sFixed = sFixed.replace(/\binstead\s+(to\s+([a-z]+)|([a-z]+)\b)/gi, (match, toGroup, verb1, verb2) => {
         const v = (verb1 || verb2 || '').toLowerCase();
@@ -346,11 +383,10 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     }
 
     // 4. Rigorous Check: Indefinite article vowel error (a vs an)
-    // Matches 'a' before any vowel sound (e.g. "a outstanding", "a awkward", "a apple", "a hour")
     const A_BEFORE_VOWEL_REGEX = /\ba\s+([aeio][a-z]+|u(?!niversity|nicorn|nique|niform|nion|nit|ser|sage|seful|nisex|niversal|nilateral)[a-z]+|hour[a-z]*|honest[a-z]*|honor[a-z]*|heir[a-z]*)\b/gi;
     if (A_BEFORE_VOWEL_REGEX.test(sFixed)) {
       sFixed = sFixed.replace(A_BEFORE_VOWEL_REGEX, (match, word) => {
-        if (/^(one|once)/i.test(word)) return match; // 'a one-time opportunity'
+        if (/^(one|once)/i.test(word)) return match;
         return `an ${word}`;
       });
       hasSentenceError = true;
@@ -358,7 +394,6 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
       errorDetailsEn.push("Indefinite article error: use 'an' before words starting with vowel sounds (e.g., 'an outstanding', 'an awkward', 'an hour').");
     }
 
-    // Matches 'an' before consonant sounds (e.g. "an university", "an European", "an book")
     const AN_BEFORE_CONSONANT_REGEX = /\ban\s+([bcdfghjklmnpqrstvwxyz](?!hour|honest|honor|heir)[a-z]+|university[a-z]*|unicorn[a-z]*|unique[a-z]*|uniform[a-z]*|union[a-z]*|unit[a-z]*|user[a-z]*|usage[a-z]*|useful[a-z]*|european[a-z]*|one|once)\b/gi;
     if (AN_BEFORE_CONSONANT_REGEX.test(sFixed)) {
       sFixed = sFixed.replace(AN_BEFORE_CONSONANT_REGEX, (match, word) => `a ${word}`);
@@ -415,19 +450,19 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
 
     const explanationPt = hasSentenceError
       ? errorDetailsPt.join(' ')
-      : !usedTargetWord && mainTarget
-      ? `A frase está bem escrita, mas certifique-se de incluir a palavra-alvo "${mainTarget}".`
+      : !usedTargetWord && hasWordConstraint
+      ? `A frase está bem escrita, mas certifique-se de incluir palavras da sua rotina de hoje (${allWords.slice(0, 3).join(', ')}...).`
       : 'Sua frase está gramaticalmente correta, fluente e natural em inglês.';
 
     const explanationEn = hasSentenceError
       ? errorDetailsEn.join(' ')
-      : !usedTargetWord && mainTarget
-      ? `Good sentence, but remember to explicitly use the target word "${mainTarget}".`
+      : !usedTargetWord && hasWordConstraint
+      ? `Good sentence, but remember to include today's vocabulary words (${allWords.slice(0, 3).join(', ')}...).`
       : 'Your sentence is grammatically sound, natural, and fluent.';
 
     sentenceFeedback = {
       original: sClean,
-      hasError: hasSentenceError || (mainTarget ? !usedTargetWord : false),
+      hasError: hasSentenceError || (!usedTargetWord && hasWordConstraint),
       corrected: sFixed,
       explanationPt,
       explanationEn,
@@ -437,24 +472,25 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
   const hasAnyError =
     wordFeedbacks.some((wf) => wf.hasError) ||
     hasSentenceError ||
-    (mainTarget ? !usedTargetWord : false) ||
+    (!usedTargetWord && hasWordConstraint) ||
     (usedTrigger === false);
 
   const lvlStr = String(level).toLowerCase();
   const isAdv = lvlStr.includes('avanc') || lvlStr.includes('advan');
   const isBeg = lvlStr.includes('inic') || lvlStr.includes('begin');
 
-  const targetWordFeedback = mainTarget
+  const targetWordFeedback = hasWordConstraint
     ? usedTargetWord
-      ? `Palavra-alvo "${mainTarget}" aplicada com sucesso.`
-      : `Lembre-se de incorporar a palavra "${mainTarget}" na frase.`
+      ? `Palavras da rotina utilizadas: ${usedWords.join(', ')}.`
+      : `Inclua pelo menos uma palavra da sua rotina na frase (${allWords.slice(0, 3).join(', ')}...).`
     : '';
 
   return {
     hasAnyError,
     isCorrect: !hasAnyError,
     usedTargetWord,
-    usedTrigger,
+    usedWords,
+    missingWords,
     targetWordFeedback,
     triggerFeedback,
     wordFeedbacks,
@@ -462,16 +498,16 @@ function evaluateLocally(params: CheckWritingParams): WritingEvaluationResult {
     correctedSentence,
     explanation: sentenceFeedback?.explanationPt || (hasAnyError ? 'Identificamos sugestões para sua frase.' : 'Tudo correto!'),
     overallSummaryPt: !hasAnyError
-      ? `Excelente! Você utilizou "${mainTarget || 'a palavra-alvo'}" com precisão e cumpriu o desafio pedagógico.`
+      ? `Excelente! Você utilizou o vocabulário da sua rotina (${usedWords.join(', ') || 'palavras de hoje'}) com precisão e cumpriu o desafio.`
       : !usedTargetWord
-      ? `Inclua a palavra-alvo "${mainTarget}" na sua frase para validar a atividade.`
+      ? `Inclua palavras da sua rotina (${allWords.slice(0, 4).join(', ')}) na sua frase para validar a atividade.`
       : usedTrigger === false
       ? triggerFeedback || 'Revise o gatilho solicitado para a frase.'
       : 'Atenção: sua frase contém incorreções gramaticais ou ortográficas que precisam ser corrigidas antes da aprovação.',
     overallSummaryEn: !hasAnyError
-      ? `Outstanding! You naturally applied "${mainTarget || 'target word'}" and fulfilled the pedagogical challenge.`
+      ? `Outstanding! You naturally applied your routine vocabulary (${usedWords.join(', ') || 'today’s words'}) and fulfilled the pedagogical challenge.`
       : !usedTargetWord
-      ? `Please include the target word "${mainTarget}" in your sentence.`
+      ? `Please include words from your daily routine (${allWords.slice(0, 4).join(', ')}) in your sentence.`
       : usedTrigger === false
       ? 'Review the requested challenge trigger in your sentence.'
       : 'Needs revision: your sentence contains grammatical or spelling errors that must be corrected before approval.',

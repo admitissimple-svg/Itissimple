@@ -192,6 +192,9 @@ export interface DailyJournalEntry {
   correctedSentence?: string;
   explanation?: string;
   hasErrors?: boolean;
+  evaluationResult?: WritingEvaluationResult | null;
+  usedWords?: string[];
+  missingWords?: string[];
   studentUid?: string;
   studentEmail?: string;
 }
@@ -653,6 +656,8 @@ export interface WritingEvaluationResult {
   levelTipsPt?: string;
   levelTipsEn?: string;
   usedTargetWord?: boolean;
+  usedWords?: string[];
+  missingWords?: string[];
   usedTrigger?: boolean;
   targetWordFeedback?: string;
   triggerFeedback?: string;
