@@ -1673,7 +1673,7 @@ export function subscribeToStudentWeeklyChecks(
     const userRef = doc(db, 'users', cleanUid);
     const unsub = onSnapshot(
       userRef,
-      (snap) => {
+      async (snap) => {
         if (snap.exists()) {
           const data = snap.data();
           const baseChecks: Record<string, boolean> = {
@@ -1689,6 +1689,19 @@ export function subscribeToStudentWeeklyChecks(
               }
             });
           }
+
+          // Also check memorization subcollection under users/{cleanUid}/memorization
+          try {
+            const memoCol = collection(db, 'users', cleanUid, 'memorization');
+            const memoSnaps = await withFirestoreTimeout(getDocs(memoCol), 1500, null);
+            if (memoSnaps && !memoSnaps.empty) {
+              memoSnaps.forEach((d) => {
+                if (d.data()?.completed) {
+                  baseChecks[`memorization_${d.id}`] = true;
+                }
+              });
+            }
+          } catch {}
 
           cacheWeeklyChecksLocally(cleanUid, cleanEmail, baseChecks);
 
@@ -1821,6 +1834,209 @@ export async function saveStudentWeeklyChecksToFirestore(
 }
 
 /**
+ * Persists the completion status of the Weekly Memorization Activity directly and permanently
+ * to Firestore under the student's UID collection: users/{cleanUid}.
+ * Writes:
+ * 1. users/{cleanUid} (fields: weeklyChecks.memorization_{day}: isCompleted, sPathChecks.memorization_{day}: isCompleted, weeklyHomework.completedPartsByDay.{day}: isCompleted)
+ * 2. users/{cleanUid}/memorization/{day} subcollection document ({ day, completed: isCompleted, completedAt: ISO, updatedAt: ISO })
+ * 3. users/{cleanUid}/homework/{weekId} subcollection document ({ completedPartsByDay: { [day]: isCompleted }, isDayPartCompleted: isCompleted })
+ * 4. users/{cleanUid}/studentJournal/memorization_{day}_{weekId} subcollection document & journal entry
+ * 5. Mirrors to server API and local storage cache
+ */
+export async function saveMemorizationCompletionToFirestore(
+  studentUid: string,
+  studentEmail: string | undefined,
+  day: DayOfWeek,
+  isCompleted: boolean = true,
+  homeworkData?: WeeklyHomeworkData,
+  weekId: string = 'current_week'
+): Promise<boolean> {
+  const db = getDb();
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+
+  if (!day) return false;
+
+  const checkKey = `memorization_${day}`;
+  const nowIso = new Date().toISOString();
+
+  // 1. Immediately update localStorage cache for instant 0ms offline/reload hydration
+  if (cleanUid) {
+    const currentCached = getCachedWeeklyChecks(cleanUid, cleanEmail);
+    cacheWeeklyChecksLocally(cleanUid, cleanEmail, {
+      ...currentCached,
+      [checkKey]: isCompleted,
+    });
+  }
+
+  // 2. Direct Firestore writes strictly under users/{cleanUid} collection
+  if (db && cleanUid) {
+    try {
+      const userRef = doc(db, 'users', cleanUid);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+      const existingData = userSnap && userSnap.exists() ? userSnap.data() : {};
+
+      const existingChecks = {
+        ...(existingData?.weeklyChecks || {}),
+        ...(existingData?.sPathChecks || {}),
+      };
+      const updatedChecks = {
+        ...existingChecks,
+        [checkKey]: isCompleted,
+      };
+
+      const existingHw = existingData?.weeklyHomework || homeworkData || {};
+      const existingParts = existingHw?.completedPartsByDay || {};
+      const updatedParts = {
+        ...existingParts,
+        [day]: isCompleted,
+      };
+      const updatedHw = {
+        ...existingHw,
+        isDayPartCompleted: isCompleted,
+        completedPartsByDay: updatedParts,
+        updatedAt: nowIso,
+      };
+
+      // 2a. Update user root document: users/{cleanUid}
+      await withFirestoreTimeout(
+        setDoc(
+          userRef,
+          {
+            weeklyChecks: updatedChecks,
+            sPathChecks: updatedChecks,
+            weeklyHomework: updatedHw,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        ),
+        3500,
+        null
+      );
+
+      // 2b. Write to users/{cleanUid}/memorization/{day}
+      const memoDocRef = doc(db, 'users', cleanUid, 'memorization', day);
+      await withFirestoreTimeout(
+        setDoc(
+          memoDocRef,
+          {
+            day,
+            completed: isCompleted,
+            completedAt: nowIso,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        ),
+        2500,
+        null
+      );
+
+      // 2c. Write to users/{cleanUid}/homework/{weekId}
+      const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
+      await withFirestoreTimeout(
+        setDoc(
+          hwDocRef,
+          {
+            id: weekId,
+            completedPartsByDay: updatedParts,
+            isDayPartCompleted: isCompleted,
+            studentUid: cleanUid,
+            studentEmail: cleanEmail,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        ),
+        2500,
+        null
+      );
+
+      // 2d. Record in studentJournal
+      const currentWeekNumber = Number(existingData?.weeklyCycle) || 1;
+      const journalEntryId = `memorization_${day}_${currentWeekNumber}`;
+      const journalEntry: StudentJournalEntry = {
+        id: journalEntryId,
+        type: 'memorization',
+        date: getDateForDayInCurrentWeek(day),
+        dayOfWeek: day,
+        week: currentWeekNumber,
+        timestamp: Date.now(),
+        title: 'Weekly Memorization Activity',
+        details: `Completed Memorization for ${day}`,
+        studentUid: cleanUid,
+        studentEmail: cleanEmail,
+      };
+
+      const existingJournal: StudentJournalEntry[] = Array.isArray(existingData?.studentJournal)
+        ? existingData.studentJournal
+        : [];
+      const filteredJournal = existingJournal.filter(
+        (e) => !(e.type === 'memorization' && e.dayOfWeek === day && e.week === currentWeekNumber)
+      );
+      const updatedJournal = isCompleted ? [journalEntry, ...filteredJournal] : filteredJournal;
+
+      await withFirestoreTimeout(
+        setDoc(userRef, { studentJournal: updatedJournal }, { merge: true }),
+        2000,
+        null
+      );
+
+      const journalEntryRef = doc(db, 'users', cleanUid, 'studentJournal', journalEntryId);
+      if (isCompleted) {
+        await withFirestoreTimeout(setDoc(journalEntryRef, journalEntry, { merge: true }), 2000, null);
+      } else {
+        await withFirestoreTimeout(deleteDoc(journalEntryRef), 2000, null);
+      }
+
+      // 2e. Top-level student_homework partition for cross-device synchronization
+      const topLevelRef = doc(db, 'student_homework', cleanUid);
+      await withFirestoreTimeout(
+        setDoc(
+          topLevelRef,
+          {
+            completedPartsByDay: updatedParts,
+            isDayPartCompleted: isCompleted,
+            updatedAt: nowIso,
+          },
+          { merge: true }
+        ),
+        2000,
+        null
+      );
+    } catch (err) {
+      console.warn('saveMemorizationCompletionToFirestore notice:', err);
+    }
+  }
+
+  // 3. Mirror to server API endpoints
+  if (cleanEmail || cleanUid) {
+    fetch('/api/routines/weekly-checks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentEmail: cleanEmail || cleanUid,
+        studentUid: cleanUid,
+        checks: { [checkKey]: isCompleted },
+      }),
+    }).catch(() => {});
+
+    fetch('/api/homework', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentEmail: cleanEmail,
+        uid: cleanUid,
+        weeklyHomework: {
+          completedPartsByDay: { [day]: isCompleted },
+          isDayPartCompleted: isCompleted,
+        },
+      }),
+    }).catch(() => {});
+  }
+
+  return true;
+}
+
+/**
  * Fetch student S-Path (Gráfico S) weekly checks directly from Firestore document users/{studentUID}
  */
 export async function fetchStudentWeeklyChecksFromFirestore(
@@ -1868,6 +2084,20 @@ export async function fetchStudentWeeklyChecksFromFirestore(
                 mergedChecks[`memorization_${d.id}`] = true;
               }
             });
+          }
+        } catch {}
+
+        // Also check homework subcollection under users/{cleanUid}/homework/current_week
+        try {
+          const hwSubDoc = doc(db, 'users', cleanUid, 'homework', 'current_week');
+          const hwSubSnap = await withFirestoreTimeout(getDoc(hwSubDoc), 1500, null);
+          if (hwSubSnap && hwSubSnap.exists()) {
+            const hwData = hwSubSnap.data();
+            if (hwData?.completedPartsByDay && typeof hwData.completedPartsByDay === 'object') {
+              Object.entries(hwData.completedPartsByDay).forEach(([day, isDone]) => {
+                if (isDone) mergedChecks[`memorization_${day}`] = true;
+              });
+            }
           }
         } catch {}
 
@@ -2038,6 +2268,10 @@ export function deriveWeeklyChecksFromJournal(
     if (targetWeek !== undefined && entry.week !== undefined && entry.week !== targetWeek) {
       return;
     }
+    // Ignore video review events from previous days so they never falsely mark past days as completed
+    if (entry.type === 'video' && Boolean((entry as any).isReview || (entry as any).reviewedPastDay)) {
+      return;
+    }
     const stepId = mapJournalTypeToStepId(entry.type);
     if (entry.dayOfWeek) {
       checks[`${stepId}_${entry.dayOfWeek}`] = true;
@@ -2062,7 +2296,11 @@ export async function recordActivityInStudentJournal(
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
 
   const sanitizedEntry: StudentJournalEntry = {
-    id: String(entry.id || `${entry.type}_${entry.dayOfWeek || 'any'}_${Date.now()}`).trim(),
+    id: String(
+      entry.id && !entry.id.startsWith('video_') && !entry.id.startsWith('audio_') && !entry.id.startsWith('memorization_')
+        ? `${entry.type}_${entry.dayOfWeek || 'any'}_${entry.week || 1}_${entry.id}`
+        : (entry.id || `${entry.type}_${entry.dayOfWeek || 'any'}_${Date.now()}`)
+    ).trim(),
     type: entry.type,
     date: entry.date || getTodayIsoDate(),
     week: Number(entry.week) || 1,
@@ -2075,6 +2313,7 @@ export async function recordActivityInStudentJournal(
     details: entry.details ? String(entry.details).trim() : undefined,
     studentUid: cleanUid,
     studentEmail: cleanEmail,
+    ...(entry as any),
   };
 
   try {
@@ -2100,7 +2339,7 @@ export async function recordActivityInStudentJournal(
           e.week === sanitizedEntry.week &&
           e.dayOfWeek &&
           sanitizedEntry.dayOfWeek &&
-          e.dayOfWeek === sanitizedEntry.dayOfWeek
+          e.dayOfWeek.toLowerCase() === sanitizedEntry.dayOfWeek.toLowerCase()
         ) {
           return false;
         }
@@ -2110,10 +2349,14 @@ export async function recordActivityInStudentJournal(
       const updatedJournal = [sanitizedEntry, ...filtered];
 
       // Prepare updated weeklyChecks and watched/listened arrays for complete cross-compatibility
+      const isReviewEvent = Boolean((sanitizedEntry as any).isReview || (sanitizedEntry as any).reviewedPastDay);
       const stepId = mapJournalTypeToStepId(sanitizedEntry.type);
       const checkKey = sanitizedEntry.dayOfWeek ? `${stepId}_${sanitizedEntry.dayOfWeek}` : null;
       const currentChecks = userSnap?.exists() ? (userSnap.data()?.weeklyChecks || {}) : {};
-      const updatedChecks = checkKey ? { ...currentChecks, [checkKey]: true } : currentChecks;
+      // Ignore video review events from previous days so it doesn't falsely mark past days in weeklyChecks
+      const updatedChecks = (checkKey && (!isReviewEvent || sanitizedEntry.type !== 'video'))
+        ? { ...currentChecks, [checkKey]: true }
+        : currentChecks;
 
       const payload: Record<string, any> = {
         studentJournal: updatedJournal,

@@ -91,6 +91,12 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isOwner(userId) || isAdmin() || isAuthenticated() || request.auth == null;
       }
+
+      // Student memorization activity completion per day subcollection
+      match /memorization/{day} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin() || isAuthenticated() || request.auth == null;
+      }
     }
 
     // Top-level student homework collection by student UID / cleanEmail

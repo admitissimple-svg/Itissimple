@@ -30,6 +30,9 @@ import { getDailyMemorizationSchedule } from '../utils/homeworkGenerator';
 import {
   saveStudentWeeklyChecksToFirestore,
   fetchStudentWeeklyChecksFromFirestore,
+  saveMemorizationCompletionToFirestore,
+  subscribeToStudentWeeklyChecks,
+  getCachedWeeklyChecks,
   recordActivityInStudentJournal,
   removeActivityFromStudentJournal,
   subscribeToStudentJournal,
@@ -303,7 +306,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         .then((data) => {
           if (isMounted && data) {
             if (data.checks) {
-              setLocalWeeklyChecks(data.checks);
+              setLocalWeeklyChecks((prev) => ({ ...prev, ...data.checks }));
             }
             if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
               setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
@@ -315,13 +318,29 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         });
     }
 
+    // Real-time Firestore subscription to guarantee instant checkmark reflection
+    if (studentUid || studentEmail) {
+      const unsub = subscribeToStudentWeeklyChecks(studentUid, studentEmail, (data) => {
+        if (isMounted && data && data.checks) {
+          setLocalWeeklyChecks((prev) => ({ ...prev, ...data.checks }));
+        }
+        if (isMounted && typeof data?.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
+          setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
+        }
+      });
+      return () => {
+        isMounted = false;
+        unsub();
+      };
+    }
+
     // Also fetch target from endpoint
     fetch(`/api/routines/weekly-checks?studentEmail=${encodeURIComponent(studentEmail)}`)
       .then((res) => res.json())
       .then((data) => {
         if (isMounted && data) {
           if (propWeeklyChecks === undefined && data.checks && Object.keys(data.checks).length > 0) {
-            setLocalWeeklyChecks((prev) => (Object.keys(prev).length === 0 ? data.checks : prev));
+            setLocalWeeklyChecks((prev) => ({ ...prev, ...data.checks }));
           }
           if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
             setWeeklyNativeTarget(data.weeklyNativeLessonsTarget);
@@ -356,36 +375,80 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   const isActivityCompleted = useCallback(
     (rowId: string, dayKey: DayOfWeek): boolean => {
       const checkKey = `${rowId}_${dayKey}`;
-      // 1. Instant synchronization with application weeklyChecks state (from props or local)
-      if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
-      // 2. Instant synchronization with homework completedPartsByDay (for memorization activity)
-      if (rowId === 'memorization' && Boolean(homework?.completedPartsByDay?.[dayKey])) return true;
 
-      // 3. Persistent synchronization from studentJournal entries
+      // 1. Memorization Activity: Permanent Firestore persistence and multi-device sync
+      if (rowId === 'memorization') {
+        // Direct weeklyChecks checkmark
+        if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
+        // Direct homework completed parts by day
+        if (homework?.completedPartsByDay && Boolean(homework.completedPartsByDay[dayKey])) return true;
+        // Check activeJournal specifically for this day
+        const currentWeek = userProfile?.weeklyCycle || 1;
+        const hasMemoInJournal = activeJournal.some((entry) => {
+          if (!entry) return false;
+          const isMemo = entry.type === 'memorization' || (entry as any).type === 'homework';
+          if (!isMemo) return false;
+          if (entry.dayOfWeek && entry.dayOfWeek.toLowerCase() === dayKey.toLowerCase()) {
+            if (entry.week === undefined || entry.week === currentWeek) return true;
+          }
+          return false;
+        });
+        if (hasMemoInJournal) return true;
+        // LocalStorage cache fallback
+        const localCached = getCachedWeeklyChecks(studentUid, studentEmail);
+        if (localCached && Boolean(localCached[checkKey])) return true;
+        return false;
+      }
+
+      // 2. Video of the Day: S-Path evolution tracker logic
+      // Calculates progress based strictly on unique daily completions for the scheduled day,
+      // ignoring video "repeat" or review events from previous days so it doesn't falsely mark past days as completed.
+      if (rowId === 'video_day') {
+        // Check weeklyChecks state
+        if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
+
+        const currentWeek = userProfile?.weeklyCycle || 1;
+
+        // In studentJournal: verify unique completion strictly for this scheduled day
+        return activeJournal.some((entry) => {
+          if (!entry) return false;
+          const isVideo = entry.type === 'video' || (entry as any).type === 'video_day';
+          if (!isVideo) return false;
+
+          // Ignore review events so past days are never falsely marked as completed
+          if ((entry as any).isReview || (entry as any).reviewedPastDay) return false;
+
+          // Strictly match the scheduled day for this routine item
+          if (entry.dayOfWeek && entry.dayOfWeek.toLowerCase() === dayKey.toLowerCase()) {
+            if (entry.week === undefined || entry.week === currentWeek) {
+              return true;
+            }
+          }
+          return false;
+        });
+      }
+
+      // 3. Audio of the Day & Live Tutor Lessons
+      if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
+
       const targetType = mapStepIdToJournalType(rowId);
       const currentWeek = userProfile?.weeklyCycle || 1;
-      const dayCalendarDate = getDateForDayInCurrentWeek(dayKey);
 
       return activeJournal.some((entry) => {
         if (!entry) return false;
         const matchesType =
           entry.type === targetType ||
           (rowId === 'tutor_live' && (entry.type === 'lesson' || (entry as any).type === 'tutor_live')) ||
-          (rowId === 'video_day' && (entry.type === 'video' || (entry as any).type === 'video_day')) ||
-          (rowId === 'audio_day' && (entry.type === 'audio' || (entry as any).type === 'audio_day')) ||
-          (rowId === 'memorization' && (entry.type === 'memorization' || (entry as any).type === 'homework'));
+          (rowId === 'audio_day' && (entry.type === 'audio' || (entry as any).type === 'audio_day'));
         if (!matchesType) return false;
 
-        // Match exact calendar date in this current week
-        if (entry.date && entry.date === dayCalendarDate) return true;
-        // Match day of week in this cycle
         if (entry.dayOfWeek && entry.dayOfWeek.toLowerCase() === dayKey.toLowerCase()) {
           if (entry.week === undefined || entry.week === currentWeek) return true;
         }
         return false;
       });
     },
-    [activeJournal, userProfile?.weeklyCycle, weeklyChecks, homework?.completedPartsByDay]
+    [activeJournal, userProfile?.weeklyCycle, weeklyChecks, homework?.completedPartsByDay, studentUid, studentEmail]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
@@ -398,6 +461,18 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     const currentWeek = userProfile?.weeklyCycle || 1;
     const dayDate = getDateForDayInCurrentWeek(dayKey);
 
+    // If step is memorization, persist permanently across all Firestore documents and subcollections
+    if (stepId === 'memorization') {
+      saveMemorizationCompletionToFirestore(
+        studentUid,
+        studentEmail,
+        dayKey,
+        newChecked,
+        homework || undefined,
+        `week-${currentWeek}`
+      );
+    }
+
     // 1. Persist directly to studentJournal in Firestore users/{studentUID}
     if (newChecked) {
       recordActivityInStudentJournal(
@@ -409,7 +484,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
           dayOfWeek: dayKey,
           week: currentWeek,
           timestamp: Date.now(),
-          title: stepId === 'tutor_live' ? 'Live Session with Native Friend' : undefined,
+          title: stepId === 'tutor_live' ? 'Live Session with Native Friend' : stepId === 'memorization' ? 'Weekly Memorization Activity' : undefined,
         },
         studentEmail
       ).then((res) => {
