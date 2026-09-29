@@ -465,46 +465,44 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
       }
 
       // 2. Video of the Day: S-Path evolution tracker logic
-      // Calculates progress strictly based on unique daily completions for the scheduled day,
-      // ignoring video repeat actions so repeat actions do not falsely advance evolution.
+      // Rule: If a student completes an activity on a given day (even if it is a repeated video),
+      // that specific day must be marked as completed in the S-Path tracker.
+      // Do not mark past/retroactive days, but do mark the current active day when completed.
       if (rowId === 'video_day') {
         // Strictly only scheduled study days count
         if (!activeStudyDays.includes(dayKey)) {
           return false;
         }
 
-        // If this scheduled day is configured as a repeat video action, ignore it for S-Path evolution
-        if (isDayVideoRepeatAction(dayKey)) {
-          return false;
+        // Direct checkmark from weeklyChecks (Single Source of Truth)
+        if (weeklyChecks && Boolean(weeklyChecks[checkKey])) {
+          return true;
         }
+
+        // Check if completed in routinesByDay
+        const dayList = routinesByDay?.[dayKey] || [];
+        const hasCompletedRoutineVideo = dayList.some((act) => {
+          if (!act) return false;
+          const actName = (act.activityName || '').toLowerCase();
+          const isVideo =
+            (act.teacherVideos && act.teacherVideos.length > 0) ||
+            act.id?.endsWith('1') ||
+            actName.includes('video') ||
+            actName.includes('vídeo');
+          return isVideo && Boolean(act.completedToday || act.completed);
+        });
+        if (hasCompletedRoutineVideo) return true;
 
         const currentWeek = userProfile?.weeklyCycle || 1;
 
-        // In studentJournal: verify unique non-repeat completion strictly for this scheduled day
+        // In studentJournal: verify completion strictly for this scheduled day (ignoring past/retroactive reviews)
         const hasValidJournalVideo = activeJournal.some((entry) => {
           if (!entry) return false;
           const isVideo = entry.type === 'video' || (entry as any).type === 'video_day';
           if (!isVideo) return false;
 
-          // Ignore review and repeat events so video repeat actions are never counted towards evolution
-          if (
-            (entry as any).isReview ||
-            (entry as any).reviewedPastDay ||
-            (entry as any).isRepeat ||
-            (entry as any).isRepeatVideo ||
-            (entry as any).repeatVideo ||
-            (entry as any).action === 'repeat' ||
-            (entry as any).playlistId === 'repeat_previous_video'
-          ) {
-            return false;
-          }
-
-          const titleLower = (entry.title || '').toLowerCase();
-          if (
-            titleLower.includes('repeat previous video') ||
-            titleLower.includes('repetir vídeo anterior') ||
-            titleLower.includes('repetir video anterior')
-          ) {
+          // Do not mark past/retroactive day reviews
+          if ((entry as any).reviewedPastDay) {
             return false;
           }
 
@@ -519,10 +517,9 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
 
         if (hasValidJournalVideo) return true;
 
-        // Check weeklyChecks state ONLY if NOT a repeat video
-        if (weeklyChecks && Boolean(weeklyChecks[checkKey])) {
-          return true;
-        }
+        // LocalStorage cache fallback
+        const localCached = getCachedWeeklyChecks(studentUid, studentEmail);
+        if (localCached && Boolean(localCached[checkKey])) return true;
 
         return false;
       }
@@ -555,20 +552,17 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
       activeJournal,
       userProfile?.weeklyCycle,
       weeklyChecks,
+      routinesByDay,
       homework?.completedPartsByDay,
       studentUid,
       studentEmail,
       activeStudyDays,
-      isDayVideoRepeatAction,
     ]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
     // Only allow marking days configured in the student's study plan (tutor_live remains independent)
     if (stepId !== 'tutor_live' && !activeStudyDays.includes(dayKey)) return;
-
-    // S-Path ignores video repeat actions
-    if (stepId === 'video_day' && isDayVideoRepeatAction(dayKey)) return;
 
     const isCurrentlyChecked = isActivityCompleted(stepId, dayKey);
     const newChecked = !isCurrentlyChecked;

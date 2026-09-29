@@ -21,6 +21,7 @@ import {
   UserProfile,
 } from '../types';
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
+import { DAYS_OF_WEEK, getTodayDayOfWeek } from './notifications';
 
 export function normalizeUid(rawId?: string | null, email?: string | null): string {
   // 1. If a valid, non-placeholder, non-email UID was provided, use it
@@ -2268,20 +2269,8 @@ export function deriveWeeklyChecksFromJournal(
     if (targetWeek !== undefined && entry.week !== undefined && entry.week !== targetWeek) {
       return;
     }
-    // Ignore video review and repeat events so they never falsely mark past or repeat days as completed
-    if (
-      entry.type === 'video' &&
-      Boolean(
-        (entry as any).isReview ||
-        (entry as any).reviewedPastDay ||
-        (entry as any).isRepeat ||
-        (entry as any).isRepeatVideo ||
-        (entry as any).repeatVideo ||
-        (entry as any).action === 'repeat' ||
-        (entry as any).playlistId === 'repeat_previous_video' ||
-        (entry.title && (entry.title.toLowerCase().includes('repeat') || entry.title.toLowerCase().includes('repetir')))
-      )
-    ) {
+    // Do not mark past/retroactive day reviews, but do mark the scheduled day even if it was a repeated video
+    if ((entry as any).reviewedPastDay) {
       return;
     }
     const stepId = mapJournalTypeToStepId(entry.type);
@@ -2361,21 +2350,22 @@ export async function recordActivityInStudentJournal(
       const updatedJournal = [sanitizedEntry, ...filtered];
 
       // Prepare updated weeklyChecks and watched/listened arrays for complete cross-compatibility
-      const isReviewOrRepeatEvent = Boolean(
-        (sanitizedEntry as any).isReview ||
+      const todayDay = getTodayDayOfWeek();
+      const entryDay = sanitizedEntry.dayOfWeek;
+      const dayIndex = entryDay ? DAYS_OF_WEEK.indexOf(entryDay) : -1;
+      const todayIndex = DAYS_OF_WEEK.indexOf(todayDay);
+      const isPastDay = Boolean(
         (sanitizedEntry as any).reviewedPastDay ||
-        (sanitizedEntry as any).isRepeat ||
-        (sanitizedEntry as any).isRepeatVideo ||
-        (sanitizedEntry as any).repeatVideo ||
-        (sanitizedEntry as any).action === 'repeat' ||
-        (sanitizedEntry as any).playlistId === 'repeat_previous_video' ||
-        (sanitizedEntry.title && (sanitizedEntry.title.toLowerCase().includes('repeat') || sanitizedEntry.title.toLowerCase().includes('repetir')))
+        (dayIndex !== -1 && todayIndex !== -1 && dayIndex < todayIndex)
       );
+
       const stepId = mapJournalTypeToStepId(sanitizedEntry.type);
       const checkKey = sanitizedEntry.dayOfWeek ? `${stepId}_${sanitizedEntry.dayOfWeek}` : null;
       const currentChecks = userSnap?.exists() ? (userSnap.data()?.weeklyChecks || {}) : {};
-      // Ignore video review and repeat events so it doesn't falsely mark repeat or past days in weeklyChecks on S-Path
-      const updatedChecks = (checkKey && (!isReviewOrRepeatEvent || sanitizedEntry.type !== 'video'))
+
+      // S-Path rule: Ensure completing an activity on a given day (even if repeated video) marks that day completed.
+      // Do not mark past/retroactive days, but do mark active/current day.
+      const updatedChecks = (checkKey && !isPastDay)
         ? { ...currentChecks, [checkKey]: true }
         : currentChecks;
 

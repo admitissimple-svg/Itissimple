@@ -2092,9 +2092,19 @@ export default function App() {
             params.video?.videoTitle?.toLowerCase().includes('repetir video anterior'))
       );
 
+      const todayDay = getTodayDayOfWeek();
+      const dayIndex = DAYS_OF_WEEK.indexOf(targetDay);
+      const todayIndex = DAYS_OF_WEEK.indexOf(todayDay);
+      const isPastDay = Boolean(
+        (params as any).reviewedPastDay ||
+        (dayIndex !== -1 && todayIndex !== -1 && dayIndex < todayIndex)
+      );
+
       // 1. Update S-Path (Gráfico S) in React state & direct Firestore users/{studentUID} persistence
-      // S-Path ignores video repeat actions for evolution
-      if (!isVideoRepeatAction) {
+      // S-Path rule: Ensure that if a student completes an activity on a given day (even if it is a repeated video),
+      // that specific day must be marked as completed in the S-Path tracker.
+      // Do not mark past/retroactive days, but do mark the current active day when completed.
+      if (!isPastDay) {
         setWeeklyChecks((prev) => {
           if (prev[checkKey]) return prev;
           return { ...prev, [checkKey]: true };
@@ -2126,7 +2136,8 @@ export default function App() {
             url: params.video?.url || params.track?.url,
             isRepeat: isVideoRepeatAction,
             isRepeatVideo: isVideoRepeatAction,
-            isReview: isVideoRepeatAction,
+            isReview: isPastDay,
+            reviewedPastDay: isPastDay,
           },
           email
         ).then((res) => {
@@ -2135,7 +2146,7 @@ export default function App() {
           }
         });
 
-        if (!isAlreadyChecked && !isVideoRepeatAction) {
+        if (!isAlreadyChecked && !isPastDay) {
           saveStudentWeeklyChecksToFirestore(
             uid,
             { ...weeklyChecks, [checkKey]: true },

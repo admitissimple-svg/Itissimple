@@ -260,21 +260,8 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
 
       const dayList = (routinesByDay && routinesByDay[dayKey]) || [];
       dayList.forEach((act) => {
-        // Ignore video repeat actions when calculating evolution
-        const isRepeatVideo =
-          act.isRepeatVideo ||
-          (act as any).repeatVideo ||
-          act.teacherVideos?.[0]?.playlistId === 'repeat_previous_video' ||
-          (act.teacherVideos?.[0] as any)?.isRepeatVideo ||
-          act.activityName?.toLowerCase().includes('repeat previous video') ||
-          act.activityName?.toLowerCase().includes('repetir vídeo anterior');
-
-        if (isRepeatVideo) {
-          return;
-        }
-
         totalWeekActivities += 1;
-        if (act.completed) {
+        if (act.completed || act.completedToday) {
           completedWeekActivities += 1;
         }
         const words = act.learnedWords ? act.learnedWords.filter((w) => w && w.trim().length > 0) : [];

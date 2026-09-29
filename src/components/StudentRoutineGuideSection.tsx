@@ -843,9 +843,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           isRepeatVideo: isRepeatVideoToday,
         } as any);
       } else {
-        if (!isRepeatVideoToday) {
-          onUpdateSPathCheck?.('video_day', selectedDay, true);
-        }
+        onUpdateSPathCheck?.('video_day', selectedDay, true);
       }
     }, 0);
   }, [onBehavioralComplete, selectedDay, activeActivity?.id, defaultVideoTitle, embedUrl, isRepeatVideoToday, onUpdateSPathCheck]);
