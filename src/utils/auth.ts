@@ -19,6 +19,24 @@ export function setGoogleOAuthToken(token: string | null) {
   inMemoryGoogleAccessToken = token;
 }
 
+/**
+ * Requests or refreshes Google OAuth token with Google Drive permissions
+ */
+export async function requestGoogleDriveAuth(): Promise<string | null> {
+  try {
+    const result = await signInWithPopup(auth, googleAuthProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const token = credential?.accessToken || null;
+    if (token) {
+      setGoogleOAuthToken(token);
+    }
+    return token;
+  } catch (err) {
+    console.error('Failed to request Google Drive authorization:', err);
+    return null;
+  }
+}
+
 export async function getAccessToken(forceRefresh = false): Promise<string | null> {
   if (auth.currentUser) {
     try {

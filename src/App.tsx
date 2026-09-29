@@ -3392,6 +3392,10 @@ export default function App() {
       vocabularyNotes?: LiveLessonVocabNote[];
       sessionNotesDocument?: string;
       sessionDate?: string;
+      driveFileId?: string;
+      driveFileUrl?: string;
+      driveFolderName?: string;
+      driveLastSyncedAt?: string;
     }
   ) => {
     setLessons((prev) =>
@@ -3408,6 +3412,10 @@ export default function App() {
               sessionNotesDocument: notes.sessionNotesDocument || notes.liveNotes || notes.recommendations,
               sessionDate: notes.sessionDate,
               notesLastSavedAt: new Date().toISOString(),
+              ...(notes.driveFileId ? { driveFileId: notes.driveFileId } : {}),
+              ...(notes.driveFileUrl ? { driveFileUrl: notes.driveFileUrl } : {}),
+              ...(notes.driveFolderName ? { driveFolderName: notes.driveFolderName } : {}),
+              ...(notes.driveLastSyncedAt ? { driveLastSyncedAt: notes.driveLastSyncedAt } : {}),
             }
           : l
       )

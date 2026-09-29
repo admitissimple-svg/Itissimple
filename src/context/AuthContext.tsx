@@ -5,10 +5,12 @@ import {
   signOut as firebaseAuthSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
+  GoogleAuthProvider,
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, googleAuthProvider, getDb } from '../firebase';
 import { GoogleAccount, UserProfile, UserRole, EnglishLevel, NativeFriendTutor } from '../types';
+import { setGoogleOAuthToken, getGoogleOAuthToken, requestGoogleDriveAuth } from '../utils/auth';
 
 export interface AuthUserDoc {
   uid: string;
@@ -67,6 +69,8 @@ export interface AuthContextType {
   }>;
   logout: () => Promise<void>;
   fetchFirestoreUser: (uid: string, email?: string) => Promise<AuthUserDoc | null>;
+  googleOAuthToken: string | null;
+  connectGoogleDrive: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -98,6 +102,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [googleOAuthToken, setGoogleOAuthTokenState] = useState<string | null>(getGoogleOAuthToken());
+
+  const connectGoogleDrive = useCallback(async (): Promise<string | null> => {
+    const token = await requestGoogleDriveAuth();
+    if (token) {
+      setGoogleOAuthToken(token);
+      setGoogleOAuthTokenState(token);
+    }
+    return token;
+  }, []);
 
   // Fetch Firestore user doc by UID with fallback to emailDocId
   const fetchFirestoreUser = useCallback(async (uid: string, email?: string): Promise<AuthUserDoc | null> => {
@@ -163,6 +177,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } else {
         setCurrentAccount(null);
+        setGoogleOAuthToken(null);
+        setGoogleOAuthTokenState(null);
       }
     });
 
@@ -345,6 +361,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const result = await signInWithPopup(auth, googleAuthProvider);
       const user = result.user;
 
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      const googleOAuthAccessToken = credential?.accessToken || null;
+      if (googleOAuthAccessToken) {
+        setGoogleOAuthToken(googleOAuthAccessToken);
+        setGoogleOAuthTokenState(googleOAuthAccessToken);
+      }
+
       if (!user.email) {
         throw new Error('Nenhum e-mail verificado foi retornado pelo Google.');
       }
@@ -453,6 +476,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // ignore
     }
+    setGoogleOAuthToken(null);
+    setGoogleOAuthTokenState(null);
     setCurrentAccount(null);
     setUserProfile(null);
     setSelectedRole('student');
@@ -473,6 +498,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginWithGoogle,
         logout,
         fetchFirestoreUser,
+        googleOAuthToken,
+        connectGoogleDrive,
       }}
     >
       {children}

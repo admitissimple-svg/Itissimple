@@ -475,6 +475,10 @@ export interface LiveLesson {
   notesLastSavedAt?: string;
   sessionNotesDocument?: string;
   sessionDate?: string;
+  driveFileId?: string;
+  driveFileUrl?: string;
+  driveFolderName?: string;
+  driveLastSyncedAt?: string;
 }
 
 export interface SessionNotesDocument {
@@ -487,6 +491,10 @@ export interface SessionNotesDocument {
   teacherName?: string;
   topic?: string;
   content: string;
+  driveFileId?: string;
+  driveFileUrl?: string;
+  driveFolderName?: string;
+  driveLastSyncedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }

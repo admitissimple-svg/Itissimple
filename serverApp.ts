@@ -5148,6 +5148,10 @@ app.post('/api/session-notes', async (req, res) => {
     teacherName,
     topic,
     content,
+    driveFileId,
+    driveFileUrl,
+    driveFolderName,
+    driveLastSyncedAt,
   } = req.body || {};
 
   const cleanDate = sessionDate || new Date().toISOString().split('T')[0];
@@ -5165,6 +5169,10 @@ app.post('/api/session-notes', async (req, res) => {
     teacherName: teacherName || '',
     topic: topic || '',
     content: content || '',
+    driveFileId: driveFileId || db.sessionNotesMap[sessionKey]?.driveFileId || '',
+    driveFileUrl: driveFileUrl || db.sessionNotesMap[sessionKey]?.driveFileUrl || '',
+    driveFolderName: driveFolderName || db.sessionNotesMap[sessionKey]?.driveFolderName || '',
+    driveLastSyncedAt: driveLastSyncedAt || db.sessionNotesMap[sessionKey]?.driveLastSyncedAt || '',
     updatedAt: new Date().toISOString(),
   };
 
@@ -5181,6 +5189,10 @@ app.post('/api/session-notes', async (req, res) => {
           recommendations: content,
           sessionNotesDocument: content,
           notesLastSavedAt: new Date().toISOString(),
+          driveFileId: noteDoc.driveFileId,
+          driveFileUrl: noteDoc.driveFileUrl,
+          driveFolderName: noteDoc.driveFolderName,
+          driveLastSyncedAt: noteDoc.driveLastSyncedAt,
         };
       }
       return l;
@@ -5195,6 +5207,166 @@ app.post('/api/session-notes', async (req, res) => {
   });
 
   res.json({ success: true, sessionNote: noteDoc });
+});
+
+// Dedicated Google Drive Session Notes Sync Endpoint
+app.post('/api/drive/sync-session-notes', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : req.body?.accessToken;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Missing Google OAuth Bearer access token.' });
+  }
+
+  const { studentName, sessionDate, content, existingFileId, lessonId, sessionKey } = req.body || {};
+  const folderName = "It's Simple - Session Notes";
+  const cleanName = (studentName || 'Student').trim().replace(/[\/\\?%*:|"<>]/g, '-');
+  const cleanDate = (sessionDate || new Date().toISOString().split('T')[0]).trim();
+  const fileName = `Session Notes - ${cleanName} - ${cleanDate}`;
+
+  try {
+    // 1. Check or create folder
+    const searchFolderQuery = `mimeType = 'application/vnd.google-apps.folder' and name = '${folderName.replace(/'/g, "\\'")}' and trashed = false`;
+    const folderRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFolderQuery)}&fields=files(id,name,webViewLink)&pageSize=1`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    let folderId = '';
+    if (folderRes.ok) {
+      const folderData = await folderRes.json();
+      if (folderData.files && folderData.files.length > 0) {
+        folderId = folderData.files[0].id;
+      }
+    }
+
+    if (!folderId) {
+      const createFolderRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder',
+        }),
+      });
+
+      if (createFolderRes.ok) {
+        const newFolder = await createFolderRes.json();
+        folderId = newFolder.id;
+      } else {
+        const errText = await createFolderRes.text();
+        return res.status(createFolderRes.status).json({ error: `Could not create folder: ${errText}` });
+      }
+    }
+
+    // 2. Check if file already exists
+    let targetFileId = existingFileId;
+    let webViewLink = '';
+    let isUpdated = false;
+
+    if (!targetFileId) {
+      const searchFileQuery = `'${folderId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
+      const searchFileRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id,name,webViewLink)&pageSize=1`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (searchFileRes.ok) {
+        const fileData = await searchFileRes.json();
+        if (fileData.files && fileData.files.length > 0) {
+          targetFileId = fileData.files[0].id;
+          webViewLink = fileData.files[0].webViewLink;
+        }
+      }
+    }
+
+    // 3. Update or Create
+    if (targetFileId) {
+      const updateRes = await fetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=media&fields=id,name,webViewLink`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'text/plain; charset=UTF-8',
+          },
+          body: content || '',
+        }
+      );
+
+      if (updateRes.ok) {
+        const updated = await updateRes.json();
+        webViewLink = updated.webViewLink || webViewLink;
+        isUpdated = true;
+      } else {
+        const errText = await updateRes.text();
+        return res.status(updateRes.status).json({ error: `Failed to update file in Drive: ${errText}` });
+      }
+    } else {
+      const boundary = `its_simple_boundary_${Date.now()}`;
+      const multipartBody =
+        `--${boundary}\r\n` +
+        `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+        JSON.stringify({ name: fileName, parents: [folderId], mimeType: 'text/plain' }) +
+        `\r\n--${boundary}\r\n` +
+        `Content-Type: text/plain; charset=UTF-8\r\n\r\n` +
+        (content || '') +
+        `\r\n--${boundary}--`;
+
+      const createRes = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`,
+          },
+          body: multipartBody,
+        }
+      );
+
+      if (createRes.ok) {
+        const created = await createRes.json();
+        targetFileId = created.id;
+        webViewLink = created.webViewLink;
+        isUpdated = false;
+      } else {
+        const errText = await createRes.text();
+        return res.status(createRes.status).json({ error: `Failed to create file in Drive: ${errText}` });
+      }
+    }
+
+    // Update in-memory db & Firestore if sessionKey or lessonId provided
+    const nowIso = new Date().toISOString();
+    const db = readDb();
+    const effectiveKey = sessionKey || lessonId;
+
+    if (effectiveKey && db.sessionNotesMap?.[effectiveKey]) {
+      db.sessionNotesMap[effectiveKey].driveFileId = targetFileId;
+      db.sessionNotesMap[effectiveKey].driveFileUrl = webViewLink;
+      db.sessionNotesMap[effectiveKey].driveFolderName = folderName;
+      db.sessionNotesMap[effectiveKey].driveLastSyncedAt = nowIso;
+      await writeDbSync(db);
+
+      saveSessionNotesToFirestoreServer(effectiveKey, db.sessionNotesMap[effectiveKey]).catch(() => null);
+    }
+
+    res.json({
+      success: true,
+      fileId: targetFileId,
+      fileName,
+      folderId,
+      folderName,
+      webViewLink,
+      isUpdated,
+      syncedAt: nowIso,
+    });
+  } catch (err: any) {
+    console.error('Server Drive sync handler error:', err);
+    res.status(500).json({ error: err.message || 'Error syncing notes to Google Drive.' });
+  }
 });
 
 // Retrieve Native Friend In-Session Notes & Recommendations

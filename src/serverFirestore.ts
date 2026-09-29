@@ -516,6 +516,10 @@ export async function saveSessionNotesToFirestoreServer(
     topic?: string;
     content: string;
     updatedAt?: string;
+    driveFileId?: string;
+    driveFileUrl?: string;
+    driveFolderName?: string;
+    driveLastSyncedAt?: string;
   }
 ): Promise<boolean> {
   const db = getFirestoreDb();
@@ -553,6 +557,10 @@ export async function saveSessionNotesToFirestoreServer(
             title: data.topic,
             notesLastSavedAt: sanitized.updatedAt,
             updatedAt: sanitized.updatedAt,
+            ...(data.driveFileId ? { driveFileId: data.driveFileId } : {}),
+            ...(data.driveFileUrl ? { driveFileUrl: data.driveFileUrl } : {}),
+            ...(data.driveFolderName ? { driveFolderName: data.driveFolderName } : {}),
+            ...(data.driveLastSyncedAt ? { driveLastSyncedAt: data.driveLastSyncedAt } : {}),
           },
           { merge: true }
         )

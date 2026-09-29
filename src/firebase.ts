@@ -18,7 +18,7 @@ export const effectiveFirebaseConfig = {
   appId: baseFirebaseConfig.appId,
   apiKey: baseFirebaseConfig.apiKey,
   authDomain: baseFirebaseConfig.authDomain,
-  firestoreDatabaseId: baseFirebaseConfig.firestoreDatabaseId || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e',
+  firestoreDatabaseId: (baseFirebaseConfig as any).firestoreDatabaseId || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e',
   storageBucket: baseFirebaseConfig.storageBucket,
   messagingSenderId: baseFirebaseConfig.messagingSenderId,
   measurementId: baseFirebaseConfig.measurementId,
@@ -37,6 +37,7 @@ export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({ prompt: 'select_account' });
 googleAuthProvider.addScope('https://www.googleapis.com/auth/calendar.events');
 googleAuthProvider.addScope('https://www.googleapis.com/auth/gmail.send');
+googleAuthProvider.addScope('https://www.googleapis.com/auth/drive.file');
 
 // Lazy-initialized Firestore instance to avoid starting unused background gRPC streams
 let _firestoreDb: Firestore | null = null;
