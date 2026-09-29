@@ -1457,13 +1457,17 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               <h3 className="font-black text-base sm:text-lg text-[#000035] tracking-tight">
                 Native Friend In-Session Notes & Recommendations
               </h3>
+              {/*
               <span className="px-2 py-0.5 rounded-full bg-[#1C4C96]/10 text-[#1C4C96] text-[10px] font-bold uppercase tracking-wider border border-[#1C4C96]/20">
                 Word-Doc Editor
               </span>
+              */}
             </div>
+            {/*
             <p className="text-xs text-slate-500 font-medium mt-0.5">
               Unified free-form document keyed by session date • Live synchronized with Firestore
             </p>
+            */}
           </div>
         </div>
 
