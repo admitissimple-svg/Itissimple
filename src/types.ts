@@ -473,6 +473,22 @@ export interface LiveLesson {
   grammarAndPhrasing?: string;
   vocabularyNotes?: LiveLessonVocabNote[];
   notesLastSavedAt?: string;
+  sessionNotesDocument?: string;
+  sessionDate?: string;
+}
+
+export interface SessionNotesDocument {
+  id: string;
+  sessionDate: string;
+  lessonId?: string;
+  studentEmail: string;
+  studentUid?: string;
+  teacherEmail?: string;
+  teacherName?: string;
+  topic?: string;
+  content: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ChatMessage {

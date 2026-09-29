@@ -3299,6 +3299,8 @@ export default function App() {
       pronunciationNotes?: string;
       grammarAndPhrasing?: string;
       vocabularyNotes?: LiveLessonVocabNote[];
+      sessionNotesDocument?: string;
+      sessionDate?: string;
     }
   ) => {
     setLessons((prev) =>
@@ -3307,11 +3309,13 @@ export default function App() {
           ? {
               ...l,
               title: notes.topic || l.title,
-              liveNotes: notes.liveNotes,
-              recommendations: notes.recommendations,
+              liveNotes: notes.liveNotes || notes.sessionNotesDocument,
+              recommendations: notes.recommendations || notes.sessionNotesDocument,
               pronunciationNotes: notes.pronunciationNotes,
               grammarAndPhrasing: notes.grammarAndPhrasing,
               vocabularyNotes: notes.vocabularyNotes,
+              sessionNotesDocument: notes.sessionNotesDocument || notes.liveNotes || notes.recommendations,
+              sessionDate: notes.sessionDate,
               notesLastSavedAt: new Date().toISOString(),
             }
           : l

@@ -290,9 +290,35 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["studentUid"]
+    },
+    "SessionNotes": {
+      "title": "SessionNotes",
+      "description": "Native Friend in-session notes and recommendations document keyed by session date or ID",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Session note ID or date key" },
+        "sessionDate": { "type": "string", "description": "Session date (YYYY-MM-DD)" },
+        "lessonId": { "type": "string", "description": "Associated lesson identifier" },
+        "studentEmail": { "type": "string", "format": "email", "description": "Student email" },
+        "studentUid": { "type": "string", "description": "Student UID" },
+        "teacherEmail": { "type": "string", "format": "email", "description": "Teacher email" },
+        "teacherName": { "type": "string", "description": "Teacher name" },
+        "topic": { "type": "string", "description": "Session topic" },
+        "content": { "type": "string", "description": "Free-form notes, vocabulary, pronunciation, and recommendations" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sessionDate", "studentEmail", "content"]
     }
   },
   "firestore": {
+    "/session_notes/{noteId}": {
+      "schema": "SessionNotes",
+      "description": "Native Friend in-session notes and recommendations keyed by session date or ID"
+    },
+    "/users/{userId}/session_notes/{noteId}": {
+      "schema": "SessionNotes",
+      "description": "In-session notes documents stored under student user record"
+    },
     "/direct_messages/{messageId}": {
       "schema": "DirectMessage",
       "description": "Direct asynchronous messages strictly partitioned between student and active native friend"

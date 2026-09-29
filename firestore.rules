@@ -97,10 +97,21 @@ service cloud.firestore {
         allow read: if true;
         allow write: if isOwner(userId) || isAdmin() || isAuthenticated() || request.auth == null;
       }
+
+      // Native Friend in-session notes & recommendations documents keyed by session date or ID
+      match /session_notes/{noteId} {
+        allow read: if true;
+        allow write: if isOwner(userId) || isAdmin() || isAuthenticated() || request.auth == null;
+      }
     }
 
     // Top-level student homework collection by student UID / cleanEmail
     match /student_homework/{userId} {
+      allow read, write: if true;
+    }
+
+    // Native Friend in-session notes & recommendations documents keyed by session date/ID
+    match /session_notes/{noteId} {
       allow read, write: if true;
     }
 

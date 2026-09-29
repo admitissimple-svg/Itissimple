@@ -20,6 +20,8 @@ import {
   resetRepeatFlagsSubcollection,
   addWatchedVideoToUserDoc,
   saveStudentVocabularyToFirestoreServer,
+  saveSessionNotesToFirestoreServer,
+  fetchSessionNotesFromFirestoreServer,
 } from './src/serverFirestore';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay, createCleanStudentRoutines } from './src/data/defaultRoutines';
@@ -130,6 +132,7 @@ interface AppDb {
   studentAwaitingTopicSelection?: Record<string, boolean>;
   spotifyPlaylists?: Record<string, any>;
   studentHomeworkMap?: Record<string, any>;
+  sessionNotesMap?: Record<string, any>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -4946,12 +4949,14 @@ app.post('/api/lessons/:id/cancel', async (req, res) => {
 app.post('/api/lessons/:id/notes', async (req, res) => {
   const db = readDb();
   const id = decodeURIComponent(req.params.id);
-  const { topic, liveNotes, recommendations, pronunciationNotes, grammarAndPhrasing, vocabularyNotes } = req.body || {};
+  const { topic, liveNotes, recommendations, pronunciationNotes, grammarAndPhrasing, vocabularyNotes, sessionNotesDocument, sessionDate } = req.body || {};
 
   let targetStudentEmail = (req.body?.studentEmail || '').toLowerCase().trim();
   let targetStudentUid = req.body?.studentUid || '';
   let teacherName = req.body?.teacherName || '';
   let teacherEmail = (req.body?.teacherEmail || '').toLowerCase().trim();
+
+  const effectiveDocument = sessionNotesDocument || liveNotes || recommendations || '';
 
   db.liveLessons = (db.liveLessons || []).map((l: any) => {
     if (l.id === id) {
@@ -4962,15 +4967,50 @@ app.post('/api/lessons/:id/notes', async (req, res) => {
       return {
         ...l,
         title: topic || l.title,
-        liveNotes,
-        recommendations,
+        liveNotes: liveNotes || effectiveDocument,
+        recommendations: recommendations || effectiveDocument,
         pronunciationNotes,
         grammarAndPhrasing,
+        sessionNotesDocument: effectiveDocument,
         vocabularyNotes: Array.isArray(vocabularyNotes) ? vocabularyNotes : l.vocabularyNotes,
         notesLastSavedAt: new Date().toISOString(),
       };
     }
     return l;
+  });
+
+  // Automatically persist session notes document to Firestore keyed by date / session ID
+  const effectiveSessionDate = sessionDate || new Date().toISOString().split('T')[0];
+  const cleanEmail = (targetStudentEmail || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const sessionKey = id ? id : `session_${effectiveSessionDate}_${cleanEmail}`;
+
+  if (!db.sessionNotesMap) db.sessionNotesMap = {};
+  db.sessionNotesMap[sessionKey] = {
+    id: sessionKey,
+    sessionDate: effectiveSessionDate,
+    lessonId: id,
+    studentEmail: targetStudentEmail,
+    studentUid: targetStudentUid,
+    teacherEmail,
+    teacherName,
+    topic: topic || '',
+    content: effectiveDocument,
+    updatedAt: new Date().toISOString(),
+  };
+
+  saveSessionNotesToFirestoreServer(sessionKey, {
+    id: sessionKey,
+    sessionDate: effectiveSessionDate,
+    lessonId: id,
+    studentEmail: targetStudentEmail,
+    studentUid: targetStudentUid,
+    teacherEmail,
+    teacherName,
+    topic: topic || '',
+    content: effectiveDocument,
+    updatedAt: new Date().toISOString(),
+  }).catch((err) => {
+    console.warn('Backend Firestore session notes auto-save notice:', err);
   });
 
   // Automatically migrate vocabulary words to student's personal dictionary (isolated by student UID and email)
@@ -5021,6 +5061,94 @@ app.post('/api/lessons/:id/notes', async (req, res) => {
 
   await writeDbSync(db);
   res.json({ success: true, liveLessons: db.liveLessons });
+});
+
+// Save Native Friend In-Session Notes & Recommendations document keyed by session date/ID
+app.post('/api/session-notes', async (req, res) => {
+  const db = readDb();
+  const {
+    id,
+    sessionDate,
+    lessonId,
+    studentEmail,
+    studentUid,
+    teacherEmail,
+    teacherName,
+    topic,
+    content,
+  } = req.body || {};
+
+  const cleanDate = sessionDate || new Date().toISOString().split('T')[0];
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const sessionKey = id || (lessonId ? lessonId : `session_${cleanDate}_${cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+
+  if (!db.sessionNotesMap) db.sessionNotesMap = {};
+  const noteDoc = {
+    id: sessionKey,
+    sessionDate: cleanDate,
+    lessonId: lessonId || '',
+    studentEmail: cleanEmail,
+    studentUid: studentUid || '',
+    teacherEmail: (teacherEmail || '').toLowerCase().trim(),
+    teacherName: teacherName || '',
+    topic: topic || '',
+    content: content || '',
+    updatedAt: new Date().toISOString(),
+  };
+
+  db.sessionNotesMap[sessionKey] = noteDoc;
+
+  // Also sync with liveLessons if lessonId is provided
+  if (lessonId && Array.isArray(db.liveLessons)) {
+    db.liveLessons = db.liveLessons.map((l: any) => {
+      if (l.id === lessonId) {
+        return {
+          ...l,
+          title: topic || l.title,
+          liveNotes: content,
+          recommendations: content,
+          sessionNotesDocument: content,
+          notesLastSavedAt: new Date().toISOString(),
+        };
+      }
+      return l;
+    });
+  }
+
+  await writeDbSync(db);
+
+  // Asynchronously persist to Cloud Firestore under /session_notes/{sessionKey} and /users/{studentId}/session_notes
+  saveSessionNotesToFirestoreServer(sessionKey, noteDoc).catch((err) => {
+    console.warn('Backend Firestore session notes save notice:', err);
+  });
+
+  res.json({ success: true, sessionNote: noteDoc });
+});
+
+// Retrieve Native Friend In-Session Notes & Recommendations
+app.get('/api/session-notes', async (req, res) => {
+  const db = readDb();
+  const id = (req.query.id as string) || '';
+  const studentEmail = ((req.query.studentEmail as string) || '').toLowerCase().trim();
+  const sessionDate = (req.query.sessionDate as string) || '';
+
+  if (id && db.sessionNotesMap?.[id]) {
+    return res.json(db.sessionNotesMap[id]);
+  }
+
+  if (studentEmail) {
+    const allNotes: any[] = Object.values(db.sessionNotesMap || {});
+    const studentNotes = allNotes.filter(
+      (n: any) => (n.studentEmail || '').toLowerCase().trim() === studentEmail
+    );
+    if (sessionDate) {
+      const match = studentNotes.find((n: any) => n.sessionDate === sessionDate);
+      return res.json(match || null);
+    }
+    return res.json(studentNotes);
+  }
+
+  res.json(Object.values(db.sessionNotesMap || {}));
 });
 
 // Student Personal Dictionary Endpoints (isolated by student UID and email)

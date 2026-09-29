@@ -496,4 +496,91 @@ export async function saveStudentVocabularyToFirestoreServer(
   }
 }
 
+/**
+ * Server-side persistent storage of Native Friend In-Session Notes & Recommendations in Cloud Firestore.
+ * Automatically saves document keyed by specific session date / ID:
+ * 1. Under top-level /session_notes/{sessionKey}
+ * 2. Under /users/{studentId}/session_notes/{sessionKey}
+ * 3. In /lessons/{lessonId} if lessonId is present
+ */
+export async function saveSessionNotesToFirestoreServer(
+  sessionKey: string,
+  data: {
+    id?: string;
+    sessionDate: string;
+    lessonId?: string;
+    studentEmail: string;
+    studentUid?: string;
+    teacherEmail?: string;
+    teacherName?: string;
+    topic?: string;
+    content: string;
+    updatedAt?: string;
+  }
+): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !sessionKey || !data) return false;
+
+  try {
+    const cleanKey = sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sanitized = JSON.parse(JSON.stringify({
+      ...data,
+      id: cleanKey,
+      updatedAt: data.updatedAt || new Date().toISOString(),
+    }));
+
+    const savePromises: Promise<any>[] = [
+      setDoc(doc(db, 'session_notes', cleanKey), sanitized, { merge: true }),
+    ];
+
+    // Mirror under student user record
+    const studentId = data.studentUid || (data.studentEmail ? data.studentEmail.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_') : '');
+    if (studentId) {
+      savePromises.push(
+        setDoc(doc(db, 'users', studentId, 'session_notes', cleanKey), sanitized, { merge: true })
+      );
+    }
+
+    // Mirror to lesson doc if lessonId is available
+    if (data.lessonId) {
+      savePromises.push(
+        setDoc(
+          doc(db, 'lessons', data.lessonId),
+          {
+            sessionNotesDocument: data.content,
+            liveNotes: data.content,
+            recommendations: data.content,
+            title: data.topic,
+            notesLastSavedAt: sanitized.updatedAt,
+            updatedAt: sanitized.updatedAt,
+          },
+          { merge: true }
+        )
+      );
+    }
+
+    await Promise.all(savePromises);
+    return true;
+  } catch (err) {
+    console.warn('Firestore server session notes save notice:', err);
+    return false;
+  }
+}
+
+export async function fetchSessionNotesFromFirestoreServer(sessionKey: string): Promise<any | null> {
+  const db = getFirestoreDb();
+  if (!db || !sessionKey) return null;
+  try {
+    const cleanKey = sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const snap = await getDoc(doc(db, 'session_notes', cleanKey));
+    if (snap.exists()) {
+      return snap.data();
+    }
+    return null;
+  } catch (err) {
+    console.warn('Firestore fetch session notes notice:', err);
+    return null;
+  }
+}
+
 

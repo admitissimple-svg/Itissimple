@@ -1,19 +1,28 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FileText,
   Sparkles,
-  BookOpen,
-  Volume2,
   CheckCircle2,
   Check,
-  Trash2,
   Calendar,
   History,
   Lightbulb,
-  CornerDownLeft,
-  Edit3,
-  Globe,
+  Copy,
+  Bold,
+  Italic,
+  Underline,
+  List,
+  ListOrdered,
+  Quote,
+  Minus,
+  Clock,
+  RotateCcw,
+  Save,
+  Download,
+  Share2,
+  ChevronDown,
   Loader2,
+  BookOpen,
 } from 'lucide-react';
 import {
   LiveLesson,
@@ -21,11 +30,11 @@ import {
   GoogleAccount,
   LiveLessonVocabNote,
   StudentDictionaryEntry,
+  SessionNotesDocument,
 } from '../types';
 import { formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
-import { getInstantVocabEntry } from '../data/dictionaryDatabase';
-import { lookupWord, getInstantOrCachedWord } from '../utils/dictionaryService';
-import { speakEnglish } from '../utils/audio';
+import { doc, setDoc } from 'firebase/firestore';
+import { getDb } from '../firebase';
 
 interface TeacherLiveLessonNotesPanelProps {
   lessons: LiveLesson[];
@@ -41,6 +50,8 @@ interface TeacherLiveLessonNotesPanelProps {
       pronunciationNotes?: string;
       grammarAndPhrasing?: string;
       vocabularyNotes?: LiveLessonVocabNote[];
+      sessionNotesDocument?: string;
+      sessionDate?: string;
     }
   ) => void;
   onAddWordsToDictionary?: (words: StudentDictionaryEntry[], studentEmail?: string) => void;
@@ -77,79 +88,28 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
     );
   });
 
-  // Selected lesson ID
+  // Selected session ID and student
   const [selectedLessonId, setSelectedLessonId] = useState<string>('');
   const [selectedStudentEmail, setSelectedStudentEmail] = useState<string>('');
+  const [sessionDate, setSessionDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
 
   // Note fields
   const [topic, setTopic] = useState<string>('');
-  const [generalNotes, setGeneralNotes] = useState<string>('');
-  const [pronunciationNotes, setPronunciationNotes] = useState<string>('');
-  const [grammarAndPhrasing, setGrammarAndPhrasing] = useState<string>('');
-  const [recommendations, setRecommendations] = useState<string>('');
-  const [vocabList, setVocabList] = useState<LiveLessonVocabNote[]>([]);
-
-  // Fast word input ref & state
-  const [newWordInput, setNewWordInput] = useState<string>('');
-  const [justAddedWord, setJustAddedWord] = useState<string | null>(null);
-  const [isSearchingApi, setIsSearchingApi] = useState<boolean>(false);
-  const [livePreview, setLivePreview] = useState<{
-    word: string;
-    partOfSpeech?: string;
-    definitionEn: string;
-    exampleSentenceEn: string;
-    source?: string;
-    notFound?: boolean;
-  } | null>(null);
-  const wordInputRef = useRef<HTMLInputElement>(null);
-
-  // Debounced live dictionary lookup for input preview
-  useEffect(() => {
-    const trimmed = newWordInput.trim();
-    if (!trimmed) {
-      setLivePreview(null);
-      return;
-    }
-
-    // Instant local preview
-    const instant = getInstantOrCachedWord(trimmed);
-    if (instant && (instant.definitionEn || instant.notFound)) {
-      setLivePreview({
-        word: instant.word,
-        partOfSpeech: instant.partOfSpeech,
-        definitionEn: instant.definitionEn,
-        exampleSentenceEn: instant.exampleSentenceEn,
-        source: instant.source,
-        notFound: instant.notFound,
-      });
-    }
-
-    // Debounced query to Free Dictionary API for live accurate preview
-    const timer = setTimeout(async () => {
-      try {
-        const live = await lookupWord(trimmed);
-        if (live.word.toLowerCase() === trimmed.toLowerCase()) {
-          setLivePreview({
-            word: live.word,
-            partOfSpeech: live.partOfSpeech,
-            definitionEn: live.definitionEn,
-            exampleSentenceEn: live.exampleSentenceEn,
-            source: live.source,
-            notFound: live.notFound,
-          });
-        }
-      } catch (err) {
-        // preserve instant
-      }
-    }, 280);
-
-    return () => clearTimeout(timer);
-  }, [newWordInput]);
+  const [notesContent, setNotesContent] = useState<string>('');
 
   // UI state
-  const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'editor' | 'history'>('editor');
-  const [editingVocabId, setEditingVocabId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [lastSavedTimestamp, setLastSavedTimestamp] = useState<string | null>(null);
+  const [copiedSuccess, setCopiedSuccess] = useState<boolean>(false);
+  const [savedSuccessBanner, setSavedSuccessBanner] = useState<boolean>(false);
+
+  // Textarea ref for cursor manipulation and keyboard shortcuts
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isInitialLoadRef = useRef<boolean>(true);
 
   // Synchronize when selectedStudentFilter changes from parent
   useEffect(() => {
@@ -164,7 +124,6 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
         setSelectedLessonId('');
       }
     } else {
-      // Default to first available scheduled lesson or student
       if (teacherLessons.length > 0 && !selectedLessonId) {
         const scheduled = teacherLessons.find((l) => l.status === 'scheduled');
         const first = scheduled || teacherLessons[0];
@@ -178,41 +137,6 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
     }
   }, [selectedStudentFilter, teacherLessons, students]);
 
-  // When selected lesson changes, populate form
-  useEffect(() => {
-    const currentLesson = teacherLessons.find((l) => l.id === selectedLessonId);
-    if (currentLesson) {
-      setSelectedStudentEmail(currentLesson.studentEmail);
-      setTopic(currentLesson.title || '');
-      setGeneralNotes(currentLesson.liveNotes || '');
-      setRecommendations(currentLesson.recommendations || '');
-      setPronunciationNotes(currentLesson.pronunciationNotes || '');
-      setGrammarAndPhrasing(currentLesson.grammarAndPhrasing || '');
-      setVocabList(currentLesson.vocabularyNotes || []);
-    } else if (selectedStudentEmail) {
-      // Find latest notes for this student if any
-      const studentLessons = teacherLessons.filter(
-        (l) => l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase()
-      );
-      const latestWithNotes = studentLessons.find((l) => l.liveNotes || l.recommendations);
-      if (latestWithNotes) {
-        setTopic(latestWithNotes.title || '');
-        setGeneralNotes(latestWithNotes.liveNotes || '');
-        setRecommendations(latestWithNotes.recommendations || '');
-        setPronunciationNotes(latestWithNotes.pronunciationNotes || '');
-        setGrammarAndPhrasing(latestWithNotes.grammarAndPhrasing || '');
-        setVocabList(latestWithNotes.vocabularyNotes || []);
-      } else {
-        setTopic('');
-        setGeneralNotes('');
-        setRecommendations('');
-        setPronunciationNotes('');
-        setGrammarAndPhrasing('');
-        setVocabList([]);
-      }
-    }
-  }, [selectedLessonId, selectedStudentEmail]);
-
   // Selected student object
   const activeStudent = students.find(
     (s) => s.email.toLowerCase() === selectedStudentEmail.toLowerCase()
@@ -220,231 +144,610 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
 
   const activeLesson = teacherLessons.find((l) => l.id === selectedLessonId);
 
+  // Compute effective session date from lesson or state
+  useEffect(() => {
+    if (activeLesson?.startDateTime) {
+      const datePart = activeLesson.startDateTime.split('T')[0];
+      if (datePart) setSessionDate(datePart);
+    } else {
+      setSessionDate(new Date().toISOString().split('T')[0]);
+    }
+  }, [activeLesson]);
+
+  // Generate initial starter template: completely blank page with only Date, Student, and Topic annotations as shown in user screenshot
+  const getStarterTemplate = useCallback(
+    (studentName: string, dateStr: string, currentTopic: string) => {
+      const topicStr = (currentTopic || '').trim() || 'Trial';
+      return `Native Friend In-Session Notes & Recommendations\nDate: ${dateStr} | Student: ${studentName || 'Student'}\nTopic: ${topicStr}\n\n`;
+    },
+    []
+  );
+
+  // Helper to detect if existing content is merely the old boilerplate template
+  const isOnlyOldTemplate = (content: string) => {
+    if (!content || !content.trim()) return true;
+    const cleaned = content.replace(/\r\n/g, '\n').trim();
+    if (
+      cleaned.includes('🎯 PRONUNCIATION & PHONETICS:') &&
+      cleaned.includes('💬 KEY VOCABULARY & NATURAL PHRASES:') &&
+      cleaned.includes('⚡ GRAMMAR & PHRASING CORRECTIONS:')
+    ) {
+      const lines = cleaned.split('\n');
+      const hasCustomNotes = lines.some((line) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('•') && trimmed.replace(/^[•\-\s]+/, '').trim().length > 0) {
+          return true;
+        }
+        if (trimmed.startsWith('Instead of:') && trimmed.replace('Instead of:', '').trim().length > 0) {
+          return true;
+        }
+        if (trimmed.startsWith('Say:') && trimmed.replace('Say:', '').trim().length > 0) {
+          return true;
+        }
+        return false;
+      });
+      return !hasCustomNotes;
+    }
+    return false;
+  };
+
+  // When selected lesson or student changes, populate document
+  useEffect(() => {
+    isInitialLoadRef.current = true;
+    const currentLesson = teacherLessons.find((l) => l.id === selectedLessonId);
+
+    if (currentLesson) {
+      setSelectedStudentEmail(currentLesson.studentEmail);
+      const lessonTopic = currentLesson.title || 'Trial';
+      setTopic(lessonTopic);
+
+      // Preferred unified document: sessionNotesDocument > liveNotes > recommendations
+      const docContent =
+        currentLesson.sessionNotesDocument ||
+        currentLesson.liveNotes ||
+        currentLesson.recommendations ||
+        '';
+
+      if (docContent.trim() && !isOnlyOldTemplate(docContent)) {
+        setNotesContent(docContent);
+      } else {
+        const sName =
+          currentLesson.studentName ||
+          activeStudent?.name ||
+          currentLesson.studentEmail.split('@')[0];
+        const dateStr = currentLesson.startDateTime
+          ? currentLesson.startDateTime.split('T')[0]
+          : sessionDate;
+        setNotesContent(getStarterTemplate(sName, dateStr, lessonTopic));
+      }
+
+      if (currentLesson.notesLastSavedAt) {
+        setLastSavedTimestamp(currentLesson.notesLastSavedAt);
+      }
+    } else if (selectedStudentEmail) {
+      // Find latest notes for this student if any
+      const studentLessons = teacherLessons.filter(
+        (l) => l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase()
+      );
+      const latestWithNotes = studentLessons.find(
+        (l) => l.sessionNotesDocument || l.liveNotes || l.recommendations
+      );
+
+      if (
+        latestWithNotes &&
+        !isOnlyOldTemplate(
+          latestWithNotes.sessionNotesDocument ||
+            latestWithNotes.liveNotes ||
+            latestWithNotes.recommendations ||
+            ''
+        )
+      ) {
+        setTopic(latestWithNotes.title || '');
+        setNotesContent(
+          latestWithNotes.sessionNotesDocument ||
+            latestWithNotes.liveNotes ||
+            latestWithNotes.recommendations ||
+            ''
+        );
+        if (latestWithNotes.notesLastSavedAt) {
+          setLastSavedTimestamp(latestWithNotes.notesLastSavedAt);
+        }
+      } else {
+        const defaultTopic = activeLesson?.title || 'Trial';
+        setTopic(defaultTopic);
+        const sName = activeStudent?.name || selectedStudentEmail.split('@')[0];
+        setNotesContent(getStarterTemplate(sName, sessionDate, defaultTopic));
+      }
+    }
+
+    setTimeout(() => {
+      isInitialLoadRef.current = false;
+      // Focus and place cursor on the blank line ready to type
+      if (textareaRef.current) {
+        const len = textareaRef.current.value.length;
+        textareaRef.current.setSelectionRange(len, len);
+      }
+    }, 400);
+  }, [selectedLessonId, selectedStudentEmail]);
+
+  const handleTopicChange = (newTopic: string) => {
+    setTopic(newTopic);
+    setNotesContent((prev) => {
+      if (!prev) return prev;
+      const lines = prev.split('\n');
+      if (
+        lines.length <= 5 &&
+        lines[0]?.includes('Native Friend In-Session Notes') &&
+        lines[2]?.startsWith('Topic:')
+      ) {
+        lines[2] = `Topic: ${newTopic}`;
+        return lines.join('\n');
+      }
+      return prev;
+    });
+  };
+
+  const handleDateChange = (newDate: string) => {
+    setSessionDate(newDate);
+    setNotesContent((prev) => {
+      if (!prev) return prev;
+      const lines = prev.split('\n');
+      if (
+        lines.length <= 5 &&
+        lines[0]?.includes('Native Friend In-Session Notes') &&
+        lines[1]?.startsWith('Date:')
+      ) {
+        const studentPart = lines[1].includes('|')
+          ? lines[1].split('|')[1]
+          : ` Student: ${activeStudent?.name || 'Student'}`;
+        lines[1] = `Date: ${newDate} |${studentPart}`;
+        return lines.join('\n');
+      }
+      return prev;
+    });
+  };
+
+  const handleResetDocument = () => {
+    const sName =
+      activeStudent?.name ||
+      (selectedStudentEmail ? selectedStudentEmail.split('@')[0] : 'Student');
+    const effTopic = topic || activeLesson?.title || 'Trial';
+    setNotesContent(getStarterTemplate(sName, sessionDate, effTopic));
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        const len = textareaRef.current.value.length;
+        textareaRef.current.setSelectionRange(len, len);
+      }
+    }, 10);
+  };
+
   // Past notes history for this student
   const studentHistory = teacherLessons.filter(
     (l) =>
       l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase() &&
-      (l.liveNotes || l.recommendations || (l.vocabularyNotes && l.vocabularyNotes.length > 0))
+      (l.sessionNotesDocument ||
+        l.liveNotes ||
+        l.recommendations ||
+        (l.vocabularyNotes && l.vocabularyNotes.length > 0))
   );
 
   /**
-   * Automatically adds word on Enter or Tab with real Dictionary API definition & authentic example sentence
+   * Save In-Session Notes to Firestore and Server
+   * Automatically persists document keyed by specific session date/ID
    */
-  const handleAutoAddWord = async (rawInput: string) => {
-    const cleaned = rawInput.trim();
-    if (!cleaned) return;
+  const persistSessionDocument = useCallback(
+    async (contentToSave: string, topicToSave: string, explicitSave: boolean = false) => {
+      if (!selectedStudentEmail && !selectedLessonId) return;
 
-    // Handle comma or semicolon separated multiple words (e.g. "touch base, follow up")
-    const wordsToAdd = cleaned
-      .split(/[,;]+/)
-      .map((w) => w.trim())
-      .filter(Boolean);
+      setIsSaving(true);
+      const cleanEmail = selectedStudentEmail.toLowerCase().trim();
+      const effectiveDate = sessionDate || new Date().toISOString().split('T')[0];
+      const targetLessonId = selectedLessonId || (activeLesson ? activeLesson.id : '');
+      const sessionKey =
+        targetLessonId ||
+        `session_${effectiveDate}_${cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 
-    // 1. Instantly populate with local/cached data so teacher experiences zero UI latency
-    const initialEntries: { note: LiveLessonVocabNote; rawWord: string }[] = wordsToAdd.map((wordStr) => {
-      const instant = getInstantOrCachedWord(wordStr, topic || generalNotes || undefined);
-      return {
-        rawWord: wordStr,
-        note: {
-          id: 'voc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-          word: instant.word,
-          meaningOrTip: instant.definitionEn,
-          exampleSentence: instant.exampleSentenceEn,
-          partOfSpeech: instant.partOfSpeech,
-          phonetic: instant.phonetic,
-          audioUrl: instant.audio,
-          source: instant.source,
-        },
+      const nowIso = new Date().toISOString();
+
+      const documentPayload: SessionNotesDocument = {
+        id: sessionKey,
+        sessionDate: effectiveDate,
+        lessonId: targetLessonId || undefined,
+        studentEmail: cleanEmail,
+        studentUid: activeStudent?.uid || undefined,
+        teacherEmail: currentAccount?.email || undefined,
+        teacherName: currentAccount?.name || 'Native Friend',
+        topic: topicToSave,
+        content: contentToSave,
+        updatedAt: nowIso,
       };
-    });
 
-    setVocabList((prev) => [...prev, ...initialEntries.map((e) => e.note)]);
-    setNewWordInput('');
-    setJustAddedWord(wordsToAdd[wordsToAdd.length - 1]);
+      // 1. Client-Side Firestore Persistence
+      try {
+        const firestore = getDb();
+        if (firestore) {
+          // Top-level /session_notes/{sessionKey}
+          setDoc(doc(firestore, 'session_notes', sessionKey), documentPayload, {
+            merge: true,
+          }).catch((err) => console.warn('Firestore /session_notes notice:', err));
 
-    setTimeout(() => {
-      setJustAddedWord(null);
-    }, 2500);
-
-    // Keep focus on input for the next word
-    setTimeout(() => {
-      wordInputRef.current?.focus();
-    }, 10);
-
-    // 2. Concurrently look up real definition & example from Free Dictionary API
-    setIsSearchingApi(true);
-    try {
-      await Promise.all(
-        initialEntries.map(async ({ note, rawWord }) => {
-          try {
-            const realData = await lookupWord(rawWord, topic || generalNotes || undefined);
-            setVocabList((prev) =>
-              prev.map((item) => {
-                if (item.id !== note.id) return item;
-                return {
-                  ...item,
-                  word: realData.word || item.word,
-                  meaningOrTip: realData.definitionEn || item.meaningOrTip,
-                  exampleSentence: realData.exampleSentenceEn || item.exampleSentence,
-                  partOfSpeech: realData.partOfSpeech || item.partOfSpeech,
-                  phonetic: realData.phonetic || item.phonetic,
-                  audioUrl: realData.audio || item.audioUrl,
-                  source: realData.source || item.source,
-                };
-              })
-            );
-          } catch (err) {
-            console.warn('Dictionary API async lookup error:', err);
+          // Under student user record: /users/{studentId}/session_notes/{sessionKey}
+          const userDocId = activeStudent?.uid || cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_');
+          if (userDocId) {
+            setDoc(
+              doc(firestore, 'users', userDocId, 'session_notes', sessionKey),
+              documentPayload,
+              { merge: true }
+            ).catch((err) => console.warn('Firestore /users/.../session_notes notice:', err));
           }
-        })
-      );
-    } finally {
-      setIsSearchingApi(false);
-    }
-  };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      handleAutoAddWord(newWordInput);
-    }
-  };
-
-  const handleRemoveVocab = (id: string) => {
-    setVocabList((prev) => prev.filter((v) => v.id !== id));
-  };
-
-  const handleUpdateVocab = (
-    id: string,
-    field: 'meaningOrTip' | 'exampleSentence' | 'word',
-    value: string
-  ) => {
-    setVocabList((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
-    );
-  };
-
-  // Save notes handler
-  const handleSave = () => {
-    let targetLessonId = selectedLessonId;
-
-    if (!targetLessonId) {
-      // Find or associate with active lesson for this student
-      const match = teacherLessons.find(
-        (l) => l.studentEmail?.toLowerCase() === selectedStudentEmail.toLowerCase()
-      );
-      if (match) targetLessonId = match.id;
-    }
-
-    if (targetLessonId) {
-      onSaveLessonNotes(targetLessonId, {
-        topic,
-        liveNotes: generalNotes,
-        recommendations,
-        pronunciationNotes,
-        grammarAndPhrasing,
-        vocabularyNotes: vocabList,
-      });
-    }
-
-    // Also auto-add vocabulary words to student's personal dictionary
-    if (vocabList.length > 0 && selectedStudentEmail) {
-      const cleanStudentEmail = selectedStudentEmail.toLowerCase().trim();
-      const dictEntries: StudentDictionaryEntry[] = vocabList.map((v) => ({
-        id: 'dict_live_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
-        word: v.word.trim(),
-        partOfSpeech: v.partOfSpeech || '',
-        definitionEn: v.meaningOrTip || '',
-        exampleSentenceEn: v.exampleSentence || '',
-        learnedAt: new Date().toISOString(),
-        source: 'api',
-        sourceActivityName: `Live Session with ${currentAccount?.name || 'Native Friend'}`,
-        teacherEmail: currentAccount?.email,
-        teacherName: currentAccount?.name,
-        studentEmail: cleanStudentEmail,
-      }));
-
-      if (onAddWordsToDictionary) {
-        onAddWordsToDictionary(dictEntries, cleanStudentEmail);
+          // Under /lessons/{lessonId} if lesson exists
+          if (targetLessonId) {
+            setDoc(
+              doc(firestore, 'lessons', targetLessonId),
+              {
+                sessionNotesDocument: contentToSave,
+                liveNotes: contentToSave,
+                recommendations: contentToSave,
+                title: topicToSave,
+                sessionDate: effectiveDate,
+                notesLastSavedAt: nowIso,
+                updatedAt: nowIso,
+              },
+              { merge: true }
+            ).catch((err) => console.warn('Firestore /lessons notice:', err));
+          }
+        }
+      } catch (err) {
+        console.warn('Direct Firestore save notice:', err);
       }
 
-      // Direct asynchronous backend persistence for multi-device sync
-      fetch('/api/student-dictionary', {
+      // 2. Server API Persistence (ensures persistence in app_state & Firestore)
+      fetch('/api/session-notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentEmail: cleanStudentEmail,
-          studentUid: (activeStudent as any)?.uid || (activeStudent as any)?.id || '',
-          teacherEmail: currentAccount?.email,
-          teacherName: currentAccount?.name,
-          entries: dictEntries,
-        }),
-      }).catch((err) => console.warn('Sync student dictionary error:', err));
+        body: JSON.stringify(documentPayload),
+      }).catch((err) => console.warn('Server /api/session-notes notice:', err));
+
+      // 3. Update lesson state in parent
+      if (targetLessonId) {
+        onSaveLessonNotes(targetLessonId, {
+          topic: topicToSave,
+          liveNotes: contentToSave,
+          recommendations: contentToSave,
+          sessionNotesDocument: contentToSave,
+          sessionDate: effectiveDate,
+        });
+      }
+
+      setLastSavedTimestamp(nowIso);
+      setIsSaving(false);
+
+      if (explicitSave) {
+        setSavedSuccessBanner(true);
+        setTimeout(() => setSavedSuccessBanner(false), 3000);
+      }
+    },
+    [
+      selectedStudentEmail,
+      selectedLessonId,
+      sessionDate,
+      activeLesson,
+      activeStudent,
+      currentAccount,
+      onSaveLessonNotes,
+    ]
+  );
+
+  // Debounced auto-save when typing in editor
+  useEffect(() => {
+    if (isInitialLoadRef.current) return;
+
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
     }
 
-    // Insert into student's weekly activity vocabulary
-    if (onAddWordsToWeeklyActivity && vocabList.length > 0 && selectedStudentEmail) {
-      const words = vocabList.map((v) => v.word.trim()).filter(Boolean);
-      onAddWordsToWeeklyActivity(words, selectedStudentEmail);
-    }
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      persistSessionDocument(notesContent, topic, false);
+    }, 1200);
 
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [notesContent, topic, persistSessionDocument]);
+
+  /**
+   * Helper: Wrap selected text with prefix and suffix (e.g. bold, italic, underline)
+   */
+  const applyInlineFormatting = (prefix: string, suffix: string = prefix, placeholder: string = 'text') => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const currentVal = textarea.value;
+    const selectedText = currentVal.substring(start, end);
+
+    const replacement = selectedText
+      ? `${prefix}${selectedText}${suffix}`
+      : `${prefix}${placeholder}${suffix}`;
+
+    const nextVal = currentVal.substring(0, start) + replacement + currentVal.substring(end);
+    setNotesContent(nextVal);
+
+    setTimeout(() => {
+      textarea.focus();
+      const newCursorStart = start + prefix.length;
+      const newCursorEnd = selectedText
+        ? start + prefix.length + selectedText.length
+        : newCursorStart + placeholder.length;
+      textarea.setSelectionRange(newCursorStart, newCursorEnd);
+    }, 10);
   };
+
+  /**
+   * Helper: Insert line prefix or list bullet
+   */
+  const applyLinePrefix = (prefix: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const currentVal = textarea.value;
+
+    // Find start of current line
+    const lastNewline = currentVal.lastIndexOf('\n', start - 1);
+    const lineStart = lastNewline === -1 ? 0 : lastNewline + 1;
+
+    const nextVal = currentVal.substring(0, lineStart) + prefix + currentVal.substring(lineStart);
+    setNotesContent(nextVal);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + prefix.length, end + prefix.length);
+    }, 10);
+  };
+
+  /**
+   * Helper: Insert snippet block at cursor
+   */
+  const insertSnippet = (snippet: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const currentVal = textarea.value;
+
+    const before = currentVal.substring(0, start);
+    const needsLeadingNewline = before.length > 0 && !before.endsWith('\n');
+    const fullSnippet = (needsLeadingNewline ? '\n' : '') + snippet + '\n';
+
+    const nextVal = before + fullSnippet + currentVal.substring(end);
+    setNotesContent(nextVal);
+
+    setTimeout(() => {
+      textarea.focus();
+      const newPos = start + fullSnippet.length;
+      textarea.setSelectionRange(newPos, newPos);
+    }, 10);
+  };
+
+  /**
+   * Keyboard Shortcuts Handler:
+   * - Enter: clean newline with auto-continuation for bullet/numbered lists
+   * - Tab: inserts 4 spaces or indents without losing focus
+   * - Shift+Tab: un-indents 4 spaces
+   * - Ctrl+B / Cmd+B: Bold
+   * - Ctrl+I / Cmd+I: Italic
+   * - Ctrl+U / Cmd+U: Underline
+   */
+  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+    // Ctrl+B: Bold
+    if (isCmdOrCtrl && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      applyInlineFormatting('**', '**', 'bold text');
+      return;
+    }
+
+    // Ctrl+I: Italic
+    if (isCmdOrCtrl && e.key.toLowerCase() === 'i') {
+      e.preventDefault();
+      applyInlineFormatting('*', '*', 'italic text');
+      return;
+    }
+
+    // Ctrl+U: Underline
+    if (isCmdOrCtrl && e.key.toLowerCase() === 'u') {
+      e.preventDefault();
+      applyInlineFormatting('<u>', '</u>', 'underlined text');
+      return;
+    }
+
+    // Tab / Shift+Tab: Indentation
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const val = textarea.value;
+
+      if (e.shiftKey) {
+        // Shift+Tab: Un-indent
+        const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+        const lineContent = val.substring(lineStart, start);
+        if (lineContent.startsWith('    ')) {
+          const nextVal = val.substring(0, lineStart) + val.substring(lineStart + 4);
+          setNotesContent(nextVal);
+          setTimeout(() => {
+            textarea.setSelectionRange(Math.max(lineStart, start - 4), Math.max(lineStart, end - 4));
+          }, 0);
+        } else if (lineContent.startsWith('\t')) {
+          const nextVal = val.substring(0, lineStart) + val.substring(lineStart + 1);
+          setNotesContent(nextVal);
+          setTimeout(() => {
+            textarea.setSelectionRange(Math.max(lineStart, start - 1), Math.max(lineStart, end - 1));
+          }, 0);
+        }
+      } else {
+        // Tab: Insert 4 spaces
+        const tabSpaces = '    ';
+        const nextVal = val.substring(0, start) + tabSpaces + val.substring(end);
+        setNotesContent(nextVal);
+        setTimeout(() => {
+          textarea.setSelectionRange(start + tabSpaces.length, start + tabSpaces.length);
+        }, 0);
+      }
+      return;
+    }
+
+    // Enter: Auto-continue bullet or numbered list
+    if (e.key === 'Enter') {
+      const start = textarea.selectionStart;
+      const val = textarea.value;
+      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const currentLine = val.substring(lineStart, start);
+
+      // Match bullet point ("• " or "- ")
+      const bulletMatch = currentLine.match(/^(\s*)([•\-])\s+/);
+      if (bulletMatch) {
+        const [fullMatch, indent] = bulletMatch;
+        // If line is empty with only bullet, clear bullet on Enter
+        if (currentLine.trim() === '•' || currentLine.trim() === '-') {
+          e.preventDefault();
+          const nextVal = val.substring(0, lineStart) + val.substring(start);
+          setNotesContent(nextVal);
+          setTimeout(() => {
+            textarea.setSelectionRange(lineStart, lineStart);
+          }, 0);
+          return;
+        }
+
+        // Auto-continue bullet on next line
+        e.preventDefault();
+        const continuation = '\n' + indent + '• ';
+        const nextVal = val.substring(0, start) + continuation + val.substring(start);
+        setNotesContent(nextVal);
+        setTimeout(() => {
+          const nextPos = start + continuation.length;
+          textarea.setSelectionRange(nextPos, nextPos);
+        }, 0);
+        return;
+      }
+
+      // Match numbered list ("1. ", "2. ")
+      const numMatch = currentLine.match(/^(\s*)(\d+)\.\s+/);
+      if (numMatch) {
+        const [fullMatch, indent, numStr] = numMatch;
+        if (currentLine.trim() === `${numStr}.`) {
+          e.preventDefault();
+          const nextVal = val.substring(0, lineStart) + val.substring(start);
+          setNotesContent(nextVal);
+          setTimeout(() => {
+            textarea.setSelectionRange(lineStart, lineStart);
+          }, 0);
+          return;
+        }
+
+        e.preventDefault();
+        const nextNum = parseInt(numStr, 10) + 1;
+        const continuation = `\n${indent}${nextNum}. `;
+        const nextVal = val.substring(0, start) + continuation + val.substring(start);
+        setNotesContent(nextVal);
+        setTimeout(() => {
+          const nextPos = start + continuation.length;
+          textarea.setSelectionRange(nextPos, nextPos);
+        }, 0);
+        return;
+      }
+    }
+  };
+
+  /**
+   * 1-Click Copy formatted notes for Google Meet Chat
+   */
+  const handleCopyForMeetChat = () => {
+    if (!notesContent.trim()) return;
+    navigator.clipboard.writeText(notesContent);
+    setCopiedSuccess(true);
+    setTimeout(() => setCopiedSuccess(false), 2500);
+  };
+
+  // Word and character statistics
+  const wordCount = notesContent.trim() ? notesContent.trim().split(/\s+/).length : 0;
+  const charCount = notesContent.length;
 
   return (
     <div
-      className="bg-white rounded-3xl p-5 sm:p-6 border border-[#607EC9]/30 shadow-xs space-y-5"
+      className="bg-white rounded-3xl p-5 sm:p-7 border border-[#607EC9]/30 shadow-xs space-y-5"
       id="teacher-live-lesson-notes-panel"
     >
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#9AB4FF]/30 pb-4">
         <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-[#000035] text-white flex items-center justify-center shrink-0 border border-[#9AB4FF]/40 shadow-xs">
-            <BookOpen className="w-5 h-5 text-[#F4CA54]" />
+          <div className="w-12 h-12 rounded-2xl bg-[#000035] text-white flex items-center justify-center shrink-0 border border-[#9AB4FF]/40 shadow-sm">
+            <FileText className="w-6 h-6 text-[#F4CA54]" />
           </div>
           <div>
-            <h3 className="font-black text-base sm:text-lg text-[#000035] tracking-tight">
-              Live Session Real-Time Vocabulary
-            </h3>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-black text-base sm:text-lg text-[#000035] tracking-tight">
+                Native Friend In-Session Notes & Recommendations
+              </h3>
+              <span className="px-2 py-0.5 rounded-full bg-[#1C4C96]/10 text-[#1C4C96] text-[10px] font-bold uppercase tracking-wider border border-[#1C4C96]/20">
+                Word-Doc Editor
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
+              Unified free-form document keyed by session date • Live synchronized with Firestore
+            </p>
           </div>
         </div>
 
-        {/* Quick Top Actions & Tab Selector */}
+        {/* Top Navigation Tabs */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => setActiveTab('editor')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'editor'
                 ? 'bg-[#1C4C96] text-white shadow-xs'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
           >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Active Vocabulary</span>
+            <FileText className="w-3.5 h-3.5" />
+            <span>Document Editor</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('history')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'history'
                 ? 'bg-[#1C4C96] text-white shadow-xs'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
           >
             <History className="w-3.5 h-3.5" />
-            <span>Vocabulary History ({studentHistory.length})</span>
+            <span>Session History ({studentHistory.length})</span>
           </button>
         </div>
       </div>
 
       {activeTab === 'editor' ? (
         <div className="space-y-4">
-          {/* Unified Session & Session Topic Bar */}
-          <div className="p-3 bg-slate-50 rounded-2xl border border-[#607EC9]/30 flex flex-col md:flex-row md:items-center gap-3 shadow-2xs">
-            <div className="flex items-center gap-2 shrink-0 min-w-[220px] md:max-w-[320px]">
+          {/* Session Metadata & Topic Control Bar */}
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-[#607EC9]/30 flex flex-col md:flex-row md:items-center gap-3 shadow-2xs">
+            {/* Session Selector */}
+            <div className="flex items-center gap-2 shrink-0 min-w-[240px] md:max-w-[340px]">
               <Calendar className="w-4 h-4 text-[#1C4C96] shrink-0" />
               <span className="text-xs font-black text-[#000035] uppercase tracking-wider shrink-0">
                 Session:
@@ -452,9 +755,9 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
               <select
                 value={selectedLessonId}
                 onChange={(e) => setSelectedLessonId(e.target.value)}
-                className="w-full bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] cursor-pointer shadow-2xs truncate"
+                className="w-full bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] cursor-pointer shadow-2xs truncate"
               >
-                <option value="">-- General Student Notes --</option>
+                <option value="">-- Custom Date Session ({sessionDate}) --</option>
                 {teacherLessons
                   .filter(
                     (l) =>
@@ -473,337 +776,267 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
 
             <div className="hidden md:block w-px h-6 bg-slate-200 shrink-0" />
 
+            {/* Session Date */}
+            <div className="flex items-center gap-2 shrink-0">
+              <Clock className="w-4 h-4 text-slate-500 shrink-0" />
+              <span className="text-xs font-bold text-slate-600">Date:</span>
+              <input
+                type="date"
+                value={sessionDate}
+                onChange={(e) => handleDateChange(e.target.value)}
+                className="bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1 text-xs font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
+              />
+            </div>
+
+            <div className="hidden md:block w-px h-6 bg-slate-200 shrink-0" />
+
+            {/* Session Topic */}
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <Lightbulb className="w-4 h-4 text-[#F4CA54] shrink-0" />
               <span className="text-xs font-black text-[#000035] uppercase tracking-wider shrink-0">
-                Session Topic:
+                Topic:
               </span>
               <input
                 type="text"
                 value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="e.g. Job Interview Prep, Weekend Small Talk, Airport Travel Roleplay..."
+                onChange={(e) => handleTopicChange(e.target.value)}
+                placeholder="e.g. Job Interview Prep, Travel Roleplay, Small Talk..."
                 className="flex-1 bg-white border border-[#607EC9]/40 rounded-xl px-3 py-1.5 text-xs font-semibold text-[#000035] placeholder:text-slate-400 placeholder:font-normal focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] min-w-0"
               />
             </div>
           </div>
 
-          {/* Real-Time Vocabulary Table Section */}
-          <div className="p-4 sm:p-5 bg-white rounded-2xl border-2 border-[#9AB4FF]/40 shadow-xs space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-              <div className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-[#1C4C96]" />
-                <span className="font-black text-sm text-[#000035] tracking-wider uppercase">
-                  Real-Time Vocabulary Table ({vocabList.length})
-                </span>
-              </div>
-            </div>
-
-            {/* Quick Word Input Bar */}
-            <div className="relative flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-              <div className="relative flex-1 flex items-center gap-2 p-1.5 bg-slate-50 rounded-xl border-2 border-[#1C4C96]/40 focus-within:border-[#1C4C96] focus-within:ring-2 focus-within:ring-[#1C4C96]/20 transition">
-                <Sparkles className="w-4 h-4 text-amber-500 animate-pulse ml-2 shrink-0" />
-                <input
-                  ref={wordInputRef}
-                  type="text"
-                  value={newWordInput}
-                  onChange={(e) => setNewWordInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Type word/expression (e.g. 'coffee', 'touch base', 'brew') and press Enter or Tab..."
-                  className="flex-1 bg-transparent border-0 px-2 py-1 text-xs font-bold text-[#000035] placeholder:text-slate-400 placeholder:font-normal focus:outline-hidden min-w-0"
-                />
-                {isSearchingApi && (
-                  <div className="flex items-center gap-1 text-[11px] text-[#1C4C96] font-semibold px-2 animate-pulse">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span className="hidden sm:inline">Consulting Dictionary API...</span>
-                  </div>
-                )}
+          {/* Unified Word-Document Rich Canvas */}
+          <div className="bg-slate-50/80 rounded-2xl border-2 border-[#9AB4FF]/40 shadow-xs overflow-hidden">
+            {/* Document Header & Quick Toolbar */}
+            <div className="bg-white border-b border-slate-200 p-3 sm:px-4 flex flex-wrap items-center justify-between gap-2.5">
+              {/* Left: Text Formatting Tools */}
+              <div className="flex items-center gap-1 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => handleAutoAddWord(newWordInput)}
-                  disabled={!newWordInput.trim()}
-                  className="px-3 py-1.5 bg-[#1C4C96] hover:bg-[#062863] disabled:opacity-40 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                  onClick={() => applyInlineFormatting('**', '**', 'bold text')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Bold (Ctrl+B)"
                 >
-                  <CornerDownLeft className="w-3.5 h-3.5" />
-                  <span>Enter / Tab</span>
+                  <Bold className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyInlineFormatting('*', '*', 'italic text')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Italic (Ctrl+I)"
+                >
+                  <Italic className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyInlineFormatting('<u>', '</u>', 'underlined text')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Underline (Ctrl+U)"
+                >
+                  <Underline className="w-4 h-4" />
+                </button>
+
+                <div className="w-px h-5 bg-slate-200 mx-1" />
+
+                <button
+                  type="button"
+                  onClick={() => applyLinePrefix('• ')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Bullet Point List"
+                >
+                  <List className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyLinePrefix('1. ')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Numbered List"
+                >
+                  <ListOrdered className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyLinePrefix('> ')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Blockquote / Tip"
+                >
+                  <Quote className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertSnippet('\n---\n')}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-[#000035] transition cursor-pointer border border-transparent hover:border-slate-200"
+                  title="Insert Section Divider"
+                >
+                  <Minus className="w-4 h-4" />
+                </button>
+
+                <div className="w-px h-5 bg-slate-200 mx-1" />
+
+                {/* Quick Section Stamps */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    insertSnippet('🎯 PRONUNCIATION TIP:\n• word /ˈfəʊ.nɪks/ - ')
+                  }
+                  className="px-2 py-1 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                  title="Insert Pronunciation Block"
+                >
+                  <span>🎯 Pronunciation</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    insertSnippet('💬 KEY PHRASE & IDIOM:\n• "expression" - meaning and natural usage: ')
+                  }
+                  className="px-2 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-[#1C4C96] border border-blue-200 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                  title="Insert Key Phrase Block"
+                >
+                  <span>💬 Phrase</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    insertSnippet('⚡ CORRECTION & POLISHING:\n• Instead of: \n  Say: ')
+                  }
+                  className="px-2 py-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                  title="Insert Correction Block"
+                >
+                  <span>⚡ Correction</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    insertSnippet('📝 NEXT STEPS & RECOMMENDATION:\n• ')
+                  }
+                  className="px-2 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                  title="Insert Recommendation Block"
+                >
+                  <span>📝 Next Steps</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nowStr = new Date().toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    });
+                    insertSnippet(`[${nowStr}] - `);
+                  }}
+                  className="px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
+                  title="Insert Timestamp"
+                >
+                  <Clock className="w-3 h-3" />
+                  <span>Time</span>
                 </button>
               </div>
 
-              {justAddedWord && (
-                <div className="sm:absolute sm:-top-8 sm:right-0 px-3 py-1 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-md animate-in fade-in zoom-in-95 duration-150 z-20 self-start">
-                  <Check className="w-3.5 h-3.5 text-emerald-200" />
-                  <span>"{justAddedWord}" official definition added to table!</span>
-                </div>
-              )}
+              {/* Right: Copy & Status Badges */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyForMeetChat}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-[#000035] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-200 shadow-2xs"
+                  title="Copy formatted document to paste into Google Meet Chat"
+                >
+                  {copiedSuccess ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">Copied for Meet!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Copy for Meet Chat</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetDocument}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition cursor-pointer"
+                  title="Reset to clean document template"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
 
-            {/* Live Instant Preview while typing from Dictionary API */}
-            {livePreview && (
-              <div className={`p-3 rounded-xl border text-xs grid grid-cols-1 md:grid-cols-12 gap-3 items-center shadow-xs ${
-                livePreview.notFound ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-blue-50/80 border-blue-200/80'
-              }`}>
-                {livePreview.notFound ? (
-                  <div className="col-span-12 font-medium flex items-center gap-2 text-amber-800">
-                    <span className="text-sm">⚠️</span>
-                    <span>The word "<strong>{livePreview.word}</strong>" was not found in the official dictionary.</span>
+            {/* Document Paper Canvas */}
+            <div className="p-4 sm:p-6 bg-slate-100/50 flex justify-center">
+              <div className="w-full max-w-4xl bg-white rounded-2xl border border-slate-300 shadow-sm p-6 sm:p-8 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider">
+                  <span>DOCUMENT: Native Friend Coaching Record</span>
+                  <span>Session Date: {sessionDate}</span>
+                </div>
+
+                <textarea
+                  ref={textareaRef}
+                  value={notesContent}
+                  onChange={(e) => setNotesContent(e.target.value)}
+                  onKeyDown={handleEditorKeyDown}
+                  placeholder="Type words, phrases, sentences, pronunciation notes, and practice recommendations freely here... Use Enter for new lines, Tab to indent, and Ctrl+B / Ctrl+I for formatting."
+                  rows={20}
+                  className="w-full bg-transparent border-0 text-[#000035] text-sm leading-relaxed placeholder:text-slate-400 focus:outline-hidden resize-y min-h-[380px] font-sans selection:bg-[#9AB4FF]/40"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+
+            {/* Document Status & Statistics Footer */}
+            <div className="bg-white border-t border-slate-200 p-3 px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="font-semibold text-slate-600">
+                  {wordCount} words • {charCount} characters
+                </span>
+                <span className="hidden sm:inline text-slate-300">•</span>
+                <span className="text-[11px] text-slate-400">
+                  Shortcuts: <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px]">Enter</kbd> newline, <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px]">Tab</kbd> indent, <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px]">Ctrl+B</kbd> bold
+                </span>
+              </div>
+
+              {/* Firestore Real-time Persistence Status */}
+              <div className="flex items-center gap-2">
+                {isSaving ? (
+                  <div className="flex items-center gap-1.5 text-blue-600 font-medium text-xs">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Auto-saving to Firestore...</span>
+                  </div>
+                ) : lastSavedTimestamp ? (
+                  <div className="flex items-center gap-1.5 text-emerald-700 font-semibold text-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>
+                      Saved to Firestore (Session: {sessionDate})
+                    </span>
                   </div>
                 ) : (
-                  <>
-                    <div className="md:col-span-3 font-bold text-[#000035] flex items-center gap-1.5 flex-wrap">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                      <span>Word: <strong className="text-[#1C4C96]">{livePreview.word}</strong></span>
-                      {livePreview.partOfSpeech && (
-                        <span className="px-1.5 py-0.5 rounded bg-blue-100 text-[#1C4C96] text-[9px] font-bold border border-blue-300 uppercase">
-                          {livePreview.partOfSpeech}
-                        </span>
-                      )}
-                    </div>
-                    <div className="md:col-span-5 text-[#1C4C96] text-xs">
-                      <strong className="text-slate-600 font-semibold">Meaning:</strong> {livePreview.definitionEn}
-                    </div>
-                    <div className="md:col-span-4 text-slate-600 italic text-xs flex items-center justify-between gap-2">
-                      <span>
-                        {livePreview.exampleSentenceEn ? (
-                          <>
-                            <strong className="text-slate-600 font-semibold not-italic">Example:</strong> "{livePreview.exampleSentenceEn}"
-                          </>
-                        ) : (
-                          <span className="text-slate-400 not-italic">(No example in official API)</span>
-                        )}
-                      </span>
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white text-[9px] font-bold text-emerald-700 border border-emerald-200 shrink-0 not-italic">
-                        <Globe className="w-2.5 h-2.5" />
-                        <span>{livePreview.source === 'merriam-webster' ? 'Merriam-Webster' : 'Official Dict'}</span>
-                      </span>
-                    </div>
-                  </>
+                  <span className="text-slate-400 text-xs">Ready</span>
                 )}
               </div>
-            )}
-
-            {/* The Vocabulary Table: Word | Meaning | Example */}
-            <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-2xs">
-              <table className="w-full text-left text-xs text-[#000035] border-collapse">
-                <thead>
-                  <tr className="bg-[#000035] text-white uppercase text-[11px] font-black tracking-wider">
-                    <th className="p-3 w-3/12 border-b border-[#062863]">Word</th>
-                    <th className="p-3 w-4/12 border-b border-[#062863]">Meaning</th>
-                    <th className="p-3 w-4/12 border-b border-[#062863]">Example</th>
-                    <th className="p-3 text-right w-1/12 border-b border-[#062863]">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {vocabList.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="p-8 text-center text-slate-400 text-xs">
-                        No words added yet. Type a word above and press <strong>Enter</strong> or <strong>Tab</strong> to populate this table instantly with official dictionary definitions.
-                      </td>
-                    </tr>
-                  ) : (
-                    vocabList.map((item, index) => {
-                      const isEditing = editingVocabId === item.id;
-                      return (
-                        <tr key={item.id} className="hover:bg-slate-50/80 transition group">
-                          {/* Palavra / Word */}
-                          <td className="p-3 align-top">
-                            <div className="flex items-start gap-2">
-                              <span className="w-5 h-5 rounded-md bg-[#000035] text-white font-mono text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                                {index + 1}
-                              </span>
-                              <div className="space-y-1">
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={item.word}
-                                    onChange={(e) =>
-                                      handleUpdateVocab(item.id, 'word', e.target.value)
-                                    }
-                                    className="font-black text-xs text-[#000035] bg-slate-100 rounded px-2 py-0.5 border border-slate-300 w-full"
-                                  />
-                                ) : (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="font-black text-xs text-[#000035] tracking-tight">
-                                      {item.word}
-                                    </span>
-                                    {item.phonetic && (
-                                      <span className="text-[10px] font-mono text-slate-400 font-normal">
-                                        {item.phonetic}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  {item.partOfSpeech && (
-                                    <span className="inline-block px-1.5 py-0.2 rounded bg-blue-50 text-[#1C4C96] text-[9px] font-bold border border-blue-200">
-                                      {item.partOfSpeech}
-                                    </span>
-                                  )}
-                                  <span
-                                    className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold border ${
-                                      item.source === 'merriam-webster'
-                                        ? 'bg-blue-50 text-[#1C4C96] border-blue-200'
-                                        : item.source === 'api'
-                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                        : item.source === 'offline_dict'
-                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                        : 'bg-slate-100 text-slate-600 border-slate-200'
-                                    }`}
-                                  >
-                                    {item.source === 'merriam-webster' ? (
-                                      <>
-                                        <Globe className="w-2.5 h-2.5" />
-                                        <span>Merriam-Webster</span>
-                                      </>
-                                    ) : item.source === 'api' ? (
-                                      <>
-                                        <Globe className="w-2.5 h-2.5" />
-                                        <span>Free Dict API</span>
-                                      </>
-                                    ) : item.source === 'offline_dict' ? (
-                                      <span>Curated Dict</span>
-                                    ) : (
-                                      <span>Class Vocab</span>
-                                    )}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Significado / Meaning */}
-                          <td className="p-3 align-top">
-                            {isEditing ? (
-                              <textarea
-                                rows={2}
-                                value={item.meaningOrTip || ''}
-                                onChange={(e) =>
-                                  handleUpdateVocab(item.id, 'meaningOrTip', e.target.value)
-                                }
-                                placeholder="Simplified English definition..."
-                                className="w-full text-xs text-[#000035] bg-slate-50 border border-slate-300 rounded p-1.5 focus:outline-hidden focus:ring-1 focus:ring-[#1C4C96]"
-                              />
-                            ) : (
-                              <p className="text-xs text-[#1C4C96] font-medium leading-relaxed">
-                                {item.meaningOrTip ? (
-                                  item.meaningOrTip
-                                ) : item.source === 'pending' ? (
-                                  <span className="text-blue-500 italic animate-pulse flex items-center gap-1">
-                                    <Sparkles className="w-3 h-3 animate-spin" /> Buscando na Free Dictionary API...
-                                  </span>
-                                ) : item.source === 'not_found' ? (
-                                  <span className="text-slate-400 italic">
-                                    Não encontrada na Free Dictionary API (clique em editar para adicionar dica)
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 italic">Sem definição</span>
-                                )}
-                              </p>
-                            )}
-                          </td>
-
-                          {/* Exemplo / Example */}
-                          <td className="p-3 align-top">
-                            {isEditing ? (
-                              <textarea
-                                rows={2}
-                                value={item.exampleSentence || ''}
-                                onChange={(e) =>
-                                  handleUpdateVocab(item.id, 'exampleSentence', e.target.value)
-                                }
-                                placeholder="Example sentence in English..."
-                                className="w-full text-xs text-[#000035] bg-slate-50 border border-slate-300 rounded p-1.5 focus:outline-hidden focus:ring-1 focus:ring-[#1C4C96]"
-                              />
-                            ) : (
-                              item.exampleSentence && (
-                                <p className="text-xs text-slate-600 italic leading-relaxed">
-                                  "{item.exampleSentence}"
-                                </p>
-                              )
-                            )}
-                          </td>
-
-                          {/* Actions */}
-                          <td className="p-3 align-top text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                type="button"
-                                onClick={() => speakEnglish(item.word)}
-                                className="text-slate-400 hover:text-[#1C4C96] p-1.5 transition rounded-md hover:bg-blue-50 cursor-pointer"
-                                title="Listen to pronunciation"
-                              >
-                                <Volume2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setEditingVocabId(isEditing ? null : item.id)
-                                }
-                                className="text-slate-400 hover:text-[#1C4C96] p-1.5 transition rounded-md hover:bg-slate-100 cursor-pointer"
-                                title={isEditing ? 'Done editing' : 'Edit definition/example'}
-                              >
-                                {isEditing ? (
-                                  <Check className="w-4 h-4 text-emerald-600" />
-                                ) : (
-                                  <Edit3 className="w-4 h-4" />
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveVocab(item.id)}
-                                className="text-slate-400 hover:text-slate-700 transition p-1.5 rounded-md hover:bg-slate-100 cursor-pointer"
-                                title="Delete word"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
             </div>
           </div>
 
-          {/* Teacher In-Session Notes & Recommendations Space */}
-          <div className="p-4 bg-slate-50/90 rounded-2xl border border-[#607EC9]/30 shadow-2xs space-y-2">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className="text-xs font-black text-[#000035] uppercase tracking-wider flex items-center gap-2">
-                <FileText className="w-4 h-4 text-[#1C4C96]" />
-                <span>Teacher In-Session Notes & Recommendations</span>
-              </label>
-              <span className="text-[10px] text-slate-400 font-medium">Shared with student in their dashboard</span>
-            </div>
-            <textarea
-              rows={3}
-              value={recommendations}
-              onChange={(e) => setRecommendations(e.target.value)}
-              placeholder="Record live feedback, pronunciation notes, grammar tips, or practice recommendations for the student during the session..."
-              className="w-full text-xs text-[#000035] bg-white border border-[#607EC9]/40 rounded-xl p-3 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]/30 leading-relaxed resize-y"
-            />
-          </div>
-
-          {/* Action Bar (Save, Copy for Meet Chat, Send) */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+          {/* Action Bar (Save Document) */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
             <div className="flex items-center gap-2">
-              {savedSuccess && (
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold animate-in fade-in duration-200">
+              {savedSuccessBanner && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold animate-in fade-in duration-200 shadow-2xs">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Vocabulary Saved!</span>
+                  <span>Document securely stored in Firestore!</span>
                 </div>
               )}
             </div>
 
             <div className="flex items-center gap-2.5 flex-wrap justify-end">
-              {/* Primary Save Button (Only action button per user specification) */}
               <button
                 type="button"
-                onClick={handleSave}
+                onClick={() => persistSessionDocument(notesContent, topic, true)}
                 className="px-6 py-2.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-md border border-[#9AB4FF]/40 active:scale-98"
               >
-                <CheckCircle2 className="w-4 h-4 text-[#9AB4FF]" />
-                <span>Save Vocabulary</span>
+                <Save className="w-4 h-4 text-[#9AB4FF]" />
+                <span>Save Document</span>
               </button>
             </div>
           </div>
@@ -812,72 +1045,93 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
         /* History of Past Notes for this student */
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs text-[#607EC9] font-semibold border-b border-slate-100 pb-2">
-            <span>Past session records for {activeStudent?.name || selectedStudentEmail}</span>
+            <span>
+              Past session records for {activeStudent?.name || selectedStudentEmail}
+            </span>
             <span>{studentHistory.length} recorded session(s)</span>
           </div>
 
           {studentHistory.length === 0 ? (
-            <div className="py-8 text-center text-slate-400 text-xs italic bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-              No previous notes found for this student. Take notes in the editor tab to create your first coaching record.
+            <div className="py-10 text-center text-slate-400 text-xs italic bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-1">
+              <FileText className="w-8 h-8 text-slate-300 mx-auto" />
+              <p>No previous session records found for this student.</p>
+              <p className="text-[11px] text-slate-400">
+                Write in the Document Editor tab to save your first in-session coaching document.
+              </p>
             </div>
           ) : (
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-              {studentHistory.map((hist) => (
-                <div
-                  key={hist.id}
-                  className="p-4 bg-slate-50/90 rounded-2xl border border-[#607EC9]/30 space-y-2.5 shadow-2xs hover:border-[#607EC9] transition"
-                >
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-xs text-[#000035]">
-                        {hist.title || 'Live Coaching Session'}
-                      </span>
-                      <span className="px-2 py-0.5 rounded-md bg-[#9AB4FF]/20 text-[#062863] text-[10px] font-mono font-bold">
-                        {formatDateInTimeZone(hist.startDateTime, timeZone, 'en')} •{' '}
-                        {formatTimeInTimeZone(hist.startDateTime, timeZone)}
-                      </span>
+              {studentHistory.map((hist) => {
+                const effectiveText =
+                  hist.sessionNotesDocument ||
+                  hist.liveNotes ||
+                  hist.recommendations ||
+                  '';
+                const formattedDate = formatDateInTimeZone(
+                  hist.startDateTime,
+                  timeZone,
+                  'en'
+                );
+                const formattedTime = formatTimeInTimeZone(
+                  hist.startDateTime,
+                  timeZone
+                );
+
+                return (
+                  <div
+                    key={hist.id}
+                    className="p-4 bg-slate-50/90 rounded-2xl border border-[#607EC9]/30 space-y-2.5 shadow-2xs hover:border-[#607EC9] transition"
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-xs text-[#000035]">
+                          {hist.title || 'Live Coaching Session'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-[#9AB4FF]/20 text-[#062863] text-[10px] font-mono font-bold">
+                          {formattedDate} • {formattedTime}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(effectiveText);
+                          }}
+                          className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold border border-slate-200 transition cursor-pointer flex items-center gap-1"
+                          title="Copy session notes to clipboard"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedLessonId(hist.id);
+                            if (hist.startDateTime) {
+                              setSessionDate(hist.startDateTime.split('T')[0]);
+                            }
+                            setActiveTab('editor');
+                          }}
+                          className="px-2.5 py-1 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-lg text-xs font-bold transition cursor-pointer"
+                        >
+                          Load into Editor
+                        </button>
+                      </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedLessonId(hist.id);
-                        setActiveTab('editor');
-                      }}
-                      className="px-2.5 py-1 bg-white hover:bg-slate-100 text-[#1C4C96] rounded-lg text-xs font-bold border border-slate-200 transition cursor-pointer"
-                    >
-                      Load into Editor
-                    </button>
+                    {effectiveText ? (
+                      <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-700 whitespace-pre-wrap font-sans max-h-36 overflow-y-auto leading-relaxed">
+                        {effectiveText}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">
+                        No text recorded for this session.
+                      </p>
+                    )}
                   </div>
-
-                  {hist.vocabularyNotes && hist.vocabularyNotes.length > 0 && (
-                    <div className="text-xs">
-                      <span className="font-bold text-[#000035]">Vocabulary: </span>
-                      <span className="text-[#607EC9]">
-                        {hist.vocabularyNotes.map((v) => v.word).join(', ')}
-                      </span>
-                    </div>
-                  )}
-
-                  {hist.pronunciationNotes && (
-                    <div className="text-xs">
-                      <span className="font-bold text-[#000035]">Pronunciation Tips: </span>
-                      <p className="text-slate-600 mt-0.5 whitespace-pre-line text-[11px]">
-                        {hist.pronunciationNotes}
-                      </p>
-                    </div>
-                  )}
-
-                  {hist.recommendations && (
-                    <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200 text-xs">
-                      <span className="font-bold text-amber-900">Recommendations: </span>
-                      <p className="text-amber-800 mt-0.5 whitespace-pre-line text-[11px]">
-                        {hist.recommendations}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -885,4 +1139,3 @@ export const TeacherLiveLessonNotesPanel: React.FC<TeacherLiveLessonNotesPanelPr
     </div>
   );
 };
-
