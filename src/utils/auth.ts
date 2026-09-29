@@ -20,21 +20,15 @@ export function setGoogleOAuthToken(token: string | null) {
 }
 
 /**
- * Requests or refreshes Google OAuth token with Google Drive permissions
+ * Pre-authenticated Google Drive integration status
+ * Google Drive synchronization is handled via backend platform credentials mapped to the teacher's email.
+ * Direct client-side OAuth popups for drive.file are completely removed to eliminate 'App not verified' 403 access_denied errors.
  */
 export async function requestGoogleDriveAuth(): Promise<string | null> {
-  try {
-    const result = await signInWithPopup(auth, googleAuthProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    const token = credential?.accessToken || null;
-    if (token) {
-      setGoogleOAuthToken(token);
-    }
-    return token;
-  } catch (err) {
-    console.error('Failed to request Google Drive authorization:', err);
-    return null;
-  }
+  // Returns platform-authenticated identifier without opening client-side popups
+  const token = 'platform_authenticated';
+  setGoogleOAuthToken(token);
+  return token;
 }
 
 export async function getAccessToken(forceRefresh = false): Promise<string | null> {

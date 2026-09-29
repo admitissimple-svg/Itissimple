@@ -44,7 +44,6 @@ import { formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
 import { doc, setDoc } from 'firebase/firestore';
 import { getDb } from '../firebase';
 import { useAuth } from '../context/AuthContext';
-import { getGoogleOAuthToken, requestGoogleDriveAuth } from '../utils/auth';
 import {
   syncSessionNotesToGoogleDrive,
   formatSessionNotesFileName,
@@ -189,17 +188,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const plainIncorrectCount = (notesContent.replace(/<span[^>]*data-tag-type="incorrect"[^>]*>[\s\S]*?<\/span>/gi, '').match(/✗/g) || []).length;
   const incorrectCount = tagIncorrectCount + plainIncorrectCount;
 
-  // Google Drive state & safe auth resolution
-  let authContext: any = null;
-  try {
-    authContext = useAuth();
-  } catch (err) {
-    console.warn('TeacherLiveLessonNotesPanel: AuthContext fallback active', err);
-  }
-  const googleOAuthToken = authContext?.googleOAuthToken || getGoogleOAuthToken();
-  const connectGoogleDrive = authContext?.connectGoogleDrive || requestGoogleDriveAuth;
-
-  const [driveSyncStatus, setDriveSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error' | 'not_connected'>('idle');
+  // Google Drive state & backend service integration (uses pre-authenticated platform credentials mapped to teacher's email)
+  const [driveSyncStatus, setDriveSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
   const [driveFileId, setDriveFileId] = useState<string | null>(null);
   const [driveFileUrl, setDriveFileUrl] = useState<string | null>(null);
   const [driveFileName, setDriveFileName] = useState<string | null>(null);
@@ -566,12 +556,6 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       targetFileId?: string
     ) => {
       try {
-        const token = googleOAuthToken || getGoogleOAuthToken();
-        if (!token) {
-          setDriveSyncStatus('not_connected');
-          return;
-        }
-
         setDriveSyncStatus('syncing');
         setDriveSyncError(null);
 
@@ -582,11 +566,16 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           `session_${effDate}_${cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : 'notes'}`;
 
         const res = await syncSessionNotesToGoogleDrive({
-          accessToken: token,
           studentName: sName,
+          studentEmail: cleanEmail,
+          teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
+          teacherName: currentAccount?.name || 'Native Friend',
           sessionDate: effDate,
+          topic: topicToSync,
           content: contentToSync,
           existingFileId: targetFileId || driveFileId || (activeLesson as any)?.driveFileId || undefined,
+          lessonId: targetLessonId || undefined,
+          sessionKey,
         });
 
         if (res.success && res.fileId) {
@@ -639,6 +628,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 studentEmail: cleanEmail,
                 topic: topicToSync,
                 content: contentToSync,
+                teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
+                teacherName: currentAccount?.name || 'Native Friend',
                 ...drivePayload,
               }),
             }).catch(() => null);
@@ -666,12 +657,12 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       }
     },
     [
-      googleOAuthToken,
       selectedLessonId,
       activeLesson,
       selectedStudentEmail,
       driveFileId,
       activeStudent,
+      currentAccount,
       onSaveLessonNotes,
     ]
   );
@@ -701,7 +692,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           lessonId: targetLessonId || undefined,
           studentEmail: cleanEmail,
           studentUid: activeStudent?.uid || activeStudent?.id || undefined,
-          teacherEmail: currentAccount?.email || undefined,
+          teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
           teacherName: currentAccount?.name || 'Native Friend',
           topic: topicToSave,
           content: contentToSave,
@@ -753,14 +744,30 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           console.warn('Direct Firestore save notice:', err);
         }
 
-        // 2. Server API Persistence (ensures persistence in app_state & Firestore)
+        // 2. Server API Persistence (ensures persistence in app_state, Firestore, & backend Google Drive sync)
+        const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
         try {
-          fetch('/api/session-notes', {
+          const res = await fetch('/api/session-notes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(documentPayload),
-          }).catch((err) => console.warn('Server /api/session-notes notice:', err));
-        } catch {}
+            body: JSON.stringify({
+              ...documentPayload,
+              studentName: sName,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.sessionNote) {
+              const note = data.sessionNote;
+              if (note.driveFileId) setDriveFileId(note.driveFileId);
+              if (note.driveFileUrl) setDriveFileUrl(note.driveFileUrl);
+              if (note.driveLastSyncedAt) setDriveLastSyncedAt(note.driveLastSyncedAt);
+              setDriveSyncStatus('synced');
+            }
+          }
+        } catch (err) {
+          console.warn('Server /api/session-notes notice:', err);
+        }
 
         // 3. Update lesson state in parent
         if (targetLessonId && typeof onSaveLessonNotes === 'function') {
@@ -780,62 +787,12 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
         setLastSavedTimestamp(nowIso);
         setIsSaving(false);
 
-        // Background auto-sync to Drive if already authenticated and existing file is linked
-        const token = googleOAuthToken || getGoogleOAuthToken();
-        const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
-        const existingFile = driveFileId || (activeLesson as any)?.driveFileId;
-        if (!explicitSave && token && existingFile) {
-          executeDriveSync(contentToSave, topicToSave, sName, effectiveDate, existingFile).catch(() => null);
-        }
-
         if (explicitSave) {
           setSavedSuccessBanner(true);
           setTimeout(() => setSavedSuccessBanner(false), 3000);
 
-          try {
-            const token = googleOAuthToken || getGoogleOAuthToken();
-            const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
-
-            if (!token) {
-              setDriveSyncStatus('not_connected');
-            } else {
-              const calculatedFileName = formatSessionNotesFileName(sName, effectiveDate);
-              const currentFileId = driveFileId || (activeLesson as any)?.driveFileId;
-
-              // Check if file already exists in Drive and if confirmation is needed for overwrite
-              if (!driveAutoUpdateConfirmed) {
-                getOrCreateSessionNotesFolder(token)
-                  .then(async (folder) => {
-                    let existingFile = currentFileId
-                      ? { id: currentFileId, name: calculatedFileName }
-                      : await findExistingSessionNotesFile(token, folder.id, calculatedFileName);
-
-                    if (existingFile) {
-                      // User Confirmation Dialog required before mutating existing user Drive file
-                      setPendingDriveUpdate({
-                        fileId: existingFile.id,
-                        fileName: calculatedFileName,
-                        content: contentToSave,
-                        topic: topicToSave,
-                      });
-                      setShowDriveConfirmModal(true);
-                    } else {
-                      // Safe to create new document in folder without overwrite prompt
-                      executeDriveSync(contentToSave, topicToSave, sName, effectiveDate);
-                    }
-                  })
-                  .catch((folderErr) => {
-                    console.warn('Folder resolution notice:', folderErr);
-                    executeDriveSync(contentToSave, topicToSave, sName, effectiveDate);
-                  });
-              } else {
-                // Already confirmed by user for this session
-                executeDriveSync(contentToSave, topicToSave, sName, effectiveDate, currentFileId);
-              }
-            }
-          } catch (driveErr) {
-            console.warn('Drive dispatch error:', driveErr);
-          }
+          const currentFileId = driveFileId || (activeLesson as any)?.driveFileId;
+          executeDriveSync(contentToSave, topicToSave, sName, effectiveDate, currentFileId);
         }
       } catch (err) {
         console.error('persistSessionDocument error:', err);
@@ -852,8 +809,6 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       driveFileId,
       driveFileUrl,
       driveLastSyncedAt,
-      driveAutoUpdateConfirmed,
-      googleOAuthToken,
       onSaveLessonNotes,
       executeDriveSync,
       resolveStudentName,
@@ -880,19 +835,13 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     try {
       setDriveSyncStatus('syncing');
       setDriveSyncError(null);
-      const token = connectGoogleDrive ? await connectGoogleDrive() : await requestGoogleDriveAuth();
-      if (token) {
-        setDriveSyncStatus('idle');
-        const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
-        const effDate = sessionDate || new Date().toISOString().split('T')[0];
-        executeDriveSync(notesContent, topic, sName, effDate);
-      } else {
-        setDriveSyncStatus('not_connected');
-      }
+      const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
+      const effDate = sessionDate || new Date().toISOString().split('T')[0];
+      await executeDriveSync(notesContent, topic, sName, effDate);
     } catch (err: any) {
       console.warn('handleConnectDrive error:', err);
       setDriveSyncStatus('error');
-      setDriveSyncError('Could not connect to Google Drive.');
+      setDriveSyncError('Could not sync to Google Drive.');
     }
   };
 
@@ -2000,17 +1949,16 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                       Open <ExternalLink className="w-3 h-3" />
                     </a>
                   </div>
-                ) : driveSyncStatus === 'not_connected' || (!googleOAuthToken && !getGoogleOAuthToken()) ? (
+                ) : (
                   <button
                     type="button"
                     onClick={handleConnectDrive}
                     className="text-xs font-semibold text-[#1C4C96] hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Sync session notes to Google Drive folder 'It's Simple - Session Notes'"
                   >
                     <FolderSync className="w-3.5 h-3.5 text-[#1C4C96]" />
-                    <span>Connect Google Drive</span>
+                    <span>Sync to Drive</span>
                   </button>
-                ) : (
-                  <span className="text-slate-400 text-xs">Drive Ready</span>
                 )}
               </div>
             </div>
@@ -2080,16 +2028,6 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                   <span>Drive Synced</span>
                   <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
                 </a>
-              ) : !googleOAuthToken && !getGoogleOAuthToken() ? (
-                <button
-                  type="button"
-                  onClick={handleConnectDrive}
-                  className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  title="Authenticate with Google to enable automatic Google Drive synchronization in 'It's Simple - Session Notes'"
-                >
-                  <FolderSync className="w-4 h-4 text-[#1C4C96]" />
-                  <span>Connect Google Drive</span>
-                </button>
               ) : (
                 <button
                   type="button"

@@ -2289,7 +2289,15 @@
       "id": "lesson-1789740324355",
       "teacherUid": "usr-estilobeeforkids-gmail-com",
       "teacherEmail": "estilobeeforkids@gmail.com",
-      "title": "Trial"
+      "title": "Trial",
+      "liveNotes": "Native Friend In-Session Notes &amp; Recommendations\nDate: 2026-09-18 | Student: Lavinia Ferraz\nTopic: Trial\n\n\nCtrl + Alt + C = <span class=\"inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"correct\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #ecfdf5; border: 1px solid #15803d; color: #15803d; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Correct (✓)\" role=\"img\" aria-label=\"Correct\">✓</span> \nCtrl + Alt + E = <span class=\"inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"incorrect\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #fff1f2; border: 1px solid #b91c1c; color: #b91c1c; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Incorrect (✗)\" role=\"img\" aria-label=\"Incorrect\">✗</span> \n<br>",
+      "recommendations": "Native Friend In-Session Notes &amp; Recommendations\nDate: 2026-09-18 | Student: Lavinia Ferraz\nTopic: Trial\n\n\nCtrl + Alt + C = <span class=\"inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"correct\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #ecfdf5; border: 1px solid #15803d; color: #15803d; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Correct (✓)\" role=\"img\" aria-label=\"Correct\">✓</span> \nCtrl + Alt + E = <span class=\"inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"incorrect\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #fff1f2; border: 1px solid #b91c1c; color: #b91c1c; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Incorrect (✗)\" role=\"img\" aria-label=\"Incorrect\">✗</span> \n<br>",
+      "sessionNotesDocument": "Native Friend In-Session Notes &amp; Recommendations\nDate: 2026-09-18 | Student: Lavinia Ferraz\nTopic: Trial\n\n\nCtrl + Alt + C = <span class=\"inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"correct\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #ecfdf5; border: 1px solid #15803d; color: #15803d; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Correct (✓)\" role=\"img\" aria-label=\"Correct\">✓</span> \nCtrl + Alt + E = <span class=\"inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"incorrect\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #fff1f2; border: 1px solid #b91c1c; color: #b91c1c; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Incorrect (✗)\" role=\"img\" aria-label=\"Incorrect\">✗</span> \n<br>",
+      "notesLastSavedAt": "2026-09-29T17:32:47.629Z",
+      "driveFileId": "",
+      "driveFileUrl": "",
+      "driveFolderName": "It's Simple - Session Notes",
+      "driveLastSyncedAt": ""
     },
     {
       "studentName": "Lavinia Ferraz",
@@ -18152,5 +18160,19 @@
         "hasErrors": false
       }
     ]
+  },
+  "sessionNotesMap": {
+    "lesson-1789740324355": {
+      "id": "lesson-1789740324355",
+      "sessionDate": "2026-09-18",
+      "lessonId": "lesson-1789740324355",
+      "studentEmail": "laviniatilapia@gmail.com",
+      "studentUid": "usr-laviniatilapia-gmail-com",
+      "teacherEmail": "estilobeeforkids@gmail.com",
+      "teacherName": "Adm It's Simple",
+      "topic": "Trial",
+      "content": "Native Friend In-Session Notes &amp; Recommendations\nDate: 2026-09-18 | Student: Lavinia Ferraz\nTopic: Trial\n\n\nCtrl + Alt + C = <span class=\"inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"correct\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #ecfdf5; border: 1px solid #15803d; color: #15803d; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Correct (✓)\" role=\"img\" aria-label=\"Correct\">✓</span> \nCtrl + Alt + E = <span class=\"inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none\" data-tag-type=\"incorrect\" contenteditable=\"false\" style=\"display: inline-flex; align-items: center; justify-content: center; background-color: #fff1f2; border: 1px solid #b91c1c; color: #b91c1c; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;\" title=\"Incorrect (✗)\" role=\"img\" aria-label=\"Incorrect\">✗</span> \n<br>",
+      "updatedAt": "2026-09-29T17:32:47.629Z"
+    }
   }
 }

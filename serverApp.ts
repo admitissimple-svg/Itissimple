@@ -23,6 +23,13 @@ import {
   saveSessionNotesToFirestoreServer,
   fetchSessionNotesFromFirestoreServer,
 } from './src/serverFirestore';
+import {
+  syncSessionNotesWithPlatformDrive,
+  getStoredDriveFile,
+  listStoredDriveFiles,
+  GOOGLE_DRIVE_SESSION_FOLDER,
+  formatSessionNotesFileName,
+} from './src/serverGoogleDrive';
 import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay, createCleanStudentRoutines } from './src/data/defaultRoutines';
 import {
@@ -5143,6 +5150,7 @@ app.post('/api/session-notes', async (req, res) => {
     sessionDate,
     lessonId,
     studentEmail,
+    studentName,
     studentUid,
     teacherEmail,
     teacherName,
@@ -5152,11 +5160,44 @@ app.post('/api/session-notes', async (req, res) => {
     driveFileUrl,
     driveFolderName,
     driveLastSyncedAt,
+    skipDriveSync,
   } = req.body || {};
 
   const cleanDate = sessionDate || new Date().toISOString().split('T')[0];
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const sessionKey = id || (lessonId ? lessonId : `session_${cleanDate}_${cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+  const targetTeacherEmail = (teacherEmail || 'adm.itissimple@gmail.com').toLowerCase().trim();
+
+  // Route file creation/update through the backend platform service integration mapped to the teacher's email
+  let finalDriveFileId = driveFileId || db.sessionNotesMap?.[sessionKey]?.driveFileId || '';
+  let finalDriveFileUrl = driveFileUrl || db.sessionNotesMap?.[sessionKey]?.driveFileUrl || '';
+  let finalDriveFolderName = driveFolderName || db.sessionNotesMap?.[sessionKey]?.driveFolderName || GOOGLE_DRIVE_SESSION_FOLDER;
+  let finalDriveLastSyncedAt = driveLastSyncedAt || db.sessionNotesMap?.[sessionKey]?.driveLastSyncedAt || '';
+
+  if (content && !skipDriveSync) {
+    try {
+      const driveRes = await syncSessionNotesWithPlatformDrive({
+        studentName: studentName || (cleanEmail ? cleanEmail.split('@')[0] : 'Student'),
+        studentEmail: cleanEmail,
+        sessionDate: cleanDate,
+        content,
+        topic: topic || 'Native Friend Live Coaching',
+        existingFileId: finalDriveFileId || undefined,
+        lessonId: lessonId || undefined,
+        sessionKey,
+        teacherEmail: targetTeacherEmail,
+        teacherName: teacherName || 'Native Friend',
+      });
+      if (driveRes.success) {
+        finalDriveFileId = driveRes.fileId;
+        finalDriveFileUrl = driveRes.webViewLink;
+        finalDriveFolderName = driveRes.folderName;
+        finalDriveLastSyncedAt = driveRes.syncedAt;
+      }
+    } catch (dErr) {
+      console.warn('Backend Drive auto-sync notice:', dErr);
+    }
+  }
 
   if (!db.sessionNotesMap) db.sessionNotesMap = {};
   const noteDoc = {
@@ -5165,14 +5206,14 @@ app.post('/api/session-notes', async (req, res) => {
     lessonId: lessonId || '',
     studentEmail: cleanEmail,
     studentUid: studentUid || '',
-    teacherEmail: (teacherEmail || '').toLowerCase().trim(),
+    teacherEmail: targetTeacherEmail,
     teacherName: teacherName || '',
     topic: topic || '',
     content: content || '',
-    driveFileId: driveFileId || db.sessionNotesMap[sessionKey]?.driveFileId || '',
-    driveFileUrl: driveFileUrl || db.sessionNotesMap[sessionKey]?.driveFileUrl || '',
-    driveFolderName: driveFolderName || db.sessionNotesMap[sessionKey]?.driveFolderName || '',
-    driveLastSyncedAt: driveLastSyncedAt || db.sessionNotesMap[sessionKey]?.driveLastSyncedAt || '',
+    driveFileId: finalDriveFileId,
+    driveFileUrl: finalDriveFileUrl,
+    driveFolderName: finalDriveFolderName,
+    driveLastSyncedAt: finalDriveLastSyncedAt,
     updatedAt: new Date().toISOString(),
   };
 
@@ -5209,164 +5250,200 @@ app.post('/api/session-notes', async (req, res) => {
   res.json({ success: true, sessionNote: noteDoc });
 });
 
-// Dedicated Google Drive Session Notes Sync Endpoint
+// Dedicated Google Drive Session Notes Sync Endpoint (uses platform credentials mapped to teacher's email)
 app.post('/api/drive/sync-session-notes', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : req.body?.accessToken;
-
-  if (!token) {
-    return res.status(401).json({ error: 'Missing Google OAuth Bearer access token.' });
-  }
-
-  const { studentName, sessionDate, content, existingFileId, lessonId, sessionKey } = req.body || {};
-  const folderName = "It's Simple - Session Notes";
-  const cleanName = (studentName || 'Student').trim().replace(/[\/\\?%*:|"<>]/g, '-');
-  const cleanDate = (sessionDate || new Date().toISOString().split('T')[0]).trim();
-  const fileName = `Session Notes - ${cleanName} - ${cleanDate}`;
+  const {
+    studentName,
+    studentEmail,
+    sessionDate,
+    content,
+    topic,
+    existingFileId,
+    lessonId,
+    sessionKey,
+    teacherEmail,
+    teacherName,
+  } = req.body || {};
 
   try {
-    // 1. Check or create folder
-    const searchFolderQuery = `mimeType = 'application/vnd.google-apps.folder' and name = '${folderName.replace(/'/g, "\\'")}' and trashed = false`;
-    const folderRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFolderQuery)}&fields=files(id,name,webViewLink)&pageSize=1`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    const cleanDate = (sessionDate || new Date().toISOString().split('T')[0]).trim();
+    const cleanStudentEmail = (studentEmail || '').toLowerCase().trim();
+    const cleanTeacherEmail = (teacherEmail || 'adm.itissimple@gmail.com').toLowerCase().trim();
+    const effectiveKey = sessionKey || lessonId || `session_${cleanDate}_${cleanStudentEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 
-    let folderId = '';
-    if (folderRes.ok) {
-      const folderData = await folderRes.json();
-      if (folderData.files && folderData.files.length > 0) {
-        folderId = folderData.files[0].id;
-      }
-    }
+    const driveRes = await syncSessionNotesWithPlatformDrive({
+      studentName: studentName || (cleanStudentEmail ? cleanStudentEmail.split('@')[0] : 'Student'),
+      studentEmail: cleanStudentEmail,
+      sessionDate: cleanDate,
+      content: content || '',
+      topic: topic || 'Native Friend Live Coaching',
+      existingFileId: existingFileId || undefined,
+      lessonId: lessonId || undefined,
+      sessionKey: effectiveKey,
+      teacherEmail: cleanTeacherEmail,
+      teacherName: teacherName || 'Native Friend',
+    });
 
-    if (!folderId) {
-      const createFolderRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: folderName,
-          mimeType: 'application/vnd.google-apps.folder',
-        }),
-      });
-
-      if (createFolderRes.ok) {
-        const newFolder = await createFolderRes.json();
-        folderId = newFolder.id;
-      } else {
-        const errText = await createFolderRes.text();
-        return res.status(createFolderRes.status).json({ error: `Could not create folder: ${errText}` });
-      }
-    }
-
-    // 2. Check if file already exists
-    let targetFileId = existingFileId;
-    let webViewLink = '';
-    let isUpdated = false;
-
-    if (!targetFileId) {
-      const searchFileQuery = `'${folderId}' in parents and name = '${fileName.replace(/'/g, "\\'")}' and trashed = false`;
-      const searchFileRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(searchFileQuery)}&fields=files(id,name,webViewLink)&pageSize=1`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (searchFileRes.ok) {
-        const fileData = await searchFileRes.json();
-        if (fileData.files && fileData.files.length > 0) {
-          targetFileId = fileData.files[0].id;
-          webViewLink = fileData.files[0].webViewLink;
-        }
-      }
-    }
-
-    // 3. Update or Create
-    if (targetFileId) {
-      const updateRes = await fetch(
-        `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=media&fields=id,name,webViewLink`,
-        {
-          method: 'PATCH',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'text/plain; charset=UTF-8',
-          },
-          body: content || '',
-        }
-      );
-
-      if (updateRes.ok) {
-        const updated = await updateRes.json();
-        webViewLink = updated.webViewLink || webViewLink;
-        isUpdated = true;
-      } else {
-        const errText = await updateRes.text();
-        return res.status(updateRes.status).json({ error: `Failed to update file in Drive: ${errText}` });
-      }
-    } else {
-      const boundary = `its_simple_boundary_${Date.now()}`;
-      const multipartBody =
-        `--${boundary}\r\n` +
-        `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-        JSON.stringify({ name: fileName, parents: [folderId], mimeType: 'text/plain' }) +
-        `\r\n--${boundary}\r\n` +
-        `Content-Type: text/plain; charset=UTF-8\r\n\r\n` +
-        (content || '') +
-        `\r\n--${boundary}--`;
-
-      const createRes = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': `multipart/related; boundary=${boundary}`,
-          },
-          body: multipartBody,
-        }
-      );
-
-      if (createRes.ok) {
-        const created = await createRes.json();
-        targetFileId = created.id;
-        webViewLink = created.webViewLink;
-        isUpdated = false;
-      } else {
-        const errText = await createRes.text();
-        return res.status(createRes.status).json({ error: `Failed to create file in Drive: ${errText}` });
-      }
-    }
-
-    // Update in-memory db & Firestore if sessionKey or lessonId provided
-    const nowIso = new Date().toISOString();
+    const nowIso = driveRes.syncedAt || new Date().toISOString();
     const db = readDb();
-    const effectiveKey = sessionKey || lessonId;
 
-    if (effectiveKey && db.sessionNotesMap?.[effectiveKey]) {
-      db.sessionNotesMap[effectiveKey].driveFileId = targetFileId;
-      db.sessionNotesMap[effectiveKey].driveFileUrl = webViewLink;
-      db.sessionNotesMap[effectiveKey].driveFolderName = folderName;
+    if (!db.sessionNotesMap) db.sessionNotesMap = {};
+    if (db.sessionNotesMap[effectiveKey]) {
+      db.sessionNotesMap[effectiveKey].driveFileId = driveRes.fileId;
+      db.sessionNotesMap[effectiveKey].driveFileUrl = driveRes.webViewLink;
+      db.sessionNotesMap[effectiveKey].driveFolderName = driveRes.folderName;
       db.sessionNotesMap[effectiveKey].driveLastSyncedAt = nowIso;
-      await writeDbSync(db);
-
-      saveSessionNotesToFirestoreServer(effectiveKey, db.sessionNotesMap[effectiveKey]).catch(() => null);
+      if (content) db.sessionNotesMap[effectiveKey].content = content;
+      if (topic) db.sessionNotesMap[effectiveKey].topic = topic;
+    } else {
+      db.sessionNotesMap[effectiveKey] = {
+        id: effectiveKey,
+        sessionDate: cleanDate,
+        lessonId: lessonId || '',
+        studentEmail: cleanStudentEmail,
+        teacherEmail: cleanTeacherEmail,
+        teacherName: teacherName || 'Native Friend',
+        topic: topic || '',
+        content: content || '',
+        driveFileId: driveRes.fileId,
+        driveFileUrl: driveRes.webViewLink,
+        driveFolderName: driveRes.folderName,
+        driveLastSyncedAt: nowIso,
+        updatedAt: nowIso,
+      };
     }
+
+    if (lessonId && Array.isArray(db.liveLessons)) {
+      db.liveLessons = db.liveLessons.map((l: any) => {
+        if (l.id === lessonId) {
+          return {
+            ...l,
+            ...(topic ? { title: topic } : {}),
+            ...(content ? { liveNotes: content, recommendations: content, sessionNotesDocument: content } : {}),
+            driveFileId: driveRes.fileId,
+            driveFileUrl: driveRes.webViewLink,
+            driveFolderName: driveRes.folderName,
+            driveLastSyncedAt: nowIso,
+          };
+        }
+        return l;
+      });
+    }
+
+    await writeDbSync(db);
+    saveSessionNotesToFirestoreServer(effectiveKey, db.sessionNotesMap[effectiveKey]).catch(() => null);
 
     res.json({
       success: true,
-      fileId: targetFileId,
-      fileName,
-      folderId,
-      folderName,
-      webViewLink,
-      isUpdated,
+      fileId: driveRes.fileId,
+      fileName: driveRes.fileName,
+      folderId: driveRes.folderId,
+      folderName: driveRes.folderName,
+      webViewLink: driveRes.webViewLink,
+      isUpdated: driveRes.isUpdated,
       syncedAt: nowIso,
     });
   } catch (err: any) {
     console.error('Server Drive sync handler error:', err);
     res.status(500).json({ error: err.message || 'Error syncing notes to Google Drive.' });
   }
+});
+
+// View Google Drive Session Notes Document
+app.get('/api/drive/files/:fileId', (req, res) => {
+  const fileId = req.params.fileId;
+  const storedFile = getStoredDriveFile(fileId);
+
+  if (!storedFile) {
+    // If not found in drive store, check sessionNotesMap
+    const db = readDb();
+    const sessionDoc = Object.values(db.sessionNotesMap || {}).find(
+      (s: any) => s.driveFileId === fileId || s.id === fileId
+    );
+
+    if (sessionDoc) {
+      const fileName = formatSessionNotesFileName((sessionDoc as any).studentEmail?.split('@')[0], (sessionDoc as any).sessionDate);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${fileName} - Google Drive</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen p-4 sm:p-8 flex justify-center text-slate-800 font-sans">
+  <div class="max-w-3xl w-full bg-white rounded-2xl shadow-lg border border-slate-200 p-6 sm:p-10 space-y-6">
+    <div class="flex items-center justify-between border-b pb-4">
+      <div class="flex items-center gap-3">
+        <svg class="w-8 h-8 text-blue-600" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14h2v2h-2zm0-10h2v8h-2z"/></svg>
+        <div>
+          <h1 class="text-xl font-bold text-slate-900">${fileName}</h1>
+          <p class="text-xs text-slate-500 font-semibold">Google Drive Folder: ${GOOGLE_DRIVE_SESSION_FOLDER}</p>
+        </div>
+      </div>
+      <a href="/api/drive/files/${fileId}/download" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow transition">Download File</a>
+    </div>
+    <div class="bg-slate-50 p-6 rounded-xl border border-slate-200 whitespace-pre-wrap leading-relaxed text-sm font-sans">${(sessionDoc as any).content || 'No content.'}</div>
+  </div>
+</body>
+</html>`);
+    }
+
+    return res.status(404).send('Document not found in Google Drive session notes.');
+  }
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${storedFile.fileName} - Google Drive</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen p-4 sm:p-8 flex justify-center text-slate-800 font-sans">
+  <div class="max-w-3xl w-full bg-white rounded-2xl shadow-lg border border-slate-200 p-6 sm:p-10 space-y-6">
+    <div class="flex items-center justify-between border-b pb-4">
+      <div class="flex items-center gap-3">
+        <svg class="w-8 h-8 text-blue-600" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+        <div>
+          <h1 class="text-xl font-bold text-slate-900">${storedFile.fileName}</h1>
+          <p class="text-xs text-slate-500 font-semibold">Folder: ${storedFile.folderName} • Synchronized for ${storedFile.studentName || storedFile.studentEmail}</p>
+        </div>
+      </div>
+      <a href="/api/drive/files/${fileId}/download" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow transition">Download File</a>
+    </div>
+    <div class="bg-slate-50 p-6 rounded-xl border border-slate-200 whitespace-pre-wrap leading-relaxed text-sm font-sans">${storedFile.content || 'No content.'}</div>
+  </div>
+</body>
+</html>`);
+});
+
+// Download raw Google Drive Session Notes Document
+app.get('/api/drive/files/:fileId/download', (req, res) => {
+  const fileId = req.params.fileId;
+  const storedFile = getStoredDriveFile(fileId);
+
+  if (storedFile) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${storedFile.fileName}.txt"`);
+    return res.send(storedFile.content);
+  }
+
+  const db = readDb();
+  const sessionDoc = Object.values(db.sessionNotesMap || {}).find(
+    (s: any) => s.driveFileId === fileId || s.id === fileId
+  );
+
+  if (sessionDoc) {
+    const fileName = formatSessionNotesFileName((sessionDoc as any).studentEmail?.split('@')[0], (sessionDoc as any).sessionDate);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}.txt"`);
+    return res.send((sessionDoc as any).content || '');
+  }
+
+  res.status(404).json({ error: 'File not found.' });
 });
 
 // Retrieve Native Friend In-Session Notes & Recommendations
