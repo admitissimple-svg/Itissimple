@@ -7,6 +7,14 @@ try {
   setLogLevel('silent');
 } catch {}
 
+// Active and exclusive project identifiers
+export const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
+export const ACTIVE_PROJECT_NUMBER = '681085451337';
+export const ACTIVE_FIREBASE_AUTH_DOMAIN = `${ACTIVE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
+export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.firebasestorage.app`;
+export const ACTIVE_OAUTH_CLIENT_ID = `${ACTIVE_PROJECT_NUMBER}-${ACTIVE_FIREBASE_PROJECT_ID}.apps.googleusercontent.com`;
+export const ACTIVE_FIRESTORE_DATABASE_ID = 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
+
 let dbInstance: any = null;
 
 export function getFirestoreDb() {
@@ -16,9 +24,15 @@ export function getFirestoreDb() {
     const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      // Enforce active project configuration: itissimple-8663d and dedicated firestore database ID
-      config.projectId = config.projectId || 'itissimple-8663d';
-      config.firestoreDatabaseId = config.firestoreDatabaseId || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
+      // Enforce active project configuration: gen-lang-client-0507076122 and dedicated firestore database ID
+      config.projectId = ACTIVE_FIREBASE_PROJECT_ID;
+      config.appId = `1:${ACTIVE_PROJECT_NUMBER}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
+      config.apiKey = process.env.FIREBASE_API_KEY || config.apiKey || 'AIzaSyBVAXfOGPV11t7HIkgb6YH4GScws1mfTzk';
+      config.authDomain = ACTIVE_FIREBASE_AUTH_DOMAIN;
+      config.storageBucket = ACTIVE_FIREBASE_STORAGE_BUCKET;
+      config.firestoreDatabaseId = ACTIVE_FIRESTORE_DATABASE_ID;
+      config.messagingSenderId = ACTIVE_PROJECT_NUMBER;
+      config.oAuthClientId = ACTIVE_OAUTH_CLIENT_ID;
 
       const app = getApps().length === 0 ? initializeApp(config) : getApp();
       dbInstance = config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)'

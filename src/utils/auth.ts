@@ -23,11 +23,16 @@ export function setGoogleOAuthToken(token: string | null) {
  * Teacher Google Drive OAuth authorization.
  * Authenticates the teacher with Google and requests the drive.file scope,
  * returning the active OAuth access token to manage files directly in their personal Google Drive.
+ * Supports optional login_hint (e.g. estilobeeforkids@gmail.com) for seamless, conflict-free authorization.
  */
-export async function requestGoogleDriveAuth(): Promise<string | null> {
+export async function requestGoogleDriveAuth(hintEmail?: string): Promise<string | null> {
   try {
     const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
+    const customParams: Record<string, string> = { prompt: 'select_account' };
+    if (hintEmail && hintEmail.includes('@')) {
+      customParams.login_hint = hintEmail.trim();
+    }
+    provider.setCustomParameters(customParams);
     provider.addScope('https://www.googleapis.com/auth/drive.file');
     provider.addScope('https://www.googleapis.com/auth/calendar.events');
     provider.addScope('https://www.googleapis.com/auth/gmail.send');

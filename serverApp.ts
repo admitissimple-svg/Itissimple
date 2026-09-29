@@ -63,7 +63,8 @@ import { analyzeSentenceGrammarDeterministic } from './src/utils/writingChecker'
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
 const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
-const GEMINI_PROJECT_ID = 'itissimple-8663d';
+const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
+const GEMINI_PROJECT_ID = ACTIVE_FIREBASE_PROJECT_ID;
 const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
@@ -8279,7 +8280,7 @@ app.post('/api/email-logs', (req, res) => {
   res.json({ success: true });
 });
 
-// 12a. Isolated, Token-Optimized AI Handler Strictly for "Sentence of the Day" (Project: itissimple-8663d)
+// 12a. Isolated, Token-Optimized AI Handler Strictly for "Sentence of the Day" (Project: gen-lang-client-0507076122)
 const dailySentenceEvaluationCache = new Map<string, { data: any; expiry: number }>();
 
 async function evaluateDailySentenceIsolated(

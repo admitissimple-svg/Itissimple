@@ -585,7 +585,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
         let activeToken = getGoogleOAuthToken() || googleOAuthToken;
         if (!activeToken) {
           try {
-            activeToken = await connectGoogleDrive();
+            activeToken = await connectGoogleDrive(currentAccount?.email || undefined);
           } catch (authErr: any) {
             console.warn('Google Drive auth error:', authErr);
             setDriveSyncStatus('error');
@@ -628,7 +628,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
         // Step 3: Handle Token Expiration
         if (res.requiresAuth) {
           try {
-            activeToken = await connectGoogleDrive();
+            activeToken = await connectGoogleDrive(currentAccount?.email || undefined);
             if (activeToken) {
               res = await syncSessionNotesToGoogleDrive({
                 accessToken: activeToken,

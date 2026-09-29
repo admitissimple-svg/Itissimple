@@ -70,7 +70,7 @@ export interface AuthContextType {
   logout: () => Promise<void>;
   fetchFirestoreUser: (uid: string, email?: string) => Promise<AuthUserDoc | null>;
   googleOAuthToken: string | null;
-  connectGoogleDrive: () => Promise<string | null>;
+  connectGoogleDrive: (hintEmail?: string) => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -104,14 +104,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [error, setError] = useState<string | null>(null);
   const [googleOAuthToken, setGoogleOAuthTokenState] = useState<string | null>(getGoogleOAuthToken());
 
-  const connectGoogleDrive = useCallback(async (): Promise<string | null> => {
-    const token = await requestGoogleDriveAuth();
+  const connectGoogleDrive = useCallback(async (hintEmail?: string): Promise<string | null> => {
+    const targetEmail = hintEmail || currentAccount?.email || undefined;
+    const token = await requestGoogleDriveAuth(targetEmail);
     if (token) {
       setGoogleOAuthToken(token);
       setGoogleOAuthTokenState(token);
     }
     return token;
-  }, []);
+  }, [currentAccount?.email]);
 
   // Fetch Firestore user doc by UID with fallback to emailDocId
   const fetchFirestoreUser = useCallback(async (uid: string, email?: string): Promise<AuthUserDoc | null> => {
@@ -524,9 +525,9 @@ export const useAuth = (): AuthContextType => {
       logout: async () => {},
       fetchFirestoreUser: async () => null,
       googleOAuthToken: getGoogleOAuthToken(),
-      connectGoogleDrive: async () => {
+      connectGoogleDrive: async (hintEmail?: string) => {
         try {
-          const token = await requestGoogleDriveAuth();
+          const token = await requestGoogleDriveAuth(hintEmail);
           if (token) setGoogleOAuthToken(token);
           return token;
         } catch {
