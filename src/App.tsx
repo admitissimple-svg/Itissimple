@@ -272,12 +272,35 @@ export default function App() {
             if (snap && snap.exists()) {
               firestoreDoc = snap.data();
               const r = (firestoreDoc.role || '').toLowerCase();
-              if (r === 'admin' || isMasterAdmin) resolvedRole = 'admin';
+              if (r === 'admin' || isMasterAdmin) resolvedRole = isMasterAdmin ? 'admin' : 'student';
               else if (r === 'teacher' || r === 'native_friend') resolvedRole = 'teacher';
               else resolvedRole = 'student';
+            } else if (cleanEmail) {
+              const cleanDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+              const snapEmail = await Promise.race([
+                getDoc(doc(db, 'users', cleanDocId)),
+                new Promise<null>((r) => setTimeout(() => r(null), 2500)),
+              ]);
+              if (snapEmail && snapEmail.exists()) {
+                firestoreDoc = snapEmail.data();
+                const r = (firestoreDoc.role || '').toLowerCase();
+                if (r === 'admin' || isMasterAdmin) resolvedRole = isMasterAdmin ? 'admin' : 'student';
+                else if (r === 'teacher' || r === 'native_friend') resolvedRole = 'teacher';
+                else resolvedRole = 'student';
+              }
             }
           } catch (e) {
             console.warn('Notice hydrating Firebase Auth user in App:', e);
+          }
+
+          if (resolvedRole === 'student' && typeof window !== 'undefined') {
+            const p = window.location.pathname;
+            const h = window.location.hash;
+            if (p === '/admin' || p === '/teacher' || h === '#admin' || h === '#teacher') {
+              try {
+                window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+              } catch {}
+            }
           }
 
           const account: GoogleAccount = {
@@ -494,33 +517,101 @@ export default function App() {
     loadInitialData();
   }, []);
 
-  // Check for direct /admin or #admin URL trigger
+  // Check for direct /admin, #admin, /teacher, or #teacher URL triggers with strict RBAC enforcement
   useEffect(() => {
-    const handleAdminRouteCheck = () => {
+    const handleRbacRouteCheck = () => {
       if (typeof window !== 'undefined') {
         const path = window.location.pathname;
         const hash = window.location.hash;
+
+        // 1. Guard Administrator route (/admin or #admin)
         if (path === '/admin' || hash === '#admin') {
           if (currentAccount?.role === 'admin') {
             setIsAdminApprovalsOpen(true);
+          } else if (currentAccount?.role === 'student') {
+            // STRICT RBAC: Block registered student from accessing Admin space
+            setIsAdminApprovalsOpen(false);
+            setIsAdminLandingEditorOpen(false);
+            try {
+              window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+            } catch {}
+            setNotifications((prev) => [
+              {
+                id: `rbac-admin-guard-${Date.now()}`,
+                title: currentLanguage === 'en' ? 'Access Restricted' : 'Acesso Restrito',
+                message: currentLanguage === 'en'
+                  ? 'Your account has a registered Student role. Access to Administrator panel is restricted.'
+                  : 'Sua conta está registrada como Aluno(a). O acesso ao Painel de Administrador é restrito.',
+                type: 'warning',
+                timestamp: new Date().toISOString(),
+                read: false,
+              },
+              ...prev,
+            ]);
+          } else if (currentAccount?.role === 'teacher') {
+            setIsAdminApprovalsOpen(false);
+            setIsAdminLandingEditorOpen(false);
+            try {
+              window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+            } catch {}
           } else if (!currentAccount) {
-            // Only prompt admin modal if user is strictly not logged in
             setAuthModalMode('login');
             setAuthModalRole('admin');
             setIsAuthModalOpen(true);
-          } else {
-            // Logged in as student or native friend: redirect safely to dashboard
+          }
+        }
+
+        // 2. Guard Native Friend / Teacher route (/teacher or #teacher)
+        if (path === '/teacher' || hash === '#teacher') {
+          if (currentAccount?.role === 'student') {
+            // STRICT RBAC: Block registered student from accessing Native Friend space
+            setIsEditTutorProfileOpen(false);
             try {
-              window.history.replaceState({}, '', '/dashboard');
+              window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
             } catch {}
+            setNotifications((prev) => [
+              {
+                id: `rbac-teacher-guard-${Date.now()}`,
+                title: currentLanguage === 'en' ? 'Access Restricted' : 'Acesso Restrito',
+                message: currentLanguage === 'en'
+                  ? 'Your account has a registered Student role. Access to Native Friend panel is restricted.'
+                  : 'Sua conta está registrada como Aluno(a). O acesso ao Painel de Amigo Nativo é restrito.',
+                type: 'warning',
+                timestamp: new Date().toISOString(),
+                read: false,
+              },
+              ...prev,
+            ]);
+          } else if (!currentAccount) {
+            setAuthModalMode('login');
+            setAuthModalRole('teacher');
+            setIsAuthModalOpen(true);
           }
         }
       }
     };
-    handleAdminRouteCheck();
-    window.addEventListener('popstate', handleAdminRouteCheck);
-    return () => window.removeEventListener('popstate', handleAdminRouteCheck);
-  }, [currentAccount]);
+    handleRbacRouteCheck();
+    window.addEventListener('popstate', handleRbacRouteCheck);
+    return () => window.removeEventListener('popstate', handleRbacRouteCheck);
+  }, [currentAccount, currentLanguage]);
+
+  // Active RBAC enforcement: If user is a student, ensure admin/tutor modals are closed and url is student space
+  useEffect(() => {
+    if (currentAccount?.role === 'student') {
+      if (isAdminApprovalsOpen) setIsAdminApprovalsOpen(false);
+      if (isAdminLandingEditorOpen) setIsAdminLandingEditorOpen(false);
+      if (isEditTutorProfileOpen) setIsEditTutorProfileOpen(false);
+      if (typeof window !== 'undefined') {
+        const path = window.location.pathname;
+        const hash = window.location.hash;
+        if (path === '/admin' || path === '/teacher' || hash === '#admin' || hash === '#teacher') {
+          try {
+            window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
+          } catch {}
+        }
+      }
+    }
+  }, [currentAccount, isAdminApprovalsOpen, isAdminLandingEditorOpen, isEditTutorProfileOpen]);
 
   // Compute current day's routine items
   const currentDayRoutines = useMemo(() => {

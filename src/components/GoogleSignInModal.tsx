@@ -111,21 +111,22 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       }
 
       // 2. Strict role determination from Firestore document
+      const cleanEmail = user.email.toLowerCase().trim();
+      const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
       const docRole = (firestoreUserDoc?.role || '').toLowerCase();
       let verifiedRole: UserRole = 'student';
 
-      if (docRole === 'student') {
+      if (isMasterAdmin) {
+        verifiedRole = 'admin';
+      } else if (docRole === 'student') {
+        // STRICT RBAC: Registered student locked strictly to student role
         verifiedRole = 'student';
       } else if (docRole === 'native_friend' || docRole === 'teacher') {
         verifiedRole = 'teacher';
-      } else if (docRole === 'admin' || user.email.toLowerCase() === 'adm.itissimple@gmail.com') {
-        if (user.email.toLowerCase() === 'adm.itissimple@gmail.com' || docRole === 'admin') {
-          verifiedRole = 'admin';
-        } else {
-          verifiedRole = 'student';
-        }
+      } else if (docRole === 'admin') {
+        verifiedRole = isMasterAdmin ? 'admin' : 'student';
       } else {
-        verifiedRole = selectedRole === 'teacher' ? 'teacher' : (selectedRole === 'admin' && user.email.toLowerCase() === 'adm.itissimple@gmail.com' ? 'admin' : 'student');
+        verifiedRole = selectedRole === 'teacher' ? 'teacher' : 'student';
       }
 
       // Synchronize authenticated user with backend profile and persistence
@@ -153,7 +154,16 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       const account: GoogleAccount = data.account;
       account.uid = user.uid;
       account.id = user.uid;
-      account.role = verifiedRole;
+
+      // Lock role if server or Firestore confirms student
+      if (docRole === 'student' || data.isRoleEnforced || account.role === 'student' || verifiedRole === 'student') {
+        if (!isMasterAdmin) {
+          verifiedRole = 'student';
+          account.role = 'student';
+        }
+      } else {
+        account.role = verifiedRole;
+      }
 
       // 3. Redirection
       if (verifiedRole === 'student') {

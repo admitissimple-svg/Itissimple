@@ -647,26 +647,24 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  // If user is not yet in authUsers, check if user exists in Firestore
+  // Always query Firestore to get the authoritative user record
   let firestoreDoc: any = null;
-  if (!authRecord) {
-    try {
-      firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid);
-      if (firestoreDoc) {
-        authRecord = {
-          uid: firestoreDoc.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
-          email: cleanEmail,
-          name: firestoreDoc.name || cleanEmail.split('@')[0],
-          password: firestoreDoc.password || password || '',
-          role: firestoreDoc.role || requestedRole || 'student',
-          createdAt: firestoreDoc.createdAt || new Date().toISOString(),
-        };
-        if (!db.authUsers) db.authUsers = {};
-        db.authUsers[cleanEmail] = authRecord;
-      }
-    } catch (fsErr) {
-      console.warn('Firestore hydration notice on login:', fsErr);
+  try {
+    firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid || authRecord?.uid);
+    if (firestoreDoc && !authRecord) {
+      authRecord = {
+        uid: firestoreDoc.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        email: cleanEmail,
+        name: firestoreDoc.name || cleanEmail.split('@')[0],
+        password: firestoreDoc.password || password || '',
+        role: firestoreDoc.role || 'student',
+        createdAt: firestoreDoc.createdAt || new Date().toISOString(),
+      };
+      if (!db.authUsers) db.authUsers = {};
+      db.authUsers[cleanEmail] = authRecord;
     }
+  } catch (fsErr) {
+    console.warn('Firestore hydration notice on login:', fsErr);
   }
 
   // If user is not yet in authUsers, check if client provided a local localStorage backup to restore
@@ -678,7 +676,7 @@ app.post('/api/auth/login', async (req, res) => {
       email: cleanEmail,
       name: localBackup.name || cleanEmail.split('@')[0],
       password: localBackup.password || password || '',
-      role: localBackup.role || requestedRole || 'student',
+      role: localBackup.role || 'student',
       createdAt: localBackup.registeredAt || new Date().toISOString(),
     };
     if (!db.authUsers) db.authUsers = {};
@@ -764,48 +762,82 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  let role = requestedRole || 'student';
-  let name = cleanEmail.split('@')[0];
+  // -------------------------------------------------------------
+  // STRICT ROLE-BASED ACCESS CONTROL (RBAC) DETERMINATION
+  // -------------------------------------------------------------
+  const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
+  const firestoreRole = (firestoreDoc?.role || '').toLowerCase();
+  const authRecordRole = (authRecord?.role || '').toLowerCase();
 
-  // 1. Check if admin: strictly for adm.itissimple@gmail.com or an explicitly verified admin record when requested as admin
-  if (cleanEmail === 'adm.itissimple@gmail.com' || (authRecord?.role === 'admin' && requestedRole === 'admin')) {
+  const isStudentInDb = (db.students || []).some(
+    (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
+  );
+  const isTutorInDb = (db.tutorsList || []).some(
+    (t: any) => (t.email || '').toLowerCase() === cleanEmail
+  );
+  const isTeacherInDb = (db.teachers || []).some(
+    (t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin'
+  );
+
+  // Check if user is registered as a student in Firestore or local database
+  const isRegisteredStudent = !isMasterAdmin && (
+    firestoreRole === 'student' ||
+    authRecordRole === 'student' ||
+    isStudentInDb
+  );
+
+  // Check if user is registered as a teacher/tutor
+  const isRegisteredTeacher = !isMasterAdmin && !isRegisteredStudent && (
+    firestoreRole === 'teacher' ||
+    firestoreRole === 'native_friend' ||
+    authRecordRole === 'teacher' ||
+    isTutorInDb ||
+    isTeacherInDb
+  );
+
+  let role: string = 'student';
+  let name = cleanEmail.split('@')[0];
+  let isRoleEnforced = false;
+
+  if (isMasterAdmin) {
     role = 'admin';
     name = authRecord?.name || 'Admin It\'s Simple';
-  } else if (
-    (requestedRole === 'teacher' || (!requestedRole && authRecord?.role === 'teacher')) &&
-    (authRecord?.role === 'teacher' ||
-      (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail) ||
-      (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin'))
-  ) {
-    // 2. Native Friend / Teacher: strictly enforce Teacher role so student data is never leaked or mixed
+  } else if (isRegisteredStudent) {
+    // STRICT RBAC: A registered student is locked exclusively to 'student'
+    role = 'student';
+    name = firestoreDoc?.name || authRecord?.name || name;
+    if (requestedRole && requestedRole !== 'student') {
+      isRoleEnforced = true;
+      console.warn(`[RBAC] Blocked user ${cleanEmail} from accessing ${requestedRole} panel. Locked to student space.`);
+    }
+    // Ensure authRecord in DB has role 'student'
+    if (authRecord && authRecord.role !== 'student') {
+      authRecord.role = 'student';
+      writeDb(db);
+    }
+  } else if (isRegisteredTeacher) {
+    // STRICT RBAC: A registered Native Friend / Teacher
     role = 'teacher';
     const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
     const teacherObj = (db.teachers || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
     name = tutorObj?.name || teacherObj?.name || authRecord?.name || name;
+
+    if (requestedRole === 'admin') {
+      isRoleEnforced = true;
+      console.warn(`[RBAC] Blocked teacher ${cleanEmail} from accessing admin panel.`);
+    }
 
     // Purge any accidental student profile entry for this teacher
     if (db.userProfiles && db.userProfiles[cleanEmail]) {
       delete db.userProfiles[cleanEmail];
       writeDb(db);
     }
-  } else if (firestoreDoc?.role === 'student' || requestedRole === 'student' || authRecord?.role === 'student') {
-    // 3. Student Access: guarantee role stays 'student' and never gets overridden to 'admin'
-    role = 'student';
-    name = firestoreDoc?.name || authRecord?.name || name;
-  } else if (authRecord) {
-    role = authRecord.role;
+  } else if (authRecord?.role === 'admin' && isMasterAdmin) {
+    role = 'admin';
     name = authRecord.name || name;
-  } else if (requestedRole) {
-    role = requestedRole === 'teacher' ? 'teacher' : (requestedRole === 'admin' ? 'admin' : 'student');
-    if (role === 'teacher') {
-      const teacherObj = db.teachers?.find((t) => t.email.toLowerCase() === cleanEmail);
-      if (teacherObj) name = teacherObj.name;
-    } else if (role === 'student') {
-      const studentObj = db.students?.find(
-        (s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail
-      );
-      if (studentObj) name = studentObj.name || studentObj.studentName || name;
-    }
+  } else {
+    // Unregistered/fallback
+    role = requestedRole === 'teacher' ? 'teacher' : 'student';
   }
 
   const tutorObj = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
@@ -944,6 +976,8 @@ app.post('/api/auth/login', async (req, res) => {
     profile: role === 'teacher' ? null : studentProfile,
     student: role === 'teacher' ? null : (studentObj || (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null),
     tutor: tutorObj || null,
+    isRoleEnforced,
+    enforcedRole: role,
   });
 });
 
@@ -1667,7 +1701,7 @@ app.post('/api/auth/sync-local-users', async (req, res) => {
 app.post('/api/auth/register', handleRegistration);
 app.post('/api/auth/signup', handleRegistration);
 
-app.post('/api/auth/google', (req, res) => {
+app.post('/api/auth/google', async (req, res) => {
   const db = readDb();
   const { email, name, picture, role: requestedRole, uid } = req.body;
   if (!email) {
@@ -1676,21 +1710,57 @@ app.post('/api/auth/google', (req, res) => {
 
   const cleanEmail = email.toLowerCase().trim();
   const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com' || cleanEmail === 'admin@itissimple.com';
-  let role = requestedRole === 'teacher' ? 'teacher' : 'student';
   let displayName = name || cleanEmail.split('@')[0];
+
+  // Query Firestore to get authoritative doc
+  let firestoreDoc: any = null;
+  try {
+    firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid);
+  } catch (fsErr) {
+    console.warn('Firestore fetch notice in google auth:', fsErr);
+  }
+
+  const firestoreRole = (firestoreDoc?.role || '').toLowerCase();
+  const authRecord = db.authUsers?.[cleanEmail];
+  const authRecordRole = (authRecord?.role || '').toLowerCase();
+
+  const isRegisteredStudent = !isMasterAdmin && (
+    firestoreRole === 'student' ||
+    authRecordRole === 'student' ||
+    (db.students || []).some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail)
+  );
+
+  const isRegisteredTeacher = !isMasterAdmin && !isRegisteredStudent && (
+    firestoreRole === 'teacher' ||
+    firestoreRole === 'native_friend' ||
+    authRecordRole === 'teacher' ||
+    (db.teachers || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin') ||
+    (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail)
+  );
+
+  let role: string = 'student';
+  let isRoleEnforced = false;
 
   if (isMasterAdmin) {
     role = 'admin';
     if (!name || name === cleanEmail.split('@')[0]) {
       displayName = "Admin It's Simple";
     }
-  } else if (
-    db.teachers?.some((t) => t.email.toLowerCase() === cleanEmail) ||
-    db.tutorsList?.some((t) => t.email.toLowerCase() === cleanEmail)
-  ) {
+  } else if (isRegisteredStudent) {
+    // STRICT RBAC: If registered as a student, session is strictly locked to student space
+    role = 'student';
+    if (requestedRole && requestedRole !== 'student') {
+      isRoleEnforced = true;
+      console.warn(`[RBAC Google] Blocked user ${cleanEmail} from accessing ${requestedRole} panel. Locked to student space.`);
+    }
+  } else if (isRegisteredTeacher) {
     role = 'teacher';
+    if (requestedRole === 'admin') {
+      isRoleEnforced = true;
+      console.warn(`[RBAC Google] Blocked teacher ${cleanEmail} from accessing admin panel.`);
+    }
   } else if (requestedRole) {
-    role = requestedRole === 'teacher' ? 'teacher' : (requestedRole === 'admin' && isMasterAdmin ? 'admin' : 'student');
+    role = requestedRole === 'teacher' ? 'teacher' : 'student';
   }
 
   // Update or record in authUsers
@@ -1788,6 +1858,8 @@ app.post('/api/auth/google', (req, res) => {
     profile: db.userProfiles?.[cleanEmail] || null,
     student: (db.students || []).find((s) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) || null,
     tutor: (db.tutorsList || []).find((t) => t.email.toLowerCase() === cleanEmail) || null,
+    isRoleEnforced,
+    enforcedRole: role,
   });
 });
 

@@ -244,25 +244,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const docRole = (firestoreDoc?.role || '').toLowerCase();
       let verifiedRole: UserRole = 'student';
 
-      if (docRole === 'student') {
+      if (cleanEmail === 'adm.itissimple@gmail.com') {
+        verifiedRole = 'admin';
+      } else if (docRole === 'student' || account.role === 'student') {
+        // STRICT RBAC: Registered student locked strictly to student role
         verifiedRole = 'student';
-      } else if (docRole === 'native_friend' || docRole === 'teacher') {
+      } else if (docRole === 'native_friend' || docRole === 'teacher' || account.role === 'teacher') {
         verifiedRole = 'teacher';
-      } else if (docRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
-        if (cleanEmail === 'adm.itissimple@gmail.com' || docRole === 'admin') {
-          verifiedRole = 'admin';
-        } else {
-          verifiedRole = 'student';
-        }
+      } else if (docRole === 'admin') {
+        verifiedRole = cleanEmail === 'adm.itissimple@gmail.com' ? 'admin' : 'student';
       } else {
-        // Fallback to backend account or requested role without overriding to admin
-        if (account.role === 'admin' && cleanEmail === 'adm.itissimple@gmail.com') {
-          verifiedRole = 'admin';
-        } else if (account.role === 'teacher' || preferredRole === 'teacher') {
-          verifiedRole = 'teacher';
-        } else {
-          verifiedRole = 'student';
-        }
+        verifiedRole = account.role || 'student';
       }
 
       account.role = verifiedRole;
@@ -360,20 +352,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Check Firestore doc by UID
       const firestoreDoc = await fetchFirestoreUser(user.uid, user.email);
 
-      let targetRole: UserRole = 'student';
+      const cleanGoogleEmail = user.email.toLowerCase().trim();
+      const isMasterAdmin = cleanGoogleEmail === 'adm.itissimple@gmail.com';
       const docRole = (firestoreDoc?.role || '').toLowerCase();
-      if (docRole === 'student') {
+      let targetRole: UserRole = 'student';
+
+      if (isMasterAdmin) {
+        targetRole = 'admin';
+      } else if (docRole === 'student') {
+        // STRICT RBAC: Registered student locked strictly to student space
         targetRole = 'student';
       } else if (docRole === 'teacher' || docRole === 'native_friend') {
         targetRole = 'teacher';
-      } else if (docRole === 'admin' || user.email.toLowerCase() === 'adm.itissimple@gmail.com') {
-        if (user.email.toLowerCase() === 'adm.itissimple@gmail.com' || docRole === 'admin') {
-          targetRole = 'admin';
-        } else {
-          targetRole = 'student';
-        }
+      } else if (docRole === 'admin') {
+        targetRole = isMasterAdmin ? 'admin' : 'student';
       } else {
-        targetRole = preferredRole === 'teacher' ? 'teacher' : (preferredRole === 'admin' && user.email.toLowerCase() === 'adm.itissimple@gmail.com' ? 'admin' : 'student');
+        targetRole = preferredRole === 'teacher' ? 'teacher' : 'student';
       }
 
       // Synchronize with server backend
@@ -405,7 +399,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         role: targetRole,
         picture: user.photoURL || '',
       };
-      account.role = targetRole;
+
+      // Strict role enforcement
+      if (docRole === 'student' || data.isRoleEnforced || account.role === 'student' || targetRole === 'student') {
+        if (!isMasterAdmin) {
+          targetRole = 'student';
+          account.role = 'student';
+        }
+      } else {
+        account.role = targetRole;
+      }
       setCurrentAccount(account);
 
       // Strict Redirection by verified role

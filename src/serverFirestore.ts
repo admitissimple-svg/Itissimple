@@ -33,7 +33,7 @@ export function getFirestoreDb() {
 }
 
 // Timeout helper so remote Firestore never blocks an Express API response
-function withTimeout<T>(promise: Promise<T>, ms: number = 2000): Promise<T | null> {
+function withTimeout<T>(promise: Promise<T>, ms: number = 3500): Promise<T | null> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), ms);
@@ -204,7 +204,7 @@ export async function fetchUserFromFirestore(email: string, uid?: string): Promi
       }
       return null;
     })();
-    return await withTimeout(fetchPromise, 1500);
+    return await withTimeout(fetchPromise, 3500);
   } catch (err) {
     console.warn('Firestore fetchUser error:', err);
     return null;

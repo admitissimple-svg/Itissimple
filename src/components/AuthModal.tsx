@@ -635,27 +635,44 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           const docRole = (firestoreUserDoc?.role || '').toLowerCase();
           let verifiedRole: UserRole = 'student';
 
-          if (docRole === 'student') {
+          if (cleanEmail === 'adm.itissimple@gmail.com') {
+            verifiedRole = 'admin';
+          } else if (docRole === 'student' || account.role === 'student') {
+            // STRICT RBAC: Registered student locked strictly to student role
             verifiedRole = 'student';
-          } else if (docRole === 'native_friend' || docRole === 'teacher') {
+          } else if (docRole === 'native_friend' || docRole === 'teacher' || account.role === 'teacher') {
             verifiedRole = 'teacher';
-          } else if (docRole === 'admin' || cleanEmail === 'adm.itissimple@gmail.com') {
-            if (cleanEmail === 'adm.itissimple@gmail.com' || docRole === 'admin') {
-              verifiedRole = 'admin';
-            } else {
-              verifiedRole = 'student';
-            }
+          } else if (docRole === 'admin') {
+            verifiedRole = cleanEmail === 'adm.itissimple@gmail.com' ? 'admin' : 'student';
           } else {
-            if (account.role === 'admin' && cleanEmail === 'adm.itissimple@gmail.com') {
-              verifiedRole = 'admin';
-            } else if (account.role === 'teacher' || role === 'teacher') {
-              verifiedRole = 'teacher';
-            } else {
-              verifiedRole = 'student';
-            }
+            verifiedRole = account.role || 'student';
           }
 
           account.role = verifiedRole;
+
+          // STRICT RBAC POLICY: Prevent users with registered "student" role from accessing
+          // "Native Friend" or "Administrator" panels by clicking tabs on the login screen.
+          if (verifiedRole === 'student' && role !== 'student') {
+            const attemptedPanel = role === 'admin'
+              ? (isEn ? 'Administrator' : 'Administrador')
+              : (isEn ? 'Native Friend' : 'Amigo Nativo');
+            const alertTitle = isEn ? 'Access Restricted' : 'Acesso Restrito';
+            const alertMsg = isEn
+              ? `Your account is registered as a Student. Access to the ${attemptedPanel} panel is blocked, and your session has been locked to your Student Space.`
+              : `Sua conta está registrada com o perfil de Aluno(a). O acesso ao painel de ${attemptedPanel} foi bloqueado e sua sessão foi direcionada ao seu Espaço do Aluno.`;
+
+            if (onShowToast) {
+              onShowToast(alertTitle, alertMsg, 'warning');
+            }
+          } else if (verifiedRole === 'teacher' && role === 'admin') {
+            const alertTitle = isEn ? 'Access Restricted' : 'Acesso Restrito';
+            const alertMsg = isEn
+              ? 'Your account is registered as a Native Friend. Access to Administrator panel is restricted.'
+              : 'Sua conta está registrada como Amigo Nativo. O acesso ao Painel de Administrador é restrito.';
+            if (onShowToast) {
+              onShowToast(alertTitle, alertMsg, 'warning');
+            }
+          }
 
           // Hydrate student profile with routines, level, study plan, and unique Native Friend UID
           let resolvedProfile: Partial<UserProfile> | undefined = data.profile;
