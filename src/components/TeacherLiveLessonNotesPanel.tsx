@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, Component, ErrorInfo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Component, ErrorInfo } from 'react';
 import {
   FileText,
   Sparkles,
@@ -100,18 +100,20 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const safeStudents = Array.isArray(students) ? students : [];
 
   // Filter scheduled or completed lessons for this teacher
-  const teacherLessons = safeLessons.filter((l) => {
-    if (!l) return false;
-    if (!currentAccount?.email) return true;
-    const tEmail = (currentAccount.email || '').toLowerCase().trim();
-    const tUid = (currentAccount.id || (currentAccount as any)?.uid || '').trim();
-    const lTeacherEmail = (l.teacherEmail || (l as any)?.tutorEmail || '').toLowerCase().trim();
-    const lTeacherUid = (l.teacherUid || (l as any)?.tutorUid || '').trim();
-    return (
-      (lTeacherEmail && lTeacherEmail === tEmail) ||
-      (lTeacherUid && tUid && lTeacherUid === tUid)
-    );
-  });
+  const teacherLessons = useMemo(() => {
+    return safeLessons.filter((l) => {
+      if (!l) return false;
+      if (!currentAccount?.email) return true;
+      const tEmail = (currentAccount.email || '').toLowerCase().trim();
+      const tUid = (currentAccount.id || (currentAccount as any)?.uid || '').trim();
+      const lTeacherEmail = (l.teacherEmail || (l as any)?.tutorEmail || '').toLowerCase().trim();
+      const lTeacherUid = (l.teacherUid || (l as any)?.tutorUid || '').trim();
+      return (
+        (lTeacherEmail && lTeacherEmail === tEmail) ||
+        (lTeacherUid && tUid && lTeacherUid === tUid)
+      );
+    });
+  }, [safeLessons, currentAccount?.email, currentAccount?.id, (currentAccount as any)?.uid]);
 
   // Safe helper to extract display name for student without crashing
   const resolveStudentName = useCallback(
@@ -207,7 +209,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     topic: string;
   } | null>(null);
 
-  // Editor refs for contentEditable canvas
+  // Editor refs for contentEditable canvas and controlled persistence guards
   const editorRef = useRef<HTMLDivElement>(null);
   const splitEditorRef = useRef<HTMLDivElement>(null);
   const textareaRef = editorRef as any; // For full backwards compatibility
@@ -215,7 +217,14 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialLoadRef = useRef<boolean>(true);
   const isUserTypingRef = useRef<boolean>(false);
+  const isDirtyRef = useRef<boolean>(false);
+  const isSavingRef = useRef<boolean>(false);
   const loadedSessionKeyRef = useRef<string>('');
+  const lastSavedContentRef = useRef<{ content: string; topic: string; sessionKey: string }>({
+    content: '',
+    topic: '',
+    sessionKey: '',
+  });
 
   const getActiveEditor = useCallback((): HTMLDivElement | null => {
     return editorViewMode === 'split' ? splitEditorRef.current : editorRef.current;
@@ -239,58 +248,60 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     try {
       if (selectedStudentFilter && selectedStudentFilter !== 'all') {
         const filterStr = String(selectedStudentFilter).toLowerCase().trim();
-        setSelectedStudentEmail(selectedStudentFilter);
+        setSelectedStudentEmail((prev) => (prev !== selectedStudentFilter ? selectedStudentFilter : prev));
         const studentLesson = teacherLessons.find(
           (l) => l?.studentEmail && l.studentEmail.toLowerCase().trim() === filterStr
         );
         if (studentLesson && studentLesson.id) {
-          setSelectedLessonId(studentLesson.id);
+          setSelectedLessonId((prev) => (prev !== studentLesson.id ? studentLesson.id : prev));
         } else {
-          setSelectedLessonId('');
+          setSelectedLessonId((prev) => (prev !== '' ? '' : prev));
         }
       } else {
         if (teacherLessons.length > 0 && !selectedLessonId) {
           const scheduled = teacherLessons.find((l) => l && l.status === 'scheduled');
           const first = scheduled || teacherLessons[0];
           if (first && first.id) {
-            setSelectedLessonId(first.id);
-            setSelectedStudentEmail(first.studentEmail || '');
+            setSelectedLessonId((prev) => (prev !== first.id ? first.id : prev));
+            if (first.studentEmail) {
+              setSelectedStudentEmail((prev) => (prev !== first.studentEmail ? first.studentEmail : prev));
+            }
           }
         } else if (safeStudents.length > 0 && !selectedStudentEmail) {
           const firstValidStudent = safeStudents.find((s) => s && s.email);
           if (firstValidStudent?.email) {
-            setSelectedStudentEmail(firstValidStudent.email);
+            setSelectedStudentEmail((prev) => (prev !== firstValidStudent.email ? firstValidStudent.email : prev));
           }
         }
       }
     } catch (err) {
       console.warn('TeacherLiveLessonNotesPanel: Error syncing student filter', err);
     }
-  }, [selectedStudentFilter, teacherLessons, safeStudents]);
+  }, [selectedStudentFilter, teacherLessons, safeStudents, selectedLessonId, selectedStudentEmail]);
 
-  // Selected student object (safe null check)
-  const activeStudent = safeStudents.find(
-    (s) =>
-      s?.email &&
-      selectedStudentEmail &&
-      s.email.toLowerCase().trim() === selectedStudentEmail.toLowerCase().trim()
-  );
+  // Selected student object (safe memoized lookup)
+  const activeStudent = useMemo(() => {
+    return safeStudents.find(
+      (s) =>
+        s?.email &&
+        selectedStudentEmail &&
+        s.email.toLowerCase().trim() === selectedStudentEmail.toLowerCase().trim()
+    );
+  }, [safeStudents, selectedStudentEmail]);
 
-  const activeLesson = teacherLessons.find((l) => l && l.id === selectedLessonId);
+  const activeLesson = useMemo(() => {
+    return teacherLessons.find((l) => l && l.id === selectedLessonId);
+  }, [teacherLessons, selectedLessonId]);
 
-  // Compute effective session date from lesson or state
+  // Compute effective session date only when lesson start date actually changes
   useEffect(() => {
     try {
       if (activeLesson?.startDateTime && typeof activeLesson.startDateTime === 'string') {
         const datePart = activeLesson.startDateTime.split('T')[0];
-        if (datePart) setSessionDate(datePart);
-      } else {
-        setSessionDate(new Date().toISOString().split('T')[0]);
+        if (datePart) setSessionDate((prev) => (prev !== datePart ? datePart : prev));
       }
-    } catch {
-      setSessionDate(new Date().toISOString().split('T')[0]);
-    }
-  }, [activeLesson]);
+    } catch {}
+  }, [activeLesson?.startDateTime]);
 
   // Generate initial starter template: completely blank page with only Date, Student, and Topic annotations as shown in user screenshot
   const getStarterTemplate = useCallback(
@@ -335,23 +346,37 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     ? `lesson_${selectedLessonId}`
     : `student_${(selectedStudentEmail || '').toLowerCase().trim()}_${sessionDate}`;
 
-  // When selected lesson or student changes, populate document
+  // When selected lesson or student changes, populate document cleanly without triggering save loops
   useEffect(() => {
-    // Prevent wiping or resetting cursor if we have already loaded this session and user is actively editing
-    if (loadedSessionKeyRef.current === currentSessionKey && !isInitialLoadRef.current) {
+    if (!currentSessionKey) return;
+    if (loadedSessionKeyRef.current === currentSessionKey) {
       return;
     }
     loadedSessionKeyRef.current = currentSessionKey;
     isInitialLoadRef.current = true;
+
+    // Clear any pending autosave from previous session
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+    }
+
+    let initialContent = '';
+    let initialTopic = '';
+    let initialDriveId: string | null = null;
+    let initialDriveUrl: string | null = null;
+    let initialDriveSyncedAt: string | null = null;
+    let initialSavedAt: string | null = null;
+
     try {
       const currentLesson = teacherLessons.find((l) => l && l.id === selectedLessonId);
 
       if (currentLesson) {
-        if (currentLesson.studentEmail) {
+        if (currentLesson.studentEmail && currentLesson.studentEmail !== selectedStudentEmail) {
           setSelectedStudentEmail(currentLesson.studentEmail);
         }
         const lessonTopic = currentLesson.title || 'Trial';
-        setTopic(lessonTopic);
+        initialTopic = lessonTopic;
 
         // Preferred unified document: sessionNotesDocument > liveNotes > recommendations
         const docContent =
@@ -361,7 +386,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           '';
 
         if (docContent.trim() && !isOnlyOldTemplate(docContent)) {
-          setNotesContent(docContent);
+          initialContent = docContent;
         } else {
           const sName = resolveStudentName(
             activeStudent,
@@ -372,23 +397,17 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
             currentLesson.startDateTime && typeof currentLesson.startDateTime === 'string'
               ? currentLesson.startDateTime.split('T')[0]
               : sessionDate;
-          setNotesContent(getStarterTemplate(sName, dateStr, lessonTopic));
+          initialContent = getStarterTemplate(sName, dateStr, lessonTopic);
         }
 
         if (currentLesson.notesLastSavedAt) {
-          setLastSavedTimestamp(currentLesson.notesLastSavedAt);
+          initialSavedAt = currentLesson.notesLastSavedAt;
         }
 
         if (currentLesson.driveFileId) {
-          setDriveFileId(currentLesson.driveFileId);
-          setDriveFileUrl(currentLesson.driveFileUrl || null);
-          setDriveLastSyncedAt(currentLesson.driveLastSyncedAt || null);
-          setDriveSyncStatus('synced');
-        } else {
-          setDriveFileId(null);
-          setDriveFileUrl(null);
-          setDriveLastSyncedAt(null);
-          setDriveSyncStatus('idle');
+          initialDriveId = currentLesson.driveFileId;
+          initialDriveUrl = currentLesson.driveFileUrl || null;
+          initialDriveSyncedAt = currentLesson.driveLastSyncedAt || null;
         }
       } else if (selectedStudentEmail) {
         // Find latest notes for this student if any
@@ -409,72 +428,66 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               ''
           )
         ) {
-          setTopic(latestWithNotes.title || '');
-          setNotesContent(
+          initialTopic = latestWithNotes.title || '';
+          initialContent =
             latestWithNotes.sessionNotesDocument ||
-              latestWithNotes.liveNotes ||
-              latestWithNotes.recommendations ||
-              ''
-          );
+            latestWithNotes.liveNotes ||
+            latestWithNotes.recommendations ||
+            '';
           if (latestWithNotes.notesLastSavedAt) {
-            setLastSavedTimestamp(latestWithNotes.notesLastSavedAt);
+            initialSavedAt = latestWithNotes.notesLastSavedAt;
           }
           if (latestWithNotes.driveFileId) {
-            setDriveFileId(latestWithNotes.driveFileId);
-            setDriveFileUrl(latestWithNotes.driveFileUrl || null);
-            setDriveLastSyncedAt(latestWithNotes.driveLastSyncedAt || null);
-            setDriveSyncStatus('synced');
-          } else {
-            setDriveFileId(null);
-            setDriveFileUrl(null);
-            setDriveLastSyncedAt(null);
-            setDriveSyncStatus('idle');
+            initialDriveId = latestWithNotes.driveFileId;
+            initialDriveUrl = latestWithNotes.driveFileUrl || null;
+            initialDriveSyncedAt = latestWithNotes.driveLastSyncedAt || null;
           }
         } else {
-          const defaultTopic = activeLesson?.title || 'Trial';
-          setTopic(defaultTopic);
+          const defaultTopic = 'Trial';
+          initialTopic = defaultTopic;
           const sName = resolveStudentName(activeStudent, null, selectedStudentEmail);
-          setNotesContent(getStarterTemplate(sName, sessionDate, defaultTopic));
-          setDriveFileId(null);
-          setDriveFileUrl(null);
-          setDriveLastSyncedAt(null);
-          setDriveSyncStatus('idle');
+          initialContent = getStarterTemplate(sName, sessionDate, defaultTopic);
         }
       }
     } catch (err) {
       console.warn('TeacherLiveLessonNotesPanel: Error populating notes document', err);
     }
 
+    setTopic(initialTopic);
+    setNotesContent(initialContent);
+    setLastSavedTimestamp(initialSavedAt);
+    setDriveFileId(initialDriveId);
+    setDriveFileUrl(initialDriveUrl);
+    setDriveLastSyncedAt(initialDriveSyncedAt);
+    setDriveSyncStatus(initialDriveId ? 'synced' : 'idle');
+
+    // Mark as clean initial state
+    isDirtyRef.current = false;
+    lastSavedContentRef.current = {
+      content: initialContent,
+      topic: initialTopic,
+      sessionKey: currentSessionKey,
+    };
+
+    // Update DOM editor
+    const formatted = convertPlainSymbolsToTags(initialContent);
+    const editor = getActiveEditor();
+    if (editor) {
+      if (editor.innerHTML !== formatted) {
+        editor.innerHTML = formatted;
+      }
+      focusEditorAtEnd(editor);
+    }
+
     const timer = setTimeout(() => {
       isInitialLoadRef.current = false;
-      const editor = getActiveEditor();
-      if (editor) {
-        const formatted = convertPlainSymbolsToTags(notesContent);
-        if (editor.innerHTML !== formatted) {
-          editor.innerHTML = formatted;
-        }
-        focusEditorAtEnd(editor);
-      }
-    }, 250);
+    }, 100);
 
     return () => clearTimeout(timer);
-  }, [
-    selectedLessonId,
-    selectedStudentEmail,
-    currentSessionKey,
-    teacherLessons,
-    activeStudent,
-    activeLesson,
-    getStarterTemplate,
-    resolveStudentName,
-    sessionDate,
-    getActiveEditor,
-    focusEditorAtEnd,
-    convertPlainSymbolsToTags,
-    notesContent,
-  ]);
+  }, [currentSessionKey]);
 
   const handleTopicChange = (newTopic: string) => {
+    isDirtyRef.current = true;
     setTopic(newTopic);
     setNotesContent((prev) => {
       if (!prev) return prev;
@@ -492,6 +505,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   };
 
   const handleDateChange = (newDate: string) => {
+    isDirtyRef.current = true;
     setSessionDate(newDate);
     setNotesContent((prev) => {
       if (!prev) return prev;
@@ -516,6 +530,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
       const effTopic = topic || activeLesson?.title || 'Trial';
       const starter = getStarterTemplate(sName, sessionDate, effTopic);
+      isDirtyRef.current = true;
       setNotesContent(starter);
       const editor = getActiveEditor();
       if (editor) {
@@ -555,6 +570,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       effDate: string,
       targetFileId?: string
     ) => {
+      if (isSavingRef.current || driveSyncStatus === 'syncing') return;
+      isSavingRef.current = true;
       try {
         setDriveSyncStatus('syncing');
         setDriveSyncError(null);
@@ -616,7 +633,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
             console.warn('Firestore update drive notice:', fsErr);
           }
 
-          // 2. Server API sync with Drive metadata
+          // 2. Server API sync with Drive metadata (skipDriveSync prevents duplicate Google Drive operations)
           try {
             fetch('/api/session-notes', {
               method: 'POST',
@@ -630,6 +647,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 content: contentToSync,
                 teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
                 teacherName: currentAccount?.name || 'Native Friend',
+                skipDriveSync: true,
                 ...drivePayload,
               }),
             }).catch(() => null);
@@ -654,6 +672,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
         console.warn('executeDriveSync error:', err);
         setDriveSyncStatus('error');
         setDriveSyncError(err?.message || 'Error communicating with Google Drive.');
+      } finally {
+        isSavingRef.current = false;
       }
     },
     [
@@ -661,6 +681,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       activeLesson,
       selectedStudentEmail,
       driveFileId,
+      driveSyncStatus,
       activeStudent,
       currentAccount,
       onSaveLessonNotes,
@@ -669,44 +690,71 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
   /**
    * Save In-Session Notes to Firestore, Server, and Google Drive
-   * Automatically persists document keyed by specific session date/ID
+   * Controlled persistence: guarded by isSavingRef and isDirtyRef to completely eliminate save loops
    */
   const persistSessionDocument = useCallback(
     async (contentToSave: string, topicToSave: string, explicitSave: boolean = false) => {
+      // 1. Concurrency and dirty guard
+      if (isSavingRef.current) {
+        return;
+      }
+
+      const targetLessonId = selectedLessonId || (activeLesson ? activeLesson.id : '');
+      const cleanEmail = (selectedStudentEmail || '').toLowerCase().trim();
+      const effectiveDate = sessionDate || new Date().toISOString().split('T')[0];
+      const sessionKey =
+        targetLessonId ||
+        `session_${effectiveDate}_${cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : 'notes'}`;
+
+      if (!cleanEmail && !targetLessonId) return;
+
+      // If not an explicit manual save, require the dirty flag and ensure content actually changed
+      if (!explicitSave) {
+        if (!isDirtyRef.current) return;
+        if (
+          lastSavedContentRef.current.sessionKey === sessionKey &&
+          lastSavedContentRef.current.content === contentToSave &&
+          lastSavedContentRef.current.topic === topicToSave
+        ) {
+          isDirtyRef.current = false;
+          return;
+        }
+      }
+
+      isSavingRef.current = true;
+      setIsSaving(true);
+      isDirtyRef.current = false;
+      lastSavedContentRef.current = {
+        content: contentToSave,
+        topic: topicToSave,
+        sessionKey,
+      };
+
       try {
-        if (!selectedStudentEmail && !selectedLessonId) return;
-
-        setIsSaving(true);
-        const cleanEmail = (selectedStudentEmail || '').toLowerCase().trim();
-        const effectiveDate = sessionDate || new Date().toISOString().split('T')[0];
-        const targetLessonId = selectedLessonId || (activeLesson ? activeLesson.id : '');
-        const sessionKey =
-          targetLessonId ||
-          `session_${effectiveDate}_${cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : 'notes'}`;
-
         const nowIso = new Date().toISOString();
-
-        const documentPayload: SessionNotesDocument = {
-          id: sessionKey,
-          sessionDate: effectiveDate,
-          lessonId: targetLessonId || undefined,
-          studentEmail: cleanEmail,
-          studentUid: activeStudent?.uid || activeStudent?.id || undefined,
-          teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
-          teacherName: currentAccount?.name || 'Native Friend',
-          topic: topicToSave,
-          content: contentToSave,
-          driveFileId: driveFileId || undefined,
-          driveFileUrl: driveFileUrl || undefined,
-          driveFolderName: GOOGLE_DRIVE_SESSION_FOLDER,
-          driveLastSyncedAt: driveLastSyncedAt || undefined,
-          updatedAt: nowIso,
-        };
+        const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
 
         // 1. Client-Side Firestore Persistence
         try {
           const firestore = getDb();
           if (firestore) {
+            const documentPayload: SessionNotesDocument = {
+              id: sessionKey,
+              sessionDate: effectiveDate,
+              lessonId: targetLessonId || undefined,
+              studentEmail: cleanEmail,
+              studentUid: activeStudent?.uid || activeStudent?.id || undefined,
+              teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
+              teacherName: currentAccount?.name || 'Native Friend',
+              topic: topicToSave,
+              content: contentToSave,
+              driveFileId: driveFileId || undefined,
+              driveFileUrl: driveFileUrl || undefined,
+              driveFolderName: GOOGLE_DRIVE_SESSION_FOLDER,
+              driveLastSyncedAt: driveLastSyncedAt || undefined,
+              updatedAt: nowIso,
+            };
+
             setDoc(doc(firestore, 'session_notes', sessionKey), documentPayload, {
               merge: true,
             }).catch((err) => console.warn('Firestore /session_notes notice:', err));
@@ -744,24 +792,48 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           console.warn('Direct Firestore save notice:', err);
         }
 
-        // 2. Server API Persistence (ensures persistence in app_state, Firestore, & backend Google Drive sync)
-        const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
+        // 2. Server API Persistence (ensures single clean execution for database, Firestore, and platform Google Drive)
+        let resolvedDriveId = driveFileId;
+        let resolvedDriveUrl = driveFileUrl;
+        let resolvedDriveSyncedAt = driveLastSyncedAt;
+
         try {
           const res = await fetch('/api/session-notes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              ...documentPayload,
+              id: sessionKey,
+              sessionDate: effectiveDate,
+              lessonId: targetLessonId || undefined,
+              studentEmail: cleanEmail,
               studentName: sName,
+              studentUid: activeStudent?.uid || activeStudent?.id || undefined,
+              teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
+              teacherName: currentAccount?.name || 'Native Friend',
+              topic: topicToSave,
+              content: contentToSave,
+              driveFileId: driveFileId || undefined,
+              driveFileUrl: driveFileUrl || undefined,
+              driveFolderName: GOOGLE_DRIVE_SESSION_FOLDER,
+              driveLastSyncedAt: driveLastSyncedAt || undefined,
             }),
           });
           if (res.ok) {
             const data = await res.json();
             if (data?.sessionNote) {
               const note = data.sessionNote;
-              if (note.driveFileId) setDriveFileId(note.driveFileId);
-              if (note.driveFileUrl) setDriveFileUrl(note.driveFileUrl);
-              if (note.driveLastSyncedAt) setDriveLastSyncedAt(note.driveLastSyncedAt);
+              if (note.driveFileId) {
+                resolvedDriveId = note.driveFileId;
+                setDriveFileId((prev) => (prev !== note.driveFileId ? note.driveFileId : prev));
+              }
+              if (note.driveFileUrl) {
+                resolvedDriveUrl = note.driveFileUrl;
+                setDriveFileUrl((prev) => (prev !== note.driveFileUrl ? note.driveFileUrl : prev));
+              }
+              if (note.driveLastSyncedAt) {
+                resolvedDriveSyncedAt = note.driveLastSyncedAt;
+                setDriveLastSyncedAt((prev) => (prev !== note.driveLastSyncedAt ? note.driveLastSyncedAt : prev));
+              }
               setDriveSyncStatus('synced');
             }
           }
@@ -777,25 +849,23 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
             recommendations: contentToSave,
             sessionNotesDocument: contentToSave,
             sessionDate: effectiveDate,
-            driveFileId: driveFileId || undefined,
-            driveFileUrl: driveFileUrl || undefined,
+            driveFileId: resolvedDriveId || undefined,
+            driveFileUrl: resolvedDriveUrl || undefined,
             driveFolderName: GOOGLE_DRIVE_SESSION_FOLDER,
-            driveLastSyncedAt: driveLastSyncedAt || undefined,
+            driveLastSyncedAt: resolvedDriveSyncedAt || undefined,
           });
         }
 
         setLastSavedTimestamp(nowIso);
-        setIsSaving(false);
 
         if (explicitSave) {
           setSavedSuccessBanner(true);
           setTimeout(() => setSavedSuccessBanner(false), 3000);
-
-          const currentFileId = driveFileId || (activeLesson as any)?.driveFileId;
-          executeDriveSync(contentToSave, topicToSave, sName, effectiveDate, currentFileId);
         }
       } catch (err) {
         console.error('persistSessionDocument error:', err);
+      } finally {
+        isSavingRef.current = false;
         setIsSaving(false);
       }
     },
@@ -810,10 +880,15 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       driveFileUrl,
       driveLastSyncedAt,
       onSaveLessonNotes,
-      executeDriveSync,
       resolveStudentName,
     ]
   );
+
+  // Keep a stable ref to persistSessionDocument so autosave never re-triggers when persistSessionDocument is recreated
+  const persistSessionDocumentRef = useRef(persistSessionDocument);
+  useEffect(() => {
+    persistSessionDocumentRef.current = persistSessionDocument;
+  });
 
   const handleConfirmDriveUpdate = () => {
     try {
@@ -833,6 +908,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
   const handleConnectDrive = async () => {
     try {
+      if (isSavingRef.current || driveSyncStatus === 'syncing') return;
       setDriveSyncStatus('syncing');
       setDriveSyncError(null);
       const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
@@ -848,6 +924,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   // Dedicated editor change and auto-save handlers
   const handleEditorInput = (e: React.FormEvent<HTMLDivElement>) => {
     isUserTypingRef.current = true;
+    isDirtyRef.current = true;
     const newHtml = (e.currentTarget as HTMLDivElement).innerHTML;
     setNotesContent(newHtml);
     setTimeout(() => {
@@ -860,8 +937,16 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     const editor = getActiveEditor();
     if (editor) {
       const currentHtml = editor.innerHTML;
-      setNotesContent(currentHtml);
-      persistSessionDocument(currentHtml, topic, false);
+      if (currentHtml !== notesContent) {
+        setNotesContent(currentHtml);
+      }
+      if (isDirtyRef.current && !isSavingRef.current) {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current);
+          autoSaveTimeoutRef.current = null;
+        }
+        persistSessionDocument(currentHtml, topic, false);
+      }
     }
   };
 
@@ -909,29 +994,36 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     return span;
   }, []);
 
-  // Debounced auto-save when typing in editor
+  // Controlled debounced auto-save (2.5 seconds after user stops typing)
   useEffect(() => {
-    if (isInitialLoadRef.current) return;
+    if (isInitialLoadRef.current || !isDirtyRef.current) return;
 
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current);
     }
 
     autoSaveTimeoutRef.current = setTimeout(() => {
-      persistSessionDocument(notesContent, topic, false);
-    }, 1200);
+      if (isInitialLoadRef.current) return;
+      if (!isDirtyRef.current) return;
+      if (isSavingRef.current) return;
+
+      persistSessionDocumentRef.current?.(notesContent, topic, false);
+    }, 2500);
 
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current);
       }
     };
-  }, [notesContent, topic, persistSessionDocument]);
+  }, [notesContent, topic]);
 
-  // Keep contentEditable innerHTML in sync when external notesContent changes (and not actively typing)
+  // Keep contentEditable innerHTML in sync when external notesContent changes (and not actively typing or focused)
   useEffect(() => {
     const editor = getActiveEditor();
     if (editor && !isUserTypingRef.current) {
+      const isFocused = document.activeElement === editor || editor.contains(document.activeElement);
+      if (isFocused) return;
+
       const formatted = convertPlainSymbolsToTags(notesContent);
       if (editor.innerHTML !== formatted) {
         editor.innerHTML = formatted;
@@ -986,16 +1078,9 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     }
 
     const nextHtml = editor.innerHTML;
+    isDirtyRef.current = true;
     setNotesContent(nextHtml);
-
-    // Instant auto-save to Firestore and Google Drive
-    if (autoSaveTimeoutRef.current) {
-      clearTimeout(autoSaveTimeoutRef.current);
-    }
-    autoSaveTimeoutRef.current = setTimeout(() => {
-      persistSessionDocument(nextHtml, topic, false);
-    }, 1200);
-  }, [getActiveEditor, createTagElement, topic, persistSessionDocument]);
+  }, [getActiveEditor, createTagElement]);
 
   /**
    * Helper: Backwards-compatible symbol inserter
@@ -1021,6 +1106,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     } else {
       document.execCommand('insertText', false, `${prefix}${placeholder}${suffix}`);
     }
+    isDirtyRef.current = true;
     setNotesContent(editor.innerHTML);
   };
 
@@ -1039,6 +1125,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     } else {
       document.execCommand('insertText', false, prefix);
     }
+    isDirtyRef.current = true;
     setNotesContent(editor.innerHTML);
   };
 
@@ -1054,6 +1141,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     } else {
       document.execCommand('insertText', false, snippet);
     }
+    isDirtyRef.current = true;
     setNotesContent(editor.innerHTML);
   };
 
@@ -2047,11 +2135,20 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={() => persistSessionDocument(notesContent, topic, true)}
-                className="px-6 py-2.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-md border border-[#9AB4FF]/40 active:scale-98"
+                className={`px-6 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-md border border-[#9AB4FF]/40 active:scale-98 ${
+                  isSaving
+                    ? 'bg-[#1C4C96]/70 text-white cursor-not-allowed'
+                    : 'bg-[#1C4C96] hover:bg-[#062863] text-white cursor-pointer'
+                }`}
               >
-                <Save className="w-4 h-4 text-[#9AB4FF]" />
-                <span>Save Document</span>
+                {isSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-[#9AB4FF]" />
+                ) : (
+                  <Save className="w-4 h-4 text-[#9AB4FF]" />
+                )}
+                <span>{isSaving ? 'Saving...' : 'Save Document'}</span>
               </button>
             </div>
           </div>
