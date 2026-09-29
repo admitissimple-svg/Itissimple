@@ -51,25 +51,11 @@ export interface StoredDriveFile {
   updatedAt: string;
 }
 
-// In-memory registry for platform-managed Drive files
-const DRIVE_STORAGE_FILE = path.join(process.cwd(), 'app-data-drive.json');
+// In-memory registry for platform-managed Drive files (no file-system storage)
 let inMemoryDriveStore: Record<string, StoredDriveFile> = {};
 
-// Load stored drive records if file exists
-try {
-  if (fs.existsSync(DRIVE_STORAGE_FILE)) {
-    inMemoryDriveStore = JSON.parse(fs.readFileSync(DRIVE_STORAGE_FILE, 'utf-8'));
-  }
-} catch {
-  inMemoryDriveStore = {};
-}
-
 function persistDriveStore() {
-  try {
-    fs.writeFileSync(DRIVE_STORAGE_FILE, JSON.stringify(inMemoryDriveStore, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Could not persist drive store file:', err);
-  }
+  // Pure in-memory cache to avoid internal environment storage
 }
 
 /**

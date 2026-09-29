@@ -5168,36 +5168,11 @@ app.post('/api/session-notes', async (req, res) => {
   const sessionKey = id || (lessonId ? lessonId : `session_${cleanDate}_${cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
   const targetTeacherEmail = (teacherEmail || 'adm.itissimple@gmail.com').toLowerCase().trim();
 
-  // Route file creation/update through the backend platform service integration mapped to the teacher's email
+  // Store Drive sync metadata if provided by explicit teacher action
   let finalDriveFileId = driveFileId || db.sessionNotesMap?.[sessionKey]?.driveFileId || '';
   let finalDriveFileUrl = driveFileUrl || db.sessionNotesMap?.[sessionKey]?.driveFileUrl || '';
   let finalDriveFolderName = driveFolderName || db.sessionNotesMap?.[sessionKey]?.driveFolderName || GOOGLE_DRIVE_SESSION_FOLDER;
   let finalDriveLastSyncedAt = driveLastSyncedAt || db.sessionNotesMap?.[sessionKey]?.driveLastSyncedAt || '';
-
-  if (content && !skipDriveSync) {
-    try {
-      const driveRes = await syncSessionNotesWithPlatformDrive({
-        studentName: studentName || (cleanEmail ? cleanEmail.split('@')[0] : 'Student'),
-        studentEmail: cleanEmail,
-        sessionDate: cleanDate,
-        content,
-        topic: topic || 'Native Friend Live Coaching',
-        existingFileId: finalDriveFileId || undefined,
-        lessonId: lessonId || undefined,
-        sessionKey,
-        teacherEmail: targetTeacherEmail,
-        teacherName: teacherName || 'Native Friend',
-      });
-      if (driveRes.success) {
-        finalDriveFileId = driveRes.fileId;
-        finalDriveFileUrl = driveRes.webViewLink;
-        finalDriveFolderName = driveRes.folderName;
-        finalDriveLastSyncedAt = driveRes.syncedAt;
-      }
-    } catch (dErr) {
-      console.warn('Backend Drive auto-sync notice:', dErr);
-    }
-  }
 
   if (!db.sessionNotesMap) db.sessionNotesMap = {};
   const noteDoc = {

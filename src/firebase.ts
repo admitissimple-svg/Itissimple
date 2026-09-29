@@ -37,8 +37,7 @@ export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({ prompt: 'select_account' });
 googleAuthProvider.addScope('https://www.googleapis.com/auth/calendar.events');
 googleAuthProvider.addScope('https://www.googleapis.com/auth/gmail.send');
-// Note: Google Drive session notes are synchronized via backend platform credentials mapped to the teacher's email,
-// avoiding client-side OAuth prompts for drive.file and bypassing 'App not verified' warnings.
+googleAuthProvider.addScope('https://www.googleapis.com/auth/drive.file');
 
 // Lazy-initialized Firestore instance to avoid starting unused background gRPC streams
 let _firestoreDb: Firestore | null = null;

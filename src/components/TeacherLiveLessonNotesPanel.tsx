@@ -44,6 +44,7 @@ import { formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
 import { doc, setDoc } from 'firebase/firestore';
 import { getDb } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { getGoogleOAuthToken, setGoogleOAuthToken, requestGoogleDriveAuth } from '../utils/auth';
 import {
   syncSessionNotesToGoogleDrive,
   formatSessionNotesFileName,
@@ -95,6 +96,9 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   onSendStudentNotification,
   timeZone = 'America/Sao_Paulo',
 }) => {
+  // Auth context for Google OAuth Token
+  const { googleOAuthToken, connectGoogleDrive } = useAuth();
+
   // Safe collections
   const safeLessons = Array.isArray(lessons) ? lessons : [];
   const safeStudents = Array.isArray(students) ? students : [];
@@ -560,7 +564,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   });
 
   /**
-   * Executes Google Drive file upload/update using the teacher's Google OAuth credentials
+   * Executes Google Drive file upload/update using the teacher's Google OAuth credentials directly
+   * into their personal Google Drive inside "It's Simple - Session Notes"
    */
   const executeDriveSync = useCallback(
     async (
@@ -576,13 +581,38 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
         setDriveSyncStatus('syncing');
         setDriveSyncError(null);
 
+        // Step 1: Obtain or verify teacher's real Google OAuth token
+        let activeToken = getGoogleOAuthToken() || googleOAuthToken;
+        if (!activeToken) {
+          try {
+            activeToken = await connectGoogleDrive();
+          } catch (authErr: any) {
+            console.warn('Google Drive auth error:', authErr);
+            setDriveSyncStatus('error');
+            setDriveSyncError('Autenticação com o Google Drive necessária. Por favor, autorize sua conta.');
+            isSavingRef.current = false;
+            return;
+          }
+        }
+
+        if (!activeToken) {
+          setDriveSyncStatus('error');
+          setDriveSyncError('Autenticação com o Google Drive necessária. Clique no botão para autorizar.');
+          isSavingRef.current = false;
+          return;
+        }
+
         const targetLessonId = selectedLessonId || (activeLesson ? activeLesson.id : '');
         const cleanEmail = (selectedStudentEmail || '').toLowerCase().trim();
         const sessionKey =
           targetLessonId ||
           `session_${effDate}_${cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : 'notes'}`;
 
-        const res = await syncSessionNotesToGoogleDrive({
+        let resolvedFileId = targetFileId || driveFileId || (activeLesson as any)?.driveFileId || undefined;
+
+        // Step 2: Direct Personal Google Drive Sync
+        let res = await syncSessionNotesToGoogleDrive({
+          accessToken: activeToken,
           studentName: sName,
           studentEmail: cleanEmail,
           teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
@@ -590,10 +620,37 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           sessionDate: effDate,
           topic: topicToSync,
           content: contentToSync,
-          existingFileId: targetFileId || driveFileId || (activeLesson as any)?.driveFileId || undefined,
+          existingFileId: resolvedFileId,
           lessonId: targetLessonId || undefined,
           sessionKey,
         });
+
+        // Step 3: Handle Token Expiration
+        if (res.requiresAuth) {
+          try {
+            activeToken = await connectGoogleDrive();
+            if (activeToken) {
+              res = await syncSessionNotesToGoogleDrive({
+                accessToken: activeToken,
+                studentName: sName,
+                studentEmail: cleanEmail,
+                teacherEmail: currentAccount?.email || 'adm.itissimple@gmail.com',
+                teacherName: currentAccount?.name || 'Native Friend',
+                sessionDate: effDate,
+                topic: topicToSync,
+                content: contentToSync,
+                existingFileId: resolvedFileId,
+                lessonId: targetLessonId || undefined,
+                sessionKey,
+              });
+            }
+          } catch (reAuthErr) {
+            setDriveSyncStatus('error');
+            setDriveSyncError('Sessão expirada. Por favor, autorize novamente o Google Drive.');
+            isSavingRef.current = false;
+            return;
+          }
+        }
 
         if (res.success && res.fileId) {
           const syncedIso = new Date().toISOString();
@@ -604,10 +661,10 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           setDriveSyncStatus('synced');
 
           const toastMsg = res.isUpdated
-            ? `Google Drive document updated in "It's Simple - Session Notes"`
-            : `Google Drive document created in "It's Simple - Session Notes"`;
+            ? `Arquivo atualizado no seu Google Drive ("It's Simple - Session Notes")`
+            : `Arquivo criado no seu Google Drive ("It's Simple - Session Notes")`;
           setDriveSuccessToast(toastMsg);
-          setTimeout(() => setDriveSuccessToast(null), 4500);
+          setTimeout(() => setDriveSuccessToast(null), 5000);
 
           const drivePayload = {
             driveFileId: res.fileId,
@@ -666,12 +723,12 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           }
         } else {
           setDriveSyncStatus('error');
-          setDriveSyncError(res.error || 'Failed to sync with Google Drive.');
+          setDriveSyncError(res.error || 'Falha ao sincronizar com o Google Drive.');
         }
       } catch (err: any) {
         console.warn('executeDriveSync error:', err);
         setDriveSyncStatus('error');
-        setDriveSyncError(err?.message || 'Error communicating with Google Drive.');
+        setDriveSyncError(err?.message || 'Erro ao comunicar com o Google Drive.');
       } finally {
         isSavingRef.current = false;
       }
@@ -684,6 +741,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       driveSyncStatus,
       activeStudent,
       currentAccount,
+      googleOAuthToken,
+      connectGoogleDrive,
       onSaveLessonNotes,
     ]
   );
@@ -792,13 +851,9 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           console.warn('Direct Firestore save notice:', err);
         }
 
-        // 2. Server API Persistence (ensures single clean execution for database, Firestore, and platform Google Drive)
-        let resolvedDriveId = driveFileId;
-        let resolvedDriveUrl = driveFileUrl;
-        let resolvedDriveSyncedAt = driveLastSyncedAt;
-
+        // 2. Server API Persistence (ensures clean database and Firestore sync without touching Google Drive)
         try {
-          const res = await fetch('/api/session-notes', {
+          await fetch('/api/session-notes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -816,27 +871,9 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               driveFileUrl: driveFileUrl || undefined,
               driveFolderName: GOOGLE_DRIVE_SESSION_FOLDER,
               driveLastSyncedAt: driveLastSyncedAt || undefined,
+              skipDriveSync: true,
             }),
           });
-          if (res.ok) {
-            const data = await res.json();
-            if (data?.sessionNote) {
-              const note = data.sessionNote;
-              if (note.driveFileId) {
-                resolvedDriveId = note.driveFileId;
-                setDriveFileId((prev) => (prev !== note.driveFileId ? note.driveFileId : prev));
-              }
-              if (note.driveFileUrl) {
-                resolvedDriveUrl = note.driveFileUrl;
-                setDriveFileUrl((prev) => (prev !== note.driveFileUrl ? note.driveFileUrl : prev));
-              }
-              if (note.driveLastSyncedAt) {
-                resolvedDriveSyncedAt = note.driveLastSyncedAt;
-                setDriveLastSyncedAt((prev) => (prev !== note.driveLastSyncedAt ? note.driveLastSyncedAt : prev));
-              }
-              setDriveSyncStatus('synced');
-            }
-          }
         } catch (err) {
           console.warn('Server /api/session-notes notice:', err);
         }
@@ -849,10 +886,10 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
             recommendations: contentToSave,
             sessionNotesDocument: contentToSave,
             sessionDate: effectiveDate,
-            driveFileId: resolvedDriveId || undefined,
-            driveFileUrl: resolvedDriveUrl || undefined,
+            driveFileId: driveFileId || undefined,
+            driveFileUrl: driveFileUrl || undefined,
             driveFolderName: GOOGLE_DRIVE_SESSION_FOLDER,
-            driveLastSyncedAt: resolvedDriveSyncedAt || undefined,
+            driveLastSyncedAt: driveLastSyncedAt || undefined,
           });
         }
 
@@ -906,20 +943,39 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     }
   };
 
-  const handleConnectDrive = async () => {
+  /**
+   * Dedicated On-Demand Google Drive Sync Trigger:
+   * Google Drive synchronization is strictly performed on-demand when the teacher clicks this button.
+   */
+  const handleSyncToGoogleDriveClick = async () => {
     try {
       if (isSavingRef.current || driveSyncStatus === 'syncing') return;
-      setDriveSyncStatus('syncing');
       setDriveSyncError(null);
       const sName = resolveStudentName(activeStudent, activeLesson, selectedStudentEmail);
       const effDate = sessionDate || new Date().toISOString().split('T')[0];
+      const fileName = formatSessionNotesFileName(sName, effDate);
+
+      // If document is already linked, confirm before updating
+      if (driveFileId) {
+        setPendingDriveUpdate({
+          fileId: driveFileId,
+          fileName: driveFileName || fileName,
+          content: notesContent,
+          topic,
+        });
+        setShowDriveConfirmModal(true);
+        return;
+      }
+
       await executeDriveSync(notesContent, topic, sName, effDate);
     } catch (err: any) {
-      console.warn('handleConnectDrive error:', err);
+      console.warn('handleSyncToGoogleDriveClick error:', err);
       setDriveSyncStatus('error');
-      setDriveSyncError('Could not sync to Google Drive.');
+      setDriveSyncError(err?.message || 'Erro ao sincronizar com o Google Drive.');
     }
   };
+
+  const handleConnectDrive = handleSyncToGoogleDriveClick;
 
   // Dedicated editor change and auto-save handlers
   const handleEditorInput = (e: React.FormEvent<HTMLDivElement>) => {
@@ -2022,30 +2078,41 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 {driveSyncStatus === 'syncing' ? (
                   <div className="flex items-center gap-1.5 text-blue-600 font-medium text-xs">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Syncing to Google Drive...</span>
+                    <span>Sincronizando com o Google Drive...</span>
                   </div>
                 ) : driveFileUrl ? (
-                  <div className="flex items-center gap-1.5 text-emerald-700 font-semibold text-xs">
-                    <FolderCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Synced to Google Drive</span>
+                  <div className="flex items-center gap-2 text-emerald-700 font-semibold text-xs flex-wrap">
+                    <div className="flex items-center gap-1">
+                      <FolderCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Sincronizado no Google Drive</span>
+                    </div>
                     <a
                       href={driveFileUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-[#1C4C96] hover:underline flex items-center gap-0.5 ml-0.5"
+                      className="text-xs text-[#1C4C96] hover:underline flex items-center gap-0.5 ml-0.5 font-bold"
                     >
-                      Open <ExternalLink className="w-3 h-3" />
+                      Abrir <ExternalLink className="w-3 h-3" />
                     </a>
+                    <button
+                      type="button"
+                      onClick={handleSyncToGoogleDriveClick}
+                      className="text-[11px] text-slate-500 hover:text-[#1C4C96] hover:underline flex items-center gap-0.5 cursor-pointer ml-1"
+                      title="Atualizar arquivo existente no Google Drive"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Atualizar</span>
+                    </button>
                   </div>
                 ) : (
                   <button
                     type="button"
-                    onClick={handleConnectDrive}
+                    onClick={handleSyncToGoogleDriveClick}
                     className="text-xs font-semibold text-[#1C4C96] hover:underline flex items-center gap-1 cursor-pointer"
-                    title="Sync session notes to Google Drive folder 'It's Simple - Session Notes'"
+                    title="Sincronizar anotações da sessão com o seu Google Drive na pasta 'It's Simple - Session Notes'"
                   >
                     <FolderSync className="w-3.5 h-3.5 text-[#1C4C96]" />
-                    <span>Sync to Drive</span>
+                    <span>Sincronizar com o Google Drive</span>
                   </button>
                 )}
               </div>
@@ -2058,7 +2125,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               {savedSuccessBanner && (
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold animate-in fade-in duration-200 shadow-2xs">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Document securely stored in Firestore!</span>
+                  <span>Documento salvo com sucesso no Firestore!</span>
                 </div>
               )}
               {driveSuccessToast && (
@@ -2072,7 +2139,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                       rel="noopener noreferrer"
                       className="underline text-blue-800 hover:text-blue-950 ml-1 inline-flex items-center gap-0.5 font-extrabold"
                     >
-                      View in Drive <ExternalLink className="w-3 h-3" />
+                      Ver no Drive <ExternalLink className="w-3 h-3" />
                     </a>
                   )}
                 </div>
@@ -2083,53 +2150,54 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                   <span>{driveSyncError}</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      const sName =
-                        activeStudent?.name ||
-                        (selectedStudentEmail ? selectedStudentEmail.split('@')[0] : 'Student');
-                      executeDriveSync(notesContent, topic, sName, sessionDate);
-                    }}
+                    onClick={handleSyncToGoogleDriveClick}
                     className="underline font-bold text-rose-900 hover:text-black ml-1 cursor-pointer"
                   >
-                    Retry
+                    Tentar Novamente
                   </button>
                 </div>
               )}
             </div>
 
             <div className="flex items-center gap-2.5 flex-wrap justify-end">
-              {/* Google Drive Status & Connection Button */}
+              {/* Dedicated Google Drive Sync Button */}
               {driveSyncStatus === 'syncing' ? (
-                <div className="px-3.5 py-2 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold flex items-center gap-2">
+                <div className="px-4 py-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                  <span>Syncing to Drive...</span>
+                  <span>Sincronizando com o Google Drive...</span>
                 </div>
               ) : driveFileUrl ? (
-                <a
-                  href={driveFileUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  title="View this session notes document in your Google Drive"
-                >
-                  <FolderCheck className="w-4 h-4 text-emerald-600" />
-                  <span>Drive Synced</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
-                </a>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <a
+                    href={driveFileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    title="Abrir anotações na pasta 'It's Simple - Session Notes' do seu Google Drive"
+                  >
+                    <FolderCheck className="w-4 h-4 text-emerald-600" />
+                    <span>Ver no Google Drive</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleSyncToGoogleDriveClick}
+                    className="px-3 py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    title="Atualizar documento existente no seu Google Drive pessoal"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-[#1C4C96]" />
+                    <span>Atualizar no Drive</span>
+                  </button>
+                </div>
               ) : (
                 <button
                   type="button"
-                  onClick={() => {
-                    const sName =
-                      activeStudent?.name ||
-                      (selectedStudentEmail ? selectedStudentEmail.split('@')[0] : 'Student');
-                    executeDriveSync(notesContent, topic, sName, sessionDate);
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-300 text-[#000035] text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  title="Sync current document to Google Drive folder 'It's Simple - Session Notes'"
+                  onClick={handleSyncToGoogleDriveClick}
+                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-blue-50/70 border-2 border-[#1C4C96] text-[#1C4C96] hover:text-[#062863] text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs active:scale-98"
+                  title="Sincronizar diretamente com o seu Google Drive na pasta 'It's Simple - Session Notes'"
                 >
                   <CloudUpload className="w-4 h-4 text-[#1C4C96]" />
-                  <span>Sync to Drive</span>
+                  <span>Sincronizar com o Google Drive</span>
                 </button>
               )}
 
@@ -2148,7 +2216,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 ) : (
                   <Save className="w-4 h-4 text-[#9AB4FF]" />
                 )}
-                <span>{isSaving ? 'Saving...' : 'Save Document'}</span>
+                <span>{isSaving ? 'Salvando...' : 'Salvar no Firestore'}</span>
               </button>
             </div>
           </div>
@@ -2278,24 +2346,24 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 <FileText className="w-6 h-6 text-amber-700" />
               </div>
               <div>
-                <h4 className="font-extrabold text-base text-[#000035]">Update Google Drive File?</h4>
+                <h4 className="font-extrabold text-base text-[#000035]">Atualizar arquivo no Google Drive?</h4>
                 <p className="text-xs text-slate-500 font-medium">
-                  A document already exists in your dedicated Drive folder.
+                  Este documento já existe na pasta do seu Google Drive pessoal.
                 </p>
               </div>
             </div>
 
             <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2 text-slate-700">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-bold text-slate-500 shrink-0">File:</span>
+                <span className="font-bold text-slate-500 shrink-0">Arquivo:</span>
                 <span className="font-mono font-bold text-[#000035] truncate">{pendingDriveUpdate.fileName}</span>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <span className="font-bold text-slate-500 shrink-0">Folder:</span>
+                <span className="font-bold text-slate-500 shrink-0">Pasta:</span>
                 <span className="font-semibold text-slate-800">{GOOGLE_DRIVE_SESSION_FOLDER}</span>
               </div>
               <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-200 leading-relaxed">
-                Confirming will update this document in your Google Drive with your latest session notes and recommendations.
+                Ao confirmar, o documento correspondente na sua conta pessoal do Google Drive será atualizado diretamente com as notas e correções mais recentes desta sessão.
               </p>
             </div>
 
@@ -2308,7 +2376,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
               >
-                Cancel
+                Cancelar
               </button>
               <button
                 type="button"
@@ -2316,7 +2384,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#1C4C96] hover:bg-[#062863] transition cursor-pointer shadow-md flex items-center gap-1.5"
               >
                 <FolderCheck className="w-4 h-4 text-[#9AB4FF]" />
-                <span>Confirm & Update in Drive</span>
+                <span>Confirmar e Atualizar</span>
               </button>
             </div>
           </div>

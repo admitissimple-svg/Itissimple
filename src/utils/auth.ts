@@ -20,15 +20,29 @@ export function setGoogleOAuthToken(token: string | null) {
 }
 
 /**
- * Pre-authenticated Google Drive integration status
- * Google Drive synchronization is handled via backend platform credentials mapped to the teacher's email.
- * Direct client-side OAuth popups for drive.file are completely removed to eliminate 'App not verified' 403 access_denied errors.
+ * Teacher Google Drive OAuth authorization.
+ * Authenticates the teacher with Google and requests the drive.file scope,
+ * returning the active OAuth access token to manage files directly in their personal Google Drive.
  */
 export async function requestGoogleDriveAuth(): Promise<string | null> {
-  // Returns platform-authenticated identifier without opening client-side popups
-  const token = 'platform_authenticated';
-  setGoogleOAuthToken(token);
-  return token;
+  try {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    provider.addScope('https://www.googleapis.com/auth/calendar.events');
+    provider.addScope('https://www.googleapis.com/auth/gmail.send');
+
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken = credential?.accessToken || null;
+    if (accessToken) {
+      setGoogleOAuthToken(accessToken);
+    }
+    return accessToken;
+  } catch (err: any) {
+    console.error('Failed to authenticate Google Drive with OAuth:', err);
+    throw err;
+  }
 }
 
 export async function getAccessToken(forceRefresh = false): Promise<string | null> {
