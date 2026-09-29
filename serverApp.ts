@@ -9280,6 +9280,38 @@ Return a JSON array of objects with the exact schema:
   res.json({ success: true, entries });
 });
 
+// Explicit route for Privacy Policy (Google verification & direct access)
+app.get(['/privacy.html', '/privacy'], (_req, res) => {
+  const fileCandidates = [
+    path.join(process.cwd(), 'privacy.html'),
+    path.join(process.cwd(), 'public', 'privacy.html'),
+    path.join(process.cwd(), 'dist', 'privacy.html'),
+  ];
+  for (const candidate of fileCandidates) {
+    if (fs.existsSync(candidate)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.sendFile(candidate);
+    }
+  }
+  res.status(404).send('Privacy policy not found');
+});
+
+// Explicit route for Terms of Service (Google verification & direct access)
+app.get(['/terms.html', '/terms'], (_req, res) => {
+  const fileCandidates = [
+    path.join(process.cwd(), 'terms.html'),
+    path.join(process.cwd(), 'public', 'terms.html'),
+    path.join(process.cwd(), 'dist', 'terms.html'),
+  ];
+  for (const candidate of fileCandidates) {
+    if (fs.existsSync(candidate)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.sendFile(candidate);
+    }
+  }
+  res.status(404).send('Terms of service not found');
+});
+
 async function startServer() {
   // Preload local database into memory immediately
   readDb();

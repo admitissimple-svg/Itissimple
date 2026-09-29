@@ -98,6 +98,22 @@ export const Footer: React.FC<FooterProps> = ({
             >
               {t.studentAccess}
             </button>
+            <a
+              href="/privacy.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-white cursor-pointer transition"
+            >
+              {currentLanguage === 'pt' ? 'Política de Privacidade' : 'Privacy Policy'}
+            </a>
+            <a
+              href="/terms.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-white cursor-pointer transition"
+            >
+              {currentLanguage === 'pt' ? 'Termos de Serviço' : 'Terms of Service'}
+            </a>
           </div>
         </div>
 
