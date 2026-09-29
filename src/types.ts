@@ -458,6 +458,7 @@ export interface LiveLesson {
     endDateTime: string;
   };
   createdAt?: string;
+  updatedAt?: string;
 
   // In-Session Notes & Recommendations
   liveNotes?: string;

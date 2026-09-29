@@ -259,8 +259,8 @@ export default function App() {
         const cleanEmail = fbUser.email.toLowerCase().trim();
         const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
 
-        // Check if currentAccount matches the active Firebase Auth user
-        if (!currentAccount || currentAccount.email.toLowerCase() !== cleanEmail) {
+        // Check if currentAccount matches the active Firebase Auth user and has the verified UID
+        if (!currentAccount || currentAccount.email.toLowerCase() !== cleanEmail || currentAccount.uid !== fbUser.uid) {
           let resolvedRole: UserRole = isMasterAdmin ? 'admin' : 'student';
           let firestoreDoc: any = null;
           try {
@@ -308,6 +308,21 @@ export default function App() {
               picture: account.picture,
             }),
           }).catch(() => {});
+        }
+      } else {
+        // If Firebase Auth is signed out, clear currentAccount if it was tied to Firebase Auth
+        if (currentAccount && auth.currentUser === null) {
+          // If the user actively signed out, ensure local state reflects it
+          try {
+            const savedAcc = localStorage.getItem('its_simple_current_account');
+            if (savedAcc) {
+              const parsed = JSON.parse(savedAcc);
+              if (parsed?.uid && !parsed.uid.startsWith('usr-') && parsed.uid !== 'user-default') {
+                setCurrentAccount(null);
+                localStorage.removeItem('its_simple_current_account');
+              }
+            }
+          } catch {}
         }
       }
     });
@@ -763,20 +778,8 @@ export default function App() {
 
     // Real-time synchronization for lessons from Firestore
     const unsubLessons = subscribeToStudentLessons(uid, email, isTeacherRole, (realtimeLessons) => {
-      if (Array.isArray(realtimeLessons) && realtimeLessons.length > 0) {
-        setLessons((prev) => {
-          const map = new Map<string, LiveLesson>();
-          prev.forEach((l) => map.set(l.id, l));
-          realtimeLessons.forEach((l) => {
-            const existing = map.get(l.id);
-            if (existing && (existing.status === 'cancelled' || existing.cancelledAt) && l.status !== 'cancelled' && !l.cancelledAt) {
-              // Keep cancelled
-            } else {
-              map.set(l.id, { ...existing, ...l });
-            }
-          });
-          return Array.from(map.values());
-        });
+      if (Array.isArray(realtimeLessons)) {
+        setLessons(realtimeLessons);
       }
     });
 
@@ -933,6 +936,15 @@ export default function App() {
             .then((data) => {
               if (data && data.checks) {
                 setWeeklyChecks((prev) => ({ ...data.checks, ...prev }));
+              }
+            })
+            .catch(() => {});
+
+          // Fetch student personal dictionary directly from Firestore (Permanent Multi-device Sync)
+          fetchStudentVocabularyFromFirestore(uid, email)
+            .then((vocab) => {
+              if (Array.isArray(vocab) && vocab.length > 0) {
+                setStudentDictionaryEntries(vocab);
               }
             })
             .catch(() => {});
@@ -1130,10 +1142,7 @@ export default function App() {
 
     const unsub = subscribeToStudentWeeklyChecks(uid, email, (data) => {
       if (data && data.checks) {
-        setWeeklyChecks((prev) => ({
-          ...prev,
-          ...data.checks,
-        }));
+        setWeeklyChecks(data.checks);
       }
       if (typeof data.weeklyNativeLessonsTarget === 'number' && data.weeklyNativeLessonsTarget > 0) {
         setUserProfile((prev) => ({
@@ -1158,14 +1167,53 @@ export default function App() {
     const email = currentAccount?.email || userProfile?.email || '';
     if (!uid && !email) return;
 
-    const unsub = subscribeToStudentDailyRoutines(uid, email, (cloudRoutines) => {
+    const unsub = subscribeToStudentDailyRoutines(uid, (cloudRoutines) => {
       if (cloudRoutines && typeof cloudRoutines === 'object' && Object.keys(cloudRoutines).length > 0) {
         setRoutinesByDay((prev) => {
           const merged = { ...prev };
           (Object.keys(cloudRoutines) as DayOfWeek[]).forEach((day) => {
-            const dayItems = cloudRoutines[day];
-            if (Array.isArray(dayItems) && dayItems.length > 0) {
-              merged[day] = dayItems;
+            const dayData = cloudRoutines[day];
+            if (dayData && typeof dayData === 'object') {
+              if (Array.isArray(dayData)) {
+                merged[day] = dayData;
+              } else if (dayData.videoId || dayData.url || dayData.teacherVideos || dayData.teacherOverrideTrack) {
+                const dayList = merged[day] || defaultRoutinesByDay[day] || [];
+                merged[day] = dayList.map((item, idx) => {
+                  if (
+                    idx === 0 ||
+                    item.id.endsWith('1') ||
+                    item.activityName?.toLowerCase().includes('vídeo') ||
+                    item.activityName?.toLowerCase().includes('video')
+                  ) {
+                    const cleanVidId = dayData.videoId;
+                    return {
+                      ...item,
+                      teacherVideos: cleanVidId
+                        ? [
+                            {
+                              id: cleanVidId,
+                              videoId: cleanVidId,
+                              title: dayData.title || dayData.videoTitle || 'Daily Video Practice',
+                              url: dayData.url || `https://www.youtube.com/watch?v=${cleanVidId}`,
+                              playlistId: dayData.playlistId || '',
+                              isRepeatVideo: Boolean(dayData.isRepeatVideo),
+                            },
+                          ]
+                        : item.teacherVideos,
+                      teacherSpotify: dayData.teacherOverrideTrack
+                        ? {
+                            id: dayData.teacherOverrideTrack.url || 'track',
+                            title: dayData.teacherOverrideTrack.title,
+                            artist: dayData.teacherOverrideTrack.artist || dayData.teacherOverrideTrack.artistOrHost,
+                            url: dayData.teacherOverrideTrack.url,
+                          }
+                        : item.teacherSpotify,
+                      completedToday: dayData.completedToday !== undefined ? dayData.completedToday : item.completedToday,
+                    };
+                  }
+                  return item;
+                });
+              }
             }
           });
           return merged;
@@ -1244,12 +1292,12 @@ export default function App() {
 
   // Real-time synchronization of student vocabulary dictionary across all devices & sessions (Mobile <-> Desktop)
   useEffect(() => {
-    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.id || (userProfile as any)?.uid || '';
-    const email = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
+    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || auth.currentUser?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const email = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || auth.currentUser?.email || userProfile?.email || '';
     if (!uid && !email) return;
 
     const unsub = subscribeToStudentVocabulary(uid, email, (cloudEntries) => {
-      if (Array.isArray(cloudEntries)) {
+      if (Array.isArray(cloudEntries) && cloudEntries.length > 0) {
         // Direct authoritative reflection from Cloud Firestore guarantees deletion and addition instant sync across devices!
         setStudentDictionaryEntries(cloudEntries);
       }
@@ -1260,22 +1308,13 @@ export default function App() {
 
   // Ensure accumulated vocabulary is loaded from Firestore whenever switching lessons or days
   useEffect(() => {
-    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.id || (userProfile as any)?.uid || '';
-    const email = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
+    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || auth.currentUser?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const email = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || auth.currentUser?.email || userProfile?.email || '';
     if (!uid && !email) return;
 
     fetchStudentVocabularyFromFirestore(uid, email).then((fsEntries) => {
       if (Array.isArray(fsEntries) && fsEntries.length > 0) {
-        setStudentDictionaryEntries((prev) => {
-          const map = new Map<string, StudentDictionaryEntry>();
-          prev.forEach((e) => {
-            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
-          });
-          fsEntries.forEach((e) => {
-            if (e?.word) map.set(e.word.toLowerCase().trim(), e);
-          });
-          return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
-        });
+        setStudentDictionaryEntries(fsEntries);
       }
     });
   }, [selectedDay, selectedActivityId]);
@@ -1283,8 +1322,8 @@ export default function App() {
   // Refresh student dictionary whenever the modal is opened
   useEffect(() => {
     if (!isPersonalDictionaryOpen) return;
-    const dictEmail = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || userProfile?.email || '';
-    const uid = currentAccount?.uid || '';
+    const dictEmail = (currentAccount?.role === 'student' ? (currentAccount?.email || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || auth.currentUser?.email || userProfile?.email || '';
+    const uid = (currentAccount?.role === 'student' ? (currentAccount?.uid || '') : (selectedStudentFilter !== 'all' ? selectedStudentFilter : '')) || auth.currentUser?.uid || userProfile?.id || (userProfile as any)?.uid || '';
     if (dictEmail || uid) {
       fetchStudentVocabularyFromFirestore(uid, dictEmail).then((fsEntries) => {
         if (Array.isArray(fsEntries) && fsEntries.length > 0) {
@@ -1797,9 +1836,15 @@ export default function App() {
     initialProfile?: Partial<UserProfile>,
     tutorData?: any
   ) => {
-    setCurrentAccount(account);
+    const effectiveAuthUid = auth.currentUser?.uid || account.uid || account.id || initialProfile?.uid || initialProfile?.id || '';
+    const safeAccount: GoogleAccount = {
+      ...account,
+      uid: effectiveAuthUid || account.uid,
+      id: effectiveAuthUid || account.id,
+    };
+    setCurrentAccount(safeAccount);
     if (!availableAccounts.some((a) => a.email.toLowerCase() === account.email.toLowerCase())) {
-      setAvailableAccounts((prev) => [...prev, account]);
+      setAvailableAccounts((prev) => [...prev, safeAccount]);
     }
     if (account.role === 'student') {
       const cleanPic =
@@ -1809,9 +1854,10 @@ export default function App() {
         '';
 
       const freshProfile: UserProfile = {
-        ...createDefaultStudentProfile(account),
+        ...createDefaultStudentProfile(safeAccount),
         ...(initialProfile || {}),
-        id: account.id || initialProfile?.id || `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        id: effectiveAuthUid || `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        uid: effectiveAuthUid || `usr-${account.email.replace(/[^a-zA-Z0-9]/g, '-')}`,
         name: initialProfile?.name || account.name || '',
         email: account.email,
         picture: cleanPic,
@@ -2791,7 +2837,7 @@ export default function App() {
     setLessons((prev) => [newLesson, ...prev]);
 
     // Direct Firestore persistence
-    saveLiveLessonToFirestore(newLesson);
+    await saveLiveLessonToFirestore(newLesson);
 
     // Update students state so student appears immediately in teacher's filter and list
     setStudents((prev) => {
@@ -2987,7 +3033,7 @@ export default function App() {
     });
 
     // Persist cancellation in Firestore with complete lesson metadata
-    updateLiveLessonInFirestore(
+    await updateLiveLessonInFirestore(
       lessonId,
       {
         status: 'cancelled',
@@ -3283,7 +3329,7 @@ export default function App() {
     const targetStudent = (studentsList || []).find(
       (s) => (s.email || '').toLowerCase().trim() === targetEmail || (s as any).uid === targetEmail || s.id === targetEmail
     );
-    const targetUid = (targetStudent as any)?.uid || targetStudent?.id || currentAccount?.uid || '';
+    const targetUid = (targetStudent as any)?.uid || (targetStudent as any)?.studentUid || targetStudent?.id || currentAccount?.uid || auth.currentUser?.uid || '';
 
     // Update local studentDictionaryEntries cumulatively
     setStudentDictionaryEntries((prev) => {
@@ -3330,8 +3376,8 @@ export default function App() {
       return Array.from(map.values()).sort((a, b) => a.word.localeCompare(b.word));
     });
 
-    const targetUid = currentAccount?.uid || userProfile?.id || '';
-    const targetEmail = currentAccount?.email || userProfile?.email || '';
+    const targetUid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const targetEmail = currentAccount?.email || auth.currentUser?.email || userProfile?.email || '';
 
     // Direct Firestore persistence - cumulative and permanent!
     if (targetUid || targetEmail) {

@@ -16,6 +16,8 @@
         "watchedVideosHistory": { "type": "array", "description": "Global history of unique watched YouTube video IDs" },
         "listenedTracksHistory": { "type": "array", "description": "Global history of unique listened Spotify tracks" },
         "studentJournal": { "type": "array", "description": "Unified student activity log & journal (video, audio, memorization, lesson) for cross-device S-Path sync" },
+        "vocabulary": { "type": "array", "description": "Accumulated personal dictionary vocabulary words" },
+        "scheduledLessons": { "type": "array", "description": "Scheduled live lessons list" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
       },
       "required": ["uid", "email", "role"]
@@ -76,11 +78,20 @@
         "id": { "type": "string", "description": "Lesson ID" },
         "studentUid": { "type": "string", "description": "Student UID" },
         "studentEmail": { "type": "string", "format": "email", "description": "Student email" },
+        "studentName": { "type": "string", "description": "Student display name" },
+        "teacherUid": { "type": "string", "description": "Teacher UID" },
         "teacherEmail": { "type": "string", "format": "email", "description": "Teacher email" },
+        "teacherName": { "type": "string", "description": "Teacher display name" },
         "title": { "type": "string", "description": "Lesson title" },
+        "description": { "type": "string", "description": "Lesson notes and topic description" },
+        "meetLink": { "type": "string", "description": "Google Meet meeting URL" },
         "startDateTime": { "type": "string", "format": "date-time", "description": "Start time" },
         "endDateTime": { "type": "string", "format": "date-time", "description": "End time" },
-        "status": { "type": "string", "enum": ["scheduled", "completed", "not_completed", "cancelled"], "description": "Lesson status" }
+        "status": { "type": "string", "enum": ["scheduled", "completed", "not_completed", "cancelled"], "description": "Lesson status" },
+        "cancelledAt": { "type": "string", "format": "date-time", "description": "Cancellation timestamp" },
+        "cancelledBy": { "type": "string", "description": "Responsible party for cancellation" },
+        "cancellationReason": { "type": "string", "description": "Motive for lesson cancellation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
       },
       "required": ["studentEmail", "teacherEmail", "startDateTime", "endDateTime", "status"]
     },

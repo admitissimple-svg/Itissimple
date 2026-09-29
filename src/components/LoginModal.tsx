@@ -253,6 +253,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
       const data = await res.json();
       const account: GoogleAccount = data.account;
+      const effectiveAuthUid = firebaseUid || firestoreUserDoc?.uid || account?.uid || '';
+      if (effectiveAuthUid) {
+        account.uid = effectiveAuthUid;
+        account.id = effectiveAuthUid;
+      }
 
       // 4. Dynamic Verification and Redirection by UID in Firestore
       // Read role directly from Firestore document as the primary source of truth

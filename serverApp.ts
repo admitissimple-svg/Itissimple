@@ -560,6 +560,10 @@ async function initCloudPersistence() {
         ...(inMemoryDb.studentListenedTracks || {}),
         ...(cloudState.studentListenedTracks || {}),
       };
+      const mergedStudentDictionary = {
+        ...(inMemoryDb.studentDictionaryMap || {}),
+        ...(cloudState.studentDictionaryMap || {}),
+      };
 
       inMemoryDb = mergeDbWithDefaults({
         ...inMemoryDb,
@@ -575,6 +579,7 @@ async function initCloudPersistence() {
         studentRoutinesMap: mergedStudentRoutines,
         studentWatchedVideos: mergedWatchedVideos,
         studentListenedTracks: mergedListenedTracks,
+        studentDictionaryMap: mergedStudentDictionary,
       });
       fs.writeFileSync(DB_FILE, JSON.stringify(inMemoryDb, null, 2), 'utf-8');
       await saveAppStateToFirestore(inMemoryDb);

@@ -151,6 +151,8 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 
       const data = await res.json();
       const account: GoogleAccount = data.account;
+      account.uid = user.uid;
+      account.id = user.uid;
       account.role = verifiedRole;
 
       // 3. Redirection

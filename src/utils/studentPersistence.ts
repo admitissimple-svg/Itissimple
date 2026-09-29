@@ -38,9 +38,13 @@ export function normalizeUid(rawId?: string | null, email?: string | null): stri
     return rawId.trim();
   }
 
-  // 2. Prioritize authenticated user UID from Firebase Auth
+  // 2. Prioritize authenticated user UID from Firebase Auth if it corresponds to current user
   if (auth.currentUser?.uid) {
-    return auth.currentUser.uid;
+    const cleanAuthEmail = (auth.currentUser.email || '').toLowerCase().trim();
+    const cleanProvidedEmail = (email || '').toLowerCase().trim();
+    if (!cleanProvidedEmail || !cleanAuthEmail || cleanAuthEmail === cleanProvidedEmail) {
+      return auth.currentUser.uid;
+    }
   }
 
   // 3. Fallback to provided rawId if no active auth session
@@ -56,6 +60,19 @@ export function normalizeUid(rawId?: string | null, email?: string | null): stri
   return '';
 }
 
+export function getUserDocIds(rawId?: string | null, email?: string | null): string[] {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(rawId, cleanEmail);
+  const rawClean = (rawId || '').trim();
+  const emailUnderscore = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : '';
+  const emailHyphen = cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9]/g, '-') : '';
+  const emailUsr = cleanEmail ? `usr-${emailHyphen}` : '';
+
+  return Array.from(
+    new Set([cleanUid, rawClean, emailUnderscore, emailHyphen, emailUsr, cleanEmail].filter(Boolean))
+  );
+}
+
 /**
  * Retrieve cached vocabulary from localStorage for immediate, non-empty rendering
  */
@@ -67,6 +84,7 @@ export function getCachedLocalVocabulary(studentUid?: string | null, studentEmai
     const keysToCheck = [
       cleanUid ? `its_simple_vocabulary_${cleanUid}` : '',
       cleanEmail ? `its_simple_vocabulary_${cleanEmail}` : '',
+      'its_simple_vocabulary_master',
     ].filter(Boolean);
 
     for (const key of keysToCheck) {
@@ -97,6 +115,9 @@ export function cacheVocabularyLocally(
     const jsonStr = JSON.stringify(entries);
     if (cleanUid) localStorage.setItem(`its_simple_vocabulary_${cleanUid}`, jsonStr);
     if (cleanEmail) localStorage.setItem(`its_simple_vocabulary_${cleanEmail}`, jsonStr);
+    if (entries.length > 0) {
+      localStorage.setItem('its_simple_vocabulary_master', jsonStr);
+    }
   } catch {}
 }
 
@@ -121,14 +142,21 @@ export async function saveStudentVocabularyToFirestore(
 
   try {
     const sanitizedEntries: StudentDictionaryEntry[] = JSON.parse(JSON.stringify(entries || []));
-
-    // Step A: Load all existing words strictly from Firestore users/{cleanUid} & subcollection (no stale local cache contamination)
     const masterMap = new Map<string, StudentDictionaryEntry>();
 
-    // 1. Fetch existing words from Firestore users/{cleanUid} & subcollection
+    // 1. Seed masterMap with local cache first to ensure zero data loss during network latency
+    const cached = getCachedLocalVocabulary(cleanUid, cleanEmail);
+    cached.forEach((item) => {
+      if (item?.word) {
+        const key = item.word.toLowerCase().trim();
+        masterMap.set(key, item);
+      }
+    });
+
+    // 2. Load existing words from Firestore users/{cleanUid} & subcollection (authoritative)
     try {
       const userRef = doc(db, 'users', cleanUid);
-      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 4000, null);
       if (userSnap && userSnap.exists()) {
         const data = userSnap.data();
         if (Array.isArray(data?.vocabulary)) {
@@ -144,7 +172,7 @@ export async function saveStudentVocabularyToFirestore(
 
     try {
       const subColRef = collection(db, 'users', cleanUid, 'vocabulary');
-      const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2000, null);
+      const subSnap = await withFirestoreTimeout(getDocs(subColRef), 4000, null);
       if (subSnap && !subSnap.empty) {
         subSnap.forEach((docItem) => {
           const item = docItem.data() as StudentDictionaryEntry;
@@ -156,7 +184,30 @@ export async function saveStudentVocabularyToFirestore(
       }
     } catch {}
 
-    // 3. Merge new entries into masterMap (accumulating, never dropping existing ones)
+    // 3. Check legacy doc IDs if masterMap is still small or for accounts migrated from email
+    const allDocIds = getUserDocIds(cleanUid, cleanEmail);
+    for (const altId of allDocIds) {
+      if (altId === cleanUid) continue;
+      try {
+        const altRef = doc(db, 'users', altId);
+        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
+        if (altSnap && altSnap.exists()) {
+          const altData = altSnap.data();
+          if (Array.isArray(altData?.vocabulary)) {
+            altData.vocabulary.forEach((item: StudentDictionaryEntry) => {
+              if (item?.word) {
+                const key = item.word.toLowerCase().trim();
+                if (!masterMap.has(key)) {
+                  masterMap.set(key, item);
+                }
+              }
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // 4. Merge new entries into masterMap (strictly accumulating, never dropping existing ones)
     sanitizedEntries.forEach((entry) => {
       if (!entry || !entry.word || !entry.word.trim()) return;
       const key = entry.word.toLowerCase().trim();
@@ -184,10 +235,10 @@ export async function saveStudentVocabularyToFirestore(
       (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
     );
 
-    // Step B: Cache accumulated list locally immediately
+    // Cache accumulated list locally immediately
     cacheVocabularyLocally(cleanUid, cleanEmail, accumulatedList);
 
-    // Step C: Write strictly to Cloud Firestore users/{cleanUid}
+    // Write strictly to Cloud Firestore users/{cleanUid} with accumulatedList
     const userRef = doc(db, 'users', cleanUid);
     const writePromises: Promise<any>[] = [
       setDoc(
@@ -200,6 +251,7 @@ export async function saveStudentVocabularyToFirestore(
       ),
     ];
 
+    // Write individual entries to subcollection users/{cleanUid}/vocabulary/{wordDocId}
     sanitizedEntries.forEach((entry) => {
       if (!entry || !entry.word || !entry.word.trim()) return;
       const key = entry.word.toLowerCase().trim();
@@ -221,16 +273,16 @@ export async function saveStudentVocabularyToFirestore(
       );
     });
 
-    await withFirestoreTimeout(Promise.all(writePromises), 4500, null);
+    await withFirestoreTimeout(Promise.all(writePromises), 6000, null);
 
-    // Step D: Mirror to backend server API for disk persistence
+    // Mirror to backend server API for disk persistence
     if (cleanEmail || cleanUid) {
       fetch('/api/student-dictionary', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           studentEmail: cleanEmail,
-          uid: cleanUid,
+          studentUid: cleanUid,
           entries: accumulatedList,
         }),
       }).catch(() => {});
@@ -256,23 +308,23 @@ export async function fetchStudentVocabularyFromFirestore(
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
 
-  const entryMap = new Map<string, StudentDictionaryEntry>();
-
-  // 1. First, check local cache for immediate display
-  const localCached = getCachedLocalVocabulary(cleanUid, cleanEmail);
-  localCached.forEach((item) => {
-    if (item && item.word) entryMap.set(item.word.toLowerCase().trim(), item);
-  });
-
   if (!db || !cleanUid) {
-    return Array.from(entryMap.values());
+    return getCachedLocalVocabulary(cleanUid, cleanEmail);
   }
 
+  const entryMap = new Map<string, StudentDictionaryEntry>();
+
+  // A. Pre-populate from local cache so we never start empty
+  const localCache = getCachedLocalVocabulary(cleanUid, cleanEmail);
+  localCache.forEach((item) => {
+    if (item?.word) entryMap.set(item.word.toLowerCase().trim(), item);
+  });
+
   try {
-    // A. Fetch from users/{cleanUid} user profile document
+    // 1. Fetch from users/{cleanUid} user profile document
     try {
       const userRef = doc(db, 'users', cleanUid);
-      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
+      const userSnap = await withFirestoreTimeout(getDoc(userRef), 4000, null);
       if (userSnap && userSnap.exists()) {
         const data = userSnap.data();
         if (Array.isArray(data?.vocabulary)) {
@@ -286,10 +338,10 @@ export async function fetchStudentVocabularyFromFirestore(
       }
     } catch {}
 
-    // B. Fetch from subcollection users/{cleanUid}/vocabulary
+    // 2. Fetch from subcollection users/{cleanUid}/vocabulary
     try {
       const subColRef = collection(db, 'users', cleanUid, 'vocabulary');
-      const subSnap = await withFirestoreTimeout(getDocs(subColRef), 2500, null);
+      const subSnap = await withFirestoreTimeout(getDocs(subColRef), 4000, null);
       if (subSnap && !subSnap.empty) {
         subSnap.forEach((docItem) => {
           const item = docItem.data() as StudentDictionaryEntry;
@@ -301,10 +353,34 @@ export async function fetchStudentVocabularyFromFirestore(
       }
     } catch {}
 
+    // 3. Fallback to legacy document IDs if cleanUid had no words
+    if (entryMap.size === 0) {
+      const allDocIds = getUserDocIds(cleanUid, cleanEmail);
+      for (const altId of allDocIds) {
+        if (altId === cleanUid) continue;
+        try {
+          const altRef = doc(db, 'users', altId);
+          const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
+          if (altSnap && altSnap.exists()) {
+            const altData = altSnap.data();
+            if (Array.isArray(altData?.vocabulary) && altData.vocabulary.length > 0) {
+              altData.vocabulary.forEach((item: StudentDictionaryEntry) => {
+                if (item?.word) entryMap.set(item.word.toLowerCase().trim(), item);
+              });
+              // Migrate to cleanUid
+              setDoc(doc(db, 'users', cleanUid), { vocabulary: altData.vocabulary, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+              break;
+            }
+          }
+        } catch {}
+      }
+    }
+
     const result = Array.from(entryMap.values()).sort((a, b) =>
       (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
     );
 
+    // CRITICAL: Only cache if we actually have words - NEVER wipe local cache with empty result!
     if (result.length > 0) {
       cacheVocabularyLocally(cleanUid, cleanEmail, result);
     }
@@ -312,7 +388,7 @@ export async function fetchStudentVocabularyFromFirestore(
     return result;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `users/${cleanUid}/vocabulary`);
-    return Array.from(entryMap.values());
+    return getCachedLocalVocabulary(cleanUid, cleanEmail);
   }
 }
 
@@ -334,13 +410,27 @@ export async function deleteStudentVocabularyFromFirestore(
   const wordDocId = cleanWord.replace(/[^a-zA-Z0-9_-]/g, '_');
 
   try {
-    // 1. Delete from subcollection
+    // 1. Delete from subcollection by predictable wordDocId
     const itemRef = doc(db, 'users', cleanUid, 'vocabulary', wordDocId);
-    await withFirestoreTimeout(deleteDoc(itemRef), 2500, null);
+    await withFirestoreTimeout(deleteDoc(itemRef), 3000, null);
+
+    // Also remove any documents in the subcollection where word matches cleanWord
+    try {
+      const subCol = collection(db, 'users', cleanUid, 'vocabulary');
+      const subSnap = await withFirestoreTimeout(getDocs(subCol), 2500, null);
+      if (subSnap && !subSnap.empty) {
+        for (const docItem of subSnap.docs) {
+          const itemData = docItem.data();
+          if ((itemData?.word || '').trim().toLowerCase() === cleanWord) {
+            await deleteDoc(docItem.ref).catch(() => {});
+          }
+        }
+      }
+    } catch {}
 
     // 2. Remove from users/{cleanUid}.vocabulary array
     const userRef = doc(db, 'users', cleanUid);
-    const snap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+    const snap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
     if (snap && snap.exists()) {
       const data = snap.data();
       if (Array.isArray(data?.vocabulary)) {
@@ -349,12 +439,32 @@ export async function deleteStudentVocabularyFromFirestore(
         );
         await withFirestoreTimeout(
           setDoc(userRef, { vocabulary: filtered, updatedAt: new Date().toISOString() }, { merge: true }),
-          2500,
+          3000,
           null
         );
         cacheVocabularyLocally(cleanUid, cleanEmail, filtered);
       }
     }
+
+    // Also remove from any legacy doc IDs
+    const allDocIds = getUserDocIds(cleanUid, cleanEmail);
+    for (const altId of allDocIds) {
+      if (altId === cleanUid) continue;
+      try {
+        const altRef = doc(db, 'users', altId);
+        const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
+        if (altSnap && altSnap.exists()) {
+          const altData = altSnap.data();
+          if (Array.isArray(altData?.vocabulary)) {
+            const filtered = altData.vocabulary.filter(
+              (item: StudentDictionaryEntry) => (item?.word || '').trim().toLowerCase() !== cleanWord
+            );
+            await setDoc(altRef, { vocabulary: filtered, updatedAt: new Date().toISOString() }, { merge: true });
+          }
+        }
+      } catch {}
+    }
+
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `users/${cleanUid}/vocabulary/${wordDocId}`);
@@ -385,26 +495,42 @@ export function subscribeToStudentVocabulary(
 
   let docVocab: StudentDictionaryEntry[] = [];
   const colMap = new Map<string, StudentDictionaryEntry>();
+  let hasReceivedSnapshot = false;
 
   const notify = () => {
     const mergedMap = new Map<string, StudentDictionaryEntry>();
-    // Priority: authoritative userDocRef vocabulary array
+
+    // Pre-populate with local cache if we haven't received remote data yet
+    if (!hasReceivedSnapshot) {
+      const cached = getCachedLocalVocabulary(cleanUid, cleanEmail);
+      cached.forEach((item) => {
+        if (item && item.word) {
+          mergedMap.set(item.word.toLowerCase().trim(), item);
+        }
+      });
+    }
+
+    // Authoritative userDocRef vocabulary array
     docVocab.forEach((item) => {
       if (item && item.word) {
         mergedMap.set(item.word.toLowerCase().trim(), item);
       }
     });
-    // Supplement with subcollection items
+
+    // Subcollection items
     colMap.forEach((item, key) => {
       if (!mergedMap.has(key)) {
         mergedMap.set(key, item);
       }
     });
+
     const list = Array.from(mergedMap.values()).sort((a, b) =>
       (a.word || '').localeCompare(b.word || '', ['en', 'pt'], { sensitivity: 'base' })
     );
-    // Passively keep local cache fresh for offline fallback without polluting live Firestore state
-    cacheVocabularyLocally(cleanUid, cleanEmail, list);
+
+    if (list.length > 0) {
+      cacheVocabularyLocally(cleanUid, cleanEmail, list);
+    }
     callback(list);
   };
 
@@ -412,6 +538,7 @@ export function subscribeToStudentVocabulary(
   const unsubCol = onSnapshot(
     vocabColRef,
     (snapshot) => {
+      hasReceivedSnapshot = true;
       colMap.clear();
       snapshot.forEach((d) => {
         const item = d.data() as StudentDictionaryEntry;
@@ -430,6 +557,7 @@ export function subscribeToStudentVocabulary(
   const unsubDoc = onSnapshot(
     userDocRef,
     (snap) => {
+      hasReceivedSnapshot = true;
       if (snap.exists()) {
         const data = snap.data();
         if (Array.isArray(data?.vocabulary)) {
@@ -601,30 +729,71 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
   if (!db || !lesson?.id) return false;
 
   try {
-    const sanitizedLesson: LiveLesson = JSON.parse(JSON.stringify(lesson));
+    const cleanStudentEmail = (lesson.studentEmail || '').toLowerCase().trim();
+    const cleanTeacherEmail = (lesson.teacherEmail || '').toLowerCase().trim();
+    const studentUid = normalizeUid(lesson.studentUid, cleanStudentEmail);
+    const teacherUid = normalizeUid(lesson.teacherUid, cleanTeacherEmail);
+
+    const sanitizedLesson: LiveLesson = {
+      ...JSON.parse(JSON.stringify(lesson)),
+      id: lesson.id,
+      studentUid: studentUid || lesson.studentUid,
+      teacherUid: teacherUid || lesson.teacherUid,
+      studentEmail: cleanStudentEmail,
+      teacherEmail: cleanTeacherEmail,
+      updatedAt: lesson.updatedAt || new Date().toISOString(),
+    };
 
     // 1. Root lessons collection
     const lessonRef = doc(db, 'lessons', sanitizedLesson.id);
-    await withFirestoreTimeout(setDoc(lessonRef, sanitizedLesson, { merge: true }), 3000, null);
+    await withFirestoreTimeout(setDoc(lessonRef, sanitizedLesson, { merge: true }), 3500, null);
 
-    // 2. Student user subcollection
-    const studentUid = normalizeUid(sanitizedLesson.studentUid, sanitizedLesson.studentEmail);
-    if (studentUid) {
-      const userLessonRef = doc(db, 'users', studentUid, 'lessons', sanitizedLesson.id);
-      await withFirestoreTimeout(setDoc(userLessonRef, sanitizedLesson, { merge: true }), 2500, null);
+    // 2. Student user subcollections across canonical student doc IDs
+    const studentDocIds = getUserDocIds(studentUid, cleanStudentEmail);
+    for (const sDocId of studentDocIds) {
+      try {
+        const userLessonRef = doc(db, 'users', sDocId, 'lessons', sanitizedLesson.id);
+        await withFirestoreTimeout(setDoc(userLessonRef, sanitizedLesson, { merge: true }), 2500, null);
 
-      // Also update lessons array on user doc
-      const userRef = doc(db, 'users', studentUid);
-      const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
-      if (userSnap && userSnap.exists()) {
-        const data = userSnap.data();
-        const prevLessons: LiveLesson[] = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
-        const filtered = prevLessons.filter((l) => l.id !== sanitizedLesson.id);
-        await withFirestoreTimeout(
-          setDoc(userRef, { scheduledLessons: [sanitizedLesson, ...filtered] }, { merge: true }),
-          2000,
-          null
-        );
+        // Also update scheduledLessons array on user doc
+        const userRef = doc(db, 'users', sDocId);
+        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        if (userSnap && userSnap.exists()) {
+          const data = userSnap.data();
+          const prevLessons: LiveLesson[] = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
+          const filtered = prevLessons.filter((l) => l.id !== sanitizedLesson.id);
+          await withFirestoreTimeout(
+            setDoc(userRef, { scheduledLessons: [sanitizedLesson, ...filtered], updatedAt: new Date().toISOString() }, { merge: true }),
+            2000,
+            null
+          );
+        }
+      } catch (subErr) {
+        console.warn(`Notice persisting lesson to student doc ${sDocId}:`, subErr);
+      }
+    }
+
+    // 3. Teacher user subcollections across canonical teacher doc IDs
+    const teacherDocIds = getUserDocIds(teacherUid, cleanTeacherEmail);
+    for (const tDocId of teacherDocIds) {
+      try {
+        const teacherLessonRef = doc(db, 'users', tDocId, 'lessons', sanitizedLesson.id);
+        await withFirestoreTimeout(setDoc(teacherLessonRef, sanitizedLesson, { merge: true }), 2500, null);
+
+        const tUserRef = doc(db, 'users', tDocId);
+        const tUserSnap = await withFirestoreTimeout(getDoc(tUserRef), 2000, null);
+        if (tUserSnap && tUserSnap.exists()) {
+          const tData = tUserSnap.data();
+          const prevLessons: LiveLesson[] = Array.isArray(tData?.scheduledLessons) ? tData.scheduledLessons : [];
+          const filtered = prevLessons.filter((l) => l.id !== sanitizedLesson.id);
+          await withFirestoreTimeout(
+            setDoc(tUserRef, { scheduledLessons: [sanitizedLesson, ...filtered], updatedAt: new Date().toISOString() }, { merge: true }),
+            2000,
+            null
+          );
+        }
+      } catch (tErr) {
+        console.warn(`Notice persisting lesson to teacher doc ${tDocId}:`, tErr);
       }
     }
 
@@ -1242,7 +1411,7 @@ export function subscribeToStudentLessons(
   const rebuildAndNotify = () => {
     const consolidatedMap = new Map<string, LiveLesson>();
 
-    // Merge docs across all active query snapshots
+    // Merge docs across all active query snapshots, respecting latest updatedAt and strictly preserving cancelled state
     queryDocsMap.forEach((docsMap) => {
       docsMap.forEach((item, id) => {
         if (!item || !id) return;
@@ -1254,25 +1423,28 @@ export function subscribeToStudentLessons(
         };
         const existing = consolidatedMap.get(id);
         if (existing) {
-          const finalCancelled = existing.status === 'cancelled' || normalizedItem.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(normalizedItem.cancelledAt);
+          const isCancelled = existing.status === 'cancelled' || normalizedItem.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(normalizedItem.cancelledAt);
           const cancelledAt = existing.cancelledAt || normalizedItem.cancelledAt;
           const cancelledBy = existing.cancelledBy || normalizedItem.cancelledBy;
           const cancellationReason = existing.cancellationReason || normalizedItem.cancellationReason;
-          const merged: LiveLesson = { ...existing, ...normalizedItem };
-          if (finalCancelled) {
-            merged.status = 'cancelled';
-            merged.cancelledAt = cancelledAt || new Date().toISOString();
-            if (cancelledBy) merged.cancelledBy = cancelledBy;
-            if (cancellationReason) merged.cancellationReason = cancellationReason;
+          const timeExisting = new Date(existing.updatedAt || existing.startDateTime || 0).getTime();
+          const timeItem = new Date(normalizedItem.updatedAt || normalizedItem.startDateTime || 0).getTime();
+          const latest = timeItem >= timeExisting ? { ...existing, ...normalizedItem } : { ...normalizedItem, ...existing };
+          if (isCancelled) {
+            latest.status = 'cancelled';
+            latest.cancelledAt = cancelledAt || new Date().toISOString();
+            if (cancelledBy) latest.cancelledBy = cancelledBy;
+            if (cancellationReason) latest.cancellationReason = cancellationReason;
           }
-          consolidatedMap.set(id, merged);
+          consolidatedMap.set(id, latest);
         } else {
           consolidatedMap.set(id, normalizedItem);
         }
       });
     });
 
-    // Cross-deduplicate cancelled slots
+    // Invariant: If a student has a cancelled lesson at a specific startDateTime,
+    // any duplicate active lesson at that startDateTime must also be marked cancelled!
     const cancelledSlots = new Set<string>();
     consolidatedMap.forEach((l) => {
       if (l.status === 'cancelled' || l.cancelledAt) {
@@ -1330,6 +1502,25 @@ export function subscribeToStudentLessons(
       if (cleanUid) {
         const subCol = collection(db, 'users', cleanUid, 'lessons');
         unsubscribers.push(onSnapshot(subCol, (snap) => handleQuerySnap('t_subcol', snap), () => {}));
+        const userDocRef = doc(db, 'users', cleanUid);
+        unsubscribers.push(
+          onSnapshot(
+            userDocRef,
+            (snap) => {
+              if (snap.exists()) {
+                const data = snap.data();
+                const scheduled = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
+                const schedMap = new Map<string, LiveLesson>();
+                scheduled.forEach((l: LiveLesson) => {
+                  if (l?.id) schedMap.set(l.id, l);
+                });
+                queryDocsMap.set('t_scheduled_arr', schedMap);
+                rebuildAndNotify();
+              }
+            },
+            () => {}
+          )
+        );
       }
     } else {
       if (cleanEmail) {
@@ -1347,6 +1538,25 @@ export function subscribeToStudentLessons(
       if (cleanUid) {
         const subCol = collection(db, 'users', cleanUid, 'lessons');
         unsubscribers.push(onSnapshot(subCol, (snap) => handleQuerySnap('s_subcol', snap), () => {}));
+        const userDocRef = doc(db, 'users', cleanUid);
+        unsubscribers.push(
+          onSnapshot(
+            userDocRef,
+            (snap) => {
+              if (snap.exists()) {
+                const data = snap.data();
+                const scheduled = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
+                const schedMap = new Map<string, LiveLesson>();
+                scheduled.forEach((l: LiveLesson) => {
+                  if (l?.id) schedMap.set(l.id, l);
+                });
+                queryDocsMap.set('s_scheduled_arr', schedMap);
+                rebuildAndNotify();
+              }
+            },
+            () => {}
+          )
+        );
       }
     }
   } catch (err) {
