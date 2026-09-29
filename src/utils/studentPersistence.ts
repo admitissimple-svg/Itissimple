@@ -101,6 +101,52 @@ export function getCachedLocalVocabulary(studentUid?: string | null, studentEmai
 }
 
 /**
+ * Retrieve cached weekly checks from localStorage for instant, non-flickering checkmarks
+ */
+export function getCachedWeeklyChecks(studentUid?: string | null, studentEmail?: string | null): Record<string, boolean> {
+  if (typeof window === 'undefined' || !window.localStorage) return {};
+  try {
+    const cleanUid = studentUid?.trim();
+    const cleanEmail = studentEmail?.toLowerCase().trim();
+    const keysToCheck = [
+      cleanUid ? `its_simple_weekly_checks_${cleanUid}` : '',
+      cleanEmail ? `its_simple_weekly_checks_${cleanEmail}` : '',
+      'its_simple_weekly_checks_default',
+    ].filter(Boolean);
+
+    for (const key of keysToCheck) {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+          return parsed;
+        }
+      }
+    }
+  } catch {}
+  return {};
+}
+
+/**
+ * Cache weekly checks in localStorage for immediate reflection upon page reopen
+ */
+export function cacheWeeklyChecksLocally(
+  studentUid?: string | null,
+  studentEmail?: string | null,
+  checks?: Record<string, boolean>
+) {
+  if (typeof window === 'undefined' || !window.localStorage || !checks) return;
+  try {
+    const cleanUid = studentUid?.trim();
+    const cleanEmail = studentEmail?.toLowerCase().trim();
+    const jsonStr = JSON.stringify(checks);
+    if (cleanUid) localStorage.setItem(`its_simple_weekly_checks_${cleanUid}`, jsonStr);
+    if (cleanEmail) localStorage.setItem(`its_simple_weekly_checks_${cleanEmail}`, jsonStr);
+    localStorage.setItem('its_simple_weekly_checks_default', jsonStr);
+  } catch {}
+}
+
+/**
  * Cache vocabulary in localStorage for instant retrieval across page loads and component switches
  */
 export function cacheVocabularyLocally(
@@ -1630,18 +1676,27 @@ export function subscribeToStudentWeeklyChecks(
       (snap) => {
         if (snap.exists()) {
           const data = snap.data();
-          if (
-            data?.weeklyChecks ||
-            data?.sPathChecks ||
-            data?.weeklyNativeLessonsTarget !== undefined ||
-            data?.weeklyStudyDaysTarget !== undefined
-          ) {
-            callback({
-              checks: data?.weeklyChecks || data?.sPathChecks || {},
-              weeklyNativeLessonsTarget: data?.weeklyNativeLessonsTarget,
-              weeklyStudyDaysTarget: data?.weeklyStudyDaysTarget,
+          const baseChecks: Record<string, boolean> = {
+            ...(data?.weeklyChecks || {}),
+            ...(data?.sPathChecks || {}),
+          };
+
+          // Synchronize any completed memorization days from weeklyHomework
+          if (data?.weeklyHomework?.completedPartsByDay && typeof data.weeklyHomework.completedPartsByDay === 'object') {
+            Object.entries(data.weeklyHomework.completedPartsByDay).forEach(([day, isDone]) => {
+              if (isDone) {
+                baseChecks[`memorization_${day}`] = true;
+              }
             });
           }
+
+          cacheWeeklyChecksLocally(cleanUid, cleanEmail, baseChecks);
+
+          callback({
+            checks: baseChecks,
+            weeklyNativeLessonsTarget: data?.weeklyNativeLessonsTarget,
+            weeklyStudyDaysTarget: data?.weeklyStudyDaysTarget,
+          });
         }
       },
       (err) => {
@@ -1678,9 +1733,33 @@ export async function saveStudentWeeklyChecksToFirestore(
     // 1. Direct write strictly to Firestore document users/{cleanUid}
     if (db && cleanUid) {
       const userRef = doc(db, 'users', cleanUid);
+
+      // Fetch existing checks first to guarantee no past checkmark is ever erased
+      let existingChecks: Record<string, boolean> = {};
+      try {
+        const snap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        if (snap && snap.exists()) {
+          const data = snap.data();
+          existingChecks = {
+            ...(data?.weeklyChecks || {}),
+            ...(data?.sPathChecks || {}),
+          };
+          if (data?.weeklyHomework?.completedPartsByDay) {
+            Object.entries(data.weeklyHomework.completedPartsByDay).forEach(([day, isDone]) => {
+              if (isDone) existingChecks[`memorization_${day}`] = true;
+            });
+          }
+        }
+      } catch {}
+
+      const mergedChecks: Record<string, boolean> = {
+        ...existingChecks,
+        ...sanitizedChecks,
+      };
+
       const payload: Record<string, any> = {
-        weeklyChecks: sanitizedChecks,
-        sPathChecks: sanitizedChecks,
+        weeklyChecks: mergedChecks,
+        sPathChecks: mergedChecks,
         updatedAt: new Date().toISOString(),
       };
       if (typeof weeklyNativeLessonsTarget === 'number') {
@@ -1691,6 +1770,32 @@ export async function saveStudentWeeklyChecksToFirestore(
       }
 
       await withFirestoreTimeout(setDoc(userRef, payload, { merge: true }), 3500, null);
+
+      // Ensure memorization checkmarks are also recorded in users/{cleanUid}/memorization/{day} subcollection
+      const memoPromises: Promise<any>[] = [];
+      Object.entries(mergedChecks).forEach(([key, isDone]) => {
+        if (key.startsWith('memorization_') && isDone) {
+          const day = key.replace('memorization_', '');
+          const memoDocRef = doc(db, 'users', cleanUid, 'memorization', day);
+          memoPromises.push(
+            setDoc(
+              memoDocRef,
+              {
+                day,
+                completed: true,
+                completedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            )
+          );
+        }
+      });
+      if (memoPromises.length > 0) {
+        await Promise.all(memoPromises).catch(() => {});
+      }
+
+      cacheWeeklyChecksLocally(cleanUid, cleanEmail, mergedChecks);
     }
 
     // 2. Mirror to backend server API for disk persistence & multi-device sync
@@ -1730,6 +1835,9 @@ export async function fetchStudentWeeklyChecksFromFirestore(
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
 
+  // Check localStorage cache first for fast 0ms hydration
+  const localCached = getCachedWeeklyChecks(cleanUid, cleanEmail);
+
   // 1. Try reading directly strictly from Firestore users/{cleanUid}
   if (db && cleanUid) {
     try {
@@ -1737,13 +1845,39 @@ export async function fetchStudentWeeklyChecksFromFirestore(
       const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
       if (userSnap && userSnap.exists()) {
         const data = userSnap.data();
-        if (data?.weeklyChecks || data?.sPathChecks) {
-          return {
-            checks: data.weeklyChecks || data.sPathChecks || {},
-            weeklyNativeLessonsTarget: data.weeklyNativeLessonsTarget,
-            weeklyStudyDaysTarget: data.weeklyStudyDaysTarget,
-          };
+        const mergedChecks: Record<string, boolean> = {
+          ...localCached,
+          ...(data?.weeklyChecks || {}),
+          ...(data?.sPathChecks || {}),
+        };
+
+        // If weeklyHomework has completed parts, merge them
+        if (data?.weeklyHomework?.completedPartsByDay && typeof data.weeklyHomework.completedPartsByDay === 'object') {
+          Object.entries(data.weeklyHomework.completedPartsByDay).forEach(([day, isDone]) => {
+            if (isDone) mergedChecks[`memorization_${day}`] = true;
+          });
         }
+
+        // Also check memorization subcollection under users/{cleanUid}/memorization
+        try {
+          const memoCol = collection(db, 'users', cleanUid, 'memorization');
+          const memoSnaps = await withFirestoreTimeout(getDocs(memoCol), 2000, null);
+          if (memoSnaps && !memoSnaps.empty) {
+            memoSnaps.forEach((d) => {
+              if (d.data()?.completed) {
+                mergedChecks[`memorization_${d.id}`] = true;
+              }
+            });
+          }
+        } catch {}
+
+        cacheWeeklyChecksLocally(cleanUid, cleanEmail, mergedChecks);
+
+        return {
+          checks: mergedChecks,
+          weeklyNativeLessonsTarget: data?.weeklyNativeLessonsTarget,
+          weeklyStudyDaysTarget: data?.weeklyStudyDaysTarget,
+        };
       }
     } catch (err) {
       console.warn('Notice fetching weeklyChecks from Firestore UID:', err);
@@ -1759,24 +1893,33 @@ export async function fetchStudentWeeklyChecksFromFirestore(
         const altSnap = await withFirestoreTimeout(getDoc(altRef), 2000, null);
         if (altSnap && altSnap.exists()) {
           const altData = altSnap.data();
-          if (altData?.weeklyChecks || altData?.sPathChecks) {
-            const result = {
-              checks: altData.weeklyChecks || altData.sPathChecks || {},
-              weeklyNativeLessonsTarget: altData.weeklyNativeLessonsTarget,
-              weeklyStudyDaysTarget: altData.weeklyStudyDaysTarget,
-            };
-            // Migrate to cleanUid
-            if (cleanUid) {
-              setDoc(doc(db, 'users', cleanUid), {
-                weeklyChecks: result.checks,
-                sPathChecks: result.checks,
-                weeklyNativeLessonsTarget: result.weeklyNativeLessonsTarget,
-                weeklyStudyDaysTarget: result.weeklyStudyDaysTarget,
-                updatedAt: new Date().toISOString(),
-              }, { merge: true }).catch(() => {});
-            }
-            return result;
+          const altChecks: Record<string, boolean> = {
+            ...localCached,
+            ...(altData?.weeklyChecks || {}),
+            ...(altData?.sPathChecks || {}),
+          };
+          if (altData?.weeklyHomework?.completedPartsByDay) {
+            Object.entries(altData.weeklyHomework.completedPartsByDay).forEach(([day, isDone]) => {
+              if (isDone) altChecks[`memorization_${day}`] = true;
+            });
           }
+          const result = {
+            checks: altChecks,
+            weeklyNativeLessonsTarget: altData.weeklyNativeLessonsTarget,
+            weeklyStudyDaysTarget: altData.weeklyStudyDaysTarget,
+          };
+          // Migrate to cleanUid
+          if (cleanUid) {
+            setDoc(doc(db, 'users', cleanUid), {
+              weeklyChecks: result.checks,
+              sPathChecks: result.checks,
+              weeklyNativeLessonsTarget: result.weeklyNativeLessonsTarget,
+              weeklyStudyDaysTarget: result.weeklyStudyDaysTarget,
+              updatedAt: new Date().toISOString(),
+            }, { merge: true }).catch(() => {});
+          }
+          cacheWeeklyChecksLocally(cleanUid, cleanEmail, result.checks);
+          return result;
         }
       } catch {}
     }
@@ -1790,8 +1933,10 @@ export async function fetchStudentWeeklyChecksFromFirestore(
       );
       if (res.ok) {
         const apiData = await res.json();
+        const apiChecks = { ...localCached, ...(apiData?.checks || {}) };
+        cacheWeeklyChecksLocally(cleanUid, cleanEmail, apiChecks);
         return {
-          checks: apiData?.checks || {},
+          checks: apiChecks,
           weeklyNativeLessonsTarget: apiData?.weeklyNativeLessonsTarget,
           weeklyStudyDaysTarget: apiData?.weeklyStudyDaysTarget,
         };
@@ -1799,7 +1944,7 @@ export async function fetchStudentWeeklyChecksFromFirestore(
     } catch {}
   }
 
-  return { checks: {} };
+  return { checks: localCached };
 }
 
 /**
