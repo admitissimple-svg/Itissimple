@@ -836,13 +836,19 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             videoId: vid,
             videoTitle: tit || defaultVideoTitle,
             url: embedUrl,
-          },
-        });
+            isRepeat: isRepeatVideoToday,
+            isRepeatVideo: isRepeatVideoToday,
+          } as any,
+          isRepeat: isRepeatVideoToday,
+          isRepeatVideo: isRepeatVideoToday,
+        } as any);
       } else {
-        onUpdateSPathCheck?.('video_day', selectedDay, true);
+        if (!isRepeatVideoToday) {
+          onUpdateSPathCheck?.('video_day', selectedDay, true);
+        }
       }
     }, 0);
-  }, [onBehavioralComplete, selectedDay, activeActivity?.id, defaultVideoTitle, embedUrl, onUpdateSPathCheck]);
+  }, [onBehavioralComplete, selectedDay, activeActivity?.id, defaultVideoTitle, embedUrl, isRepeatVideoToday, onUpdateSPathCheck]);
 
   const {
     iframeRef: videoIframeRef,

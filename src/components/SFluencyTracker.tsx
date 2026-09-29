@@ -239,7 +239,7 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
       return null;
     }
 
-    // 1. All week routines
+    // 1. All week routines (strictly scheduled study days, ignoring video repeat actions)
     let totalWeekActivities = 0;
     let completedWeekActivities = 0;
     let activitiesWithWords = 0;
@@ -247,9 +247,32 @@ export const SFluencyTracker: React.FC<SFluencyTrackerProps> = ({
 
     const uniqueWordsSet = new Set<string>();
 
+    const activeStudyDays =
+      userProfile?.weeklyStudyDays && userProfile.weeklyStudyDays.length > 0
+        ? userProfile.weeklyStudyDays
+        : DAYS_OF_WEEK;
+
     DAYS_OF_WEEK.forEach((dayKey) => {
+      // Strictly calculate based on unique daily completions for the scheduled day
+      if (!activeStudyDays.includes(dayKey)) {
+        return;
+      }
+
       const dayList = (routinesByDay && routinesByDay[dayKey]) || [];
       dayList.forEach((act) => {
+        // Ignore video repeat actions when calculating evolution
+        const isRepeatVideo =
+          act.isRepeatVideo ||
+          (act as any).repeatVideo ||
+          act.teacherVideos?.[0]?.playlistId === 'repeat_previous_video' ||
+          (act.teacherVideos?.[0] as any)?.isRepeatVideo ||
+          act.activityName?.toLowerCase().includes('repeat previous video') ||
+          act.activityName?.toLowerCase().includes('repetir vídeo anterior');
+
+        if (isRepeatVideo) {
+          return;
+        }
+
         totalWeekActivities += 1;
         if (act.completed) {
           completedWeekActivities += 1;

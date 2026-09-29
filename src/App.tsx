@@ -2080,11 +2080,26 @@ export default function App() {
       const checkKey = `${stepId}_${targetDay}`;
       const isAlreadyChecked = Boolean(weeklyChecks[checkKey]);
 
+      const isVideoRepeatAction = Boolean(
+        params.type === 'video' &&
+          (Boolean((params as any).isRepeat) ||
+            Boolean((params as any).isRepeatVideo) ||
+            Boolean((params.video as any)?.isRepeat) ||
+            Boolean((params.video as any)?.isRepeatVideo) ||
+            (params.video as any)?.playlistId === 'repeat_previous_video' ||
+            params.video?.videoTitle?.toLowerCase().includes('repeat previous video') ||
+            params.video?.videoTitle?.toLowerCase().includes('repetir vídeo anterior') ||
+            params.video?.videoTitle?.toLowerCase().includes('repetir video anterior'))
+      );
+
       // 1. Update S-Path (Gráfico S) in React state & direct Firestore users/{studentUID} persistence
-      setWeeklyChecks((prev) => {
-        if (prev[checkKey]) return prev;
-        return { ...prev, [checkKey]: true };
-      });
+      // S-Path ignores video repeat actions for evolution
+      if (!isVideoRepeatAction) {
+        setWeeklyChecks((prev) => {
+          if (prev[checkKey]) return prev;
+          return { ...prev, [checkKey]: true };
+        });
+      }
 
       const currentWeekNumber = Number(userProfile?.weeklyCycle) || 1;
       const targetDate = getDateForDayInCurrentWeek(targetDay);
@@ -2109,6 +2124,9 @@ export default function App() {
             title: params.type === 'video' ? params.video?.videoTitle : params.type === 'audio' ? params.track?.title : undefined,
             artist: params.track?.artist,
             url: params.video?.url || params.track?.url,
+            isRepeat: isVideoRepeatAction,
+            isRepeatVideo: isVideoRepeatAction,
+            isReview: isVideoRepeatAction,
           },
           email
         ).then((res) => {
@@ -2117,7 +2135,7 @@ export default function App() {
           }
         });
 
-        if (!isAlreadyChecked) {
+        if (!isAlreadyChecked && !isVideoRepeatAction) {
           saveStudentWeeklyChecksToFirestore(
             uid,
             { ...weeklyChecks, [checkKey]: true },

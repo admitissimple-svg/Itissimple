@@ -215,6 +215,12 @@ export interface StudentJournalEntry {
   details?: string;
   studentUid?: string;
   studentEmail?: string;
+  isRepeat?: boolean;
+  isRepeatVideo?: boolean;
+  repeatVideo?: boolean;
+  isReview?: boolean;
+  reviewedPastDay?: boolean;
+  playlistId?: string;
 }
 
 export interface UserProfile {

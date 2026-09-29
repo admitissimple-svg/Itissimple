@@ -371,6 +371,67 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     );
   };
 
+  // Helper to determine if a day's video is a repeat video action
+  const isDayVideoRepeatAction = useCallback(
+    (dayKey: DayOfWeek): boolean => {
+      // 1. Check routinesByDay for this day
+      const dayRoutines = routinesByDay?.[dayKey] || [];
+      for (const act of dayRoutines) {
+        if (!act) continue;
+        if (act.isRepeatVideo || (act as any).repeatVideo) return true;
+        const actName = (act.activityName || '').toLowerCase();
+        if (
+          actName.includes('repeat previous video') ||
+          actName.includes('repetir vídeo anterior') ||
+          actName.includes('repetir video anterior')
+        ) {
+          return true;
+        }
+        const tv = act.teacherVideos?.[0];
+        if (tv) {
+          if ((tv as any).isRepeatVideo) return true;
+          if (tv.playlistId === 'repeat_previous_video') return true;
+          const plTitle = (tv.playlistTitle || tv.title || '').toLowerCase();
+          if (
+            plTitle.includes('repeat previous video') ||
+            plTitle.includes('repetir vídeo anterior') ||
+            plTitle.includes('repetir video anterior')
+          ) {
+            return true;
+          }
+          if (
+            tv.instructions &&
+            (tv.instructions.toLowerCase().includes('repeated from') ||
+              tv.instructions.toLowerCase().includes('repetido de'))
+          ) {
+            return true;
+          }
+        }
+      }
+
+      // 2. Check userProfile persisted video or routines if available
+      const persistedRoutines = (userProfile as any)?.persistedRoutines?.[dayKey];
+      if (
+        persistedRoutines?.isRepeatVideo ||
+        persistedRoutines?.playlistId === 'repeat_previous_video'
+      ) {
+        return true;
+      }
+      const persistedVideo =
+        (userProfile as any)?.persistedVideos?.[dayKey] ||
+        (userProfile as any)?.teacherVideosByDay?.[dayKey];
+      if (
+        persistedVideo?.isRepeatVideo ||
+        persistedVideo?.playlistId === 'repeat_previous_video'
+      ) {
+        return true;
+      }
+
+      return false;
+    },
+    [routinesByDay, userProfile]
+  );
+
   // Check if an activity is completed: rendered with instant synchronization from weeklyChecks, homework progress, and studentJournal for persistent multi-device sync
   const isActivityCompleted = useCallback(
     (rowId: string, dayKey: DayOfWeek): boolean => {
@@ -378,6 +439,9 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
 
       // 1. Memorization Activity: Permanent Firestore persistence and multi-device sync
       if (rowId === 'memorization') {
+        // Strictly only scheduled study days count for memorization
+        if (!activeStudyDays.includes(dayKey)) return false;
+
         // Direct weeklyChecks checkmark
         if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
         // Direct homework completed parts by day
@@ -401,24 +465,50 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
       }
 
       // 2. Video of the Day: S-Path evolution tracker logic
-      // Calculates progress based strictly on unique daily completions for the scheduled day,
-      // ignoring video "repeat" or review events from previous days so it doesn't falsely mark past days as completed.
+      // Calculates progress strictly based on unique daily completions for the scheduled day,
+      // ignoring video repeat actions so repeat actions do not falsely advance evolution.
       if (rowId === 'video_day') {
-        // Check weeklyChecks state
-        if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
+        // Strictly only scheduled study days count
+        if (!activeStudyDays.includes(dayKey)) {
+          return false;
+        }
+
+        // If this scheduled day is configured as a repeat video action, ignore it for S-Path evolution
+        if (isDayVideoRepeatAction(dayKey)) {
+          return false;
+        }
 
         const currentWeek = userProfile?.weeklyCycle || 1;
 
-        // In studentJournal: verify unique completion strictly for this scheduled day
-        return activeJournal.some((entry) => {
+        // In studentJournal: verify unique non-repeat completion strictly for this scheduled day
+        const hasValidJournalVideo = activeJournal.some((entry) => {
           if (!entry) return false;
           const isVideo = entry.type === 'video' || (entry as any).type === 'video_day';
           if (!isVideo) return false;
 
-          // Ignore review events so past days are never falsely marked as completed
-          if ((entry as any).isReview || (entry as any).reviewedPastDay) return false;
+          // Ignore review and repeat events so video repeat actions are never counted towards evolution
+          if (
+            (entry as any).isReview ||
+            (entry as any).reviewedPastDay ||
+            (entry as any).isRepeat ||
+            (entry as any).isRepeatVideo ||
+            (entry as any).repeatVideo ||
+            (entry as any).action === 'repeat' ||
+            (entry as any).playlistId === 'repeat_previous_video'
+          ) {
+            return false;
+          }
 
-          // Strictly match the scheduled day for this routine item
+          const titleLower = (entry.title || '').toLowerCase();
+          if (
+            titleLower.includes('repeat previous video') ||
+            titleLower.includes('repetir vídeo anterior') ||
+            titleLower.includes('repetir video anterior')
+          ) {
+            return false;
+          }
+
+          // Strictly match the scheduled day for this routine item and current week
           if (entry.dayOfWeek && entry.dayOfWeek.toLowerCase() === dayKey.toLowerCase()) {
             if (entry.week === undefined || entry.week === currentWeek) {
               return true;
@@ -426,9 +516,22 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
           }
           return false;
         });
+
+        if (hasValidJournalVideo) return true;
+
+        // Check weeklyChecks state ONLY if NOT a repeat video
+        if (weeklyChecks && Boolean(weeklyChecks[checkKey])) {
+          return true;
+        }
+
+        return false;
       }
 
       // 3. Audio of the Day & Live Tutor Lessons
+      if (rowId === 'audio_day' && !activeStudyDays.includes(dayKey)) {
+        return false;
+      }
+
       if (weeklyChecks && Boolean(weeklyChecks[checkKey])) return true;
 
       const targetType = mapStepIdToJournalType(rowId);
@@ -448,12 +551,24 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
         return false;
       });
     },
-    [activeJournal, userProfile?.weeklyCycle, weeklyChecks, homework?.completedPartsByDay, studentUid, studentEmail]
+    [
+      activeJournal,
+      userProfile?.weeklyCycle,
+      weeklyChecks,
+      homework?.completedPartsByDay,
+      studentUid,
+      studentEmail,
+      activeStudyDays,
+      isDayVideoRepeatAction,
+    ]
   );
 
   const toggleCheck = (stepId: string, dayKey: DayOfWeek) => {
     // Only allow marking days configured in the student's study plan (tutor_live remains independent)
     if (stepId !== 'tutor_live' && !activeStudyDays.includes(dayKey)) return;
+
+    // S-Path ignores video repeat actions
+    if (stepId === 'video_day' && isDayVideoRepeatAction(dayKey)) return;
 
     const isCurrentlyChecked = isActivityCompleted(stepId, dayKey);
     const newChecked = !isCurrentlyChecked;
@@ -530,6 +645,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
   };
 
   // Count completed days per routine row strictly based on isActivityCompleted
+  // Daily habits (video, audio, memorization) strictly count unique daily completions for scheduled study days, ignoring video repeat actions
   const checkedCounts = useMemo(() => {
     const counts: Record<string, number> = {
       video_day: 0,
@@ -539,13 +655,17 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
     };
     WEEK_DAYS.forEach((d) => {
       ROUTINE_ROWS.forEach((row) => {
+        // Daily habits strictly count unique daily completions for the scheduled day
+        if (row.id !== 'tutor_live' && !activeStudyDays.includes(d.key)) {
+          return;
+        }
         if (isActivityCompleted(row.id, d.key)) {
           counts[row.id] = (counts[row.id] || 0) + 1;
         }
       });
     });
     return counts;
-  }, [isActivityCompleted]);
+  }, [isActivityCompleted, activeStudyDays]);
 
   const weeklyStudyDaysTarget =
     userProfile?.weeklyStudyDaysTarget && userProfile.weeklyStudyDaysTarget >= 1 && userProfile.weeklyStudyDaysTarget <= 7
