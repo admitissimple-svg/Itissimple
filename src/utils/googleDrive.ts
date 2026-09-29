@@ -105,41 +105,47 @@ export async function findExistingSessionNotesFile(
   folderId: string,
   fileName: string
 ): Promise<DriveFileResult | null> {
-  const query = `'${folderId}' in parents and name = '${escapeDriveQueryString(
-    fileName
-  )}' and trashed = false`;
+  if (!accessToken || !folderId || !fileName) return null;
+  try {
+    const query = `'${folderId}' in parents and name = '${escapeDriveQueryString(
+      fileName
+    )}' and trashed = false`;
 
-  const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
-    query
-  )}&fields=files(id,name,webViewLink)&pageSize=5`;
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+      query
+    )}&fields=files(id,name,webViewLink)&pageSize=5`;
 
-  const res = await fetch(searchUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-    },
-  });
+    const res = await fetch(searchUrl, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+      },
+    });
 
-  if (!res.ok) {
+    if (!res.ok) {
+      return null;
+    }
+
+    const data = await res.json();
+    if (data.files && data.files.length > 0) {
+      return {
+        id: data.files[0].id,
+        name: data.files[0].name,
+        webViewLink: data.files[0].webViewLink,
+      };
+    }
+
+    return null;
+  } catch (err) {
+    console.warn('findExistingSessionNotesFile caught error:', err);
     return null;
   }
-
-  const data = await res.json();
-  if (data.files && data.files.length > 0) {
-    return {
-      id: data.files[0].id,
-      name: data.files[0].name,
-      webViewLink: data.files[0].webViewLink,
-    };
-  }
-
-  return null;
 }
 
 /**
  * Generate standardized clean filename: `Session Notes - [Student Name] - [Date]`
  */
-export function formatSessionNotesFileName(studentName: string, sessionDate: string): string {
+export function formatSessionNotesFileName(studentName?: string, sessionDate?: string): string {
   const cleanName = (studentName || 'Student').trim().replace(/[\/\\?%*:|"<>]/g, '-');
   const cleanDate = (sessionDate || new Date().toISOString().split('T')[0]).trim();
   return `Session Notes - ${cleanName} - ${cleanDate}`;
@@ -151,22 +157,31 @@ export function formatSessionNotesFileName(studentName: string, sessionDate: str
  * 2. Checks if file already exists (by existingFileId or filename query)
  * 3. Updates existing file or creates new file
  */
-export async function syncSessionNotesToGoogleDrive(params: {
-  accessToken: string;
-  studentName: string;
-  sessionDate: string;
-  content: string;
+export async function syncSessionNotesToGoogleDrive(params?: {
+  accessToken?: string;
+  studentName?: string;
+  sessionDate?: string;
+  content?: string;
   existingFileId?: string;
 }): Promise<SyncSessionNotesResult> {
-  const { accessToken, studentName, sessionDate, content, existingFileId } = params;
-
-  if (!accessToken) {
+  if (!params || !params.accessToken) {
     return { success: false, error: 'No Google OAuth access token provided.' };
   }
+
+  const {
+    accessToken,
+    studentName = 'Student',
+    sessionDate = new Date().toISOString().split('T')[0],
+    content = '',
+    existingFileId,
+  } = params;
 
   try {
     // 1. Ensure folder exists
     const folder = await getOrCreateSessionNotesFolder(accessToken);
+    if (!folder || !folder.id) {
+      throw new Error('Could not access or create Google Drive session notes folder.');
+    }
     const fileName = formatSessionNotesFileName(studentName, sessionDate);
 
     // 2. Identify if target file already exists

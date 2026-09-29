@@ -278,6 +278,7 @@ export interface UserProfile {
 
 export interface StudentProfile {
   id: string;
+  uid?: string;
   name: string;
   email: string;
   studentEmail?: string;

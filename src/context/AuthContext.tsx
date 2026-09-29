@@ -507,10 +507,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
-export const useAuth = () => {
+export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    return {
+      firebaseUser: null,
+      currentAccount: null,
+      userProfile: null,
+      userRole: 'student',
+      isLoading: false,
+      error: null,
+      selectedRole: 'student',
+      setSelectedRole: () => {},
+      loginWithEmail: async () => ({ success: false, error: 'Auth context not available' }),
+      loginWithGoogle: async () => ({ success: false, error: 'Auth context not available' }),
+      logout: async () => {},
+      fetchFirestoreUser: async () => null,
+      googleOAuthToken: getGoogleOAuthToken(),
+      connectGoogleDrive: async () => {
+        try {
+          const token = await requestGoogleDriveAuth();
+          if (token) setGoogleOAuthToken(token);
+          return token;
+        } catch {
+          return null;
+        }
+      },
+    };
   }
   return context;
 };

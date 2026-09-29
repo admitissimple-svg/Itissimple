@@ -1,5 +1,33 @@
 @import "tailwindcss";
 
+/* Native Friend In-Session Notes Coaching Inline Tags */
+.inline-coaching-tag {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 6px !important;
+  padding: 1px 6px !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  line-height: 1.3 !important;
+  vertical-align: baseline !important;
+  margin: 0 4px !important;
+  user-select: none !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.inline-coaching-tag.correct-tag {
+  background-color: #ecfdf5 !important;
+  border: 1px solid #15803d !important;
+  color: #15803d !important;
+}
+
+.inline-coaching-tag.incorrect-tag {
+  background-color: #fff1f2 !important;
+  border: 1px solid #b91c1c !important;
+  color: #b91c1c !important;
+}
+
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
