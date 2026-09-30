@@ -193,6 +193,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [scheduleSuccess, setScheduleSuccess] = useState<boolean>(false);
   const [isClosing, setIsClosing] = useState<boolean>(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
   const userInteractedWithTimeRef = useRef<boolean>(false);
 
   // Explicitly reset submission and closing states when modal opens or closes
@@ -201,6 +202,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
       setIsSubmitting(false);
       setScheduleSuccess(false);
       setIsClosing(false);
+      setInlineError(null);
       userInteractedWithTimeRef.current = false;
     }
   }, [isOpen]);
@@ -409,11 +411,6 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     if (!isOpen || isSubmitting || scheduleSuccess || isClosing) return null;
     if (!selectedDate || !selectedStartTime || (!selectedTeacherObj.email && !effectiveTeacherUid)) return null;
 
-    // If slots are loaded and current slot is about to be auto-adjusted to an available slot, suppress premature flash
-    if (timeSlots.length > 0 && !timeSlots.includes(selectedStartTime)) return null;
-    const isAutoAdjusting = timeSlots.length > 0 && checkSlotIsBooked(selectedStartTime) && timeSlots.some((s) => !checkSlotIsBooked(s)) && !userInteractedWithTimeRef.current;
-    if (isAutoAdjusting) return null;
-
     const startIso = calculateStartDateTime();
     const endIso = calculateEndDateTime();
     if (!startIso || !endIso) return null;
@@ -435,7 +432,6 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     isClosing,
     selectedDate,
     selectedStartTime,
-    timeSlots,
     durationMinutes,
     selectedTeacherObj.email,
     effectiveTeacherUid,
@@ -458,10 +454,24 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
         setSelectedStartTime(timeSlots[0]);
       }
     }
-  }, [timeSlots, selectedDate, combinedLessons, selectedTeacherObj.email, effectiveTeacherUid, selectedStudentObj.email, effectiveStudentUid, isOpen, isSubmitting, scheduleSuccess, isClosing]);
+  }, [
+    timeSlots,
+    selectedDate,
+    durationMinutes,
+    combinedLessons,
+    selectedTeacherObj.email,
+    effectiveTeacherUid,
+    selectedStudentObj.email,
+    effectiveStudentUid,
+    isOpen,
+    isSubmitting,
+    scheduleSuccess,
+    isClosing,
+  ]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setInlineError(null);
 
     const startIso = calculateStartDateTime();
     const endIso = calculateEndDateTime();
@@ -479,7 +489,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     );
 
     if (definitiveConflict) {
-      alert(
+      setInlineError(
         isEn
           ? `Conflict Blocked: There is already a scheduled lesson at this time for this Native Friend or Student. Please choose another slot.`
           : `Bloqueio de Conflito: Já existe uma aula agendada neste horário para este Amigo Nativo ou Aluno. Por favor, selecione outro horário.`
@@ -488,7 +498,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     }
 
     if (!isDayAvailable) {
-      alert(
+      setInlineError(
         isEn
           ? `The Native Friend is not available on ${selectedDayKey}. Please select an open day.`
           : `O Amigo Nativo não atende às ${selectedDayKey === 'sunday' ? 'domingos' : selectedDayKey === 'saturday' ? 'sábados' : 'segundas-feiras'}. Por favor, escolha um dia disponível.`
@@ -497,7 +507,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     }
 
     if (!selectedStudentObj.email) {
-      alert(
+      setInlineError(
         isEn
           ? 'Error: Student email not identified. Please make sure you are signed in.'
           : 'Erro: Não foi possível identificar o e-mail do aluno. Verifique se está conectado à sua conta.'
@@ -508,6 +518,12 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     // Immediately flag as submitting & closing to prevent any intermediate visual conflict state
     setIsSubmitting(true);
     setIsClosing(true);
+
+    // Safety timeout to ensure isSubmitting never hangs indefinitely under any circumstances
+    const safetyTimer = setTimeout(() => {
+      setIsSubmitting(false);
+      setIsClosing(false);
+    }, 4500);
 
     try {
       await onSchedule({
@@ -526,10 +542,13 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
       setScheduleSuccess(true);
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Schedule error:', err);
+      setInlineError(err?.message || (isEn ? 'Failed to schedule lesson. Please try again.' : 'Erro ao agendar aula. Por favor, selecione outro horário.'));
       setIsClosing(false);
       setIsSubmitting(false);
+    } finally {
+      clearTimeout(safetyTimer);
     }
   };
 
@@ -694,7 +713,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
           )}
 
           {/* 🚨 CONFLICT ALERT BANNER (Rule 2) */}
-          {!isSubmitting && !scheduleSuccess && !isClosing && Boolean(currentConflict) && (
+          {!isSubmitting && !scheduleSuccess && !isClosing && (Boolean(currentConflict) || checkSlotIsBooked(selectedStartTime)) && (
             <div className="p-4 bg-rose-50 border-2 border-rose-400 rounded-2xl text-xs text-rose-950 space-y-1.5 animate-in fade-in">
               <div className="flex items-center gap-2 font-black text-rose-800">
                 <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
@@ -704,14 +723,22 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
               </div>
               <p className="text-[11px] leading-relaxed text-rose-900 font-medium">
                 {isEn
-                  ? `The Native Friend ${cleanTeacherName(selectedTeacherObj.name)} already has another lesson scheduled on this exact slot (${formatTimeInTimeZone(currentConflict!.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict!.endDateTime, activeTz)}${currentConflict!.studentName ? ` with ${currentConflict!.studentName}` : ''}). Double bookings are strictly blocked by system rules.`
-                  : `O Amigo Nativo ${cleanTeacherName(selectedTeacherObj.name)} já possui uma aula agendada exatamente neste mesmo horário (${formatTimeInTimeZone(currentConflict!.startDateTime, activeTz)} - ${formatTimeInTimeZone(currentConflict!.endDateTime, activeTz)}${currentConflict!.studentName ? ` com ${currentConflict!.studentName}` : ''}). O sistema bloqueia conflitos e não permite duas aulas no mesmo slot.`}
+                  ? `The Native Friend ${cleanTeacherName(selectedTeacherObj.name)} already has another lesson scheduled on this slot (${formatTimeSlot12h(selectedStartTime)}). Double bookings are strictly blocked by system rules.`
+                  : `O Amigo Nativo ${cleanTeacherName(selectedTeacherObj.name)} já possui uma aula agendada exatamente neste horário (${formatTimeSlot12h(selectedStartTime)}). O sistema bloqueia conflitos e não permite duas aulas no mesmo slot.`}
               </p>
               <p className="text-[11px] font-black text-rose-700">
                 {isEn
                   ? '👉 Please select another date or available 30-minute time slot to proceed.'
                   : '👉 Por favor, selecione outro horário disponível na grade de 30 minutos.'}
               </p>
+            </div>
+          )}
+
+          {/* Inline Error Banner if submit was blocked */}
+          {inlineError && (
+            <div className="p-3 bg-red-50 border border-red-300 rounded-xl text-xs text-red-900 flex items-start gap-2 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] font-semibold leading-relaxed">{inlineError}</p>
             </div>
           )}
 
@@ -806,9 +833,9 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
               <button
                 type="submit"
-                disabled={isSubmitting || scheduleSuccess || isClosing || Boolean(currentConflict)}
+                disabled={isSubmitting || scheduleSuccess || isClosing || Boolean(currentConflict) || checkSlotIsBooked(selectedStartTime)}
                 className={`px-6 py-2.5 rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-md ${
-                  currentConflict
+                  (currentConflict || checkSlotIsBooked(selectedStartTime))
                     ? 'bg-slate-300 text-slate-500 border border-slate-300 cursor-not-allowed shadow-none'
                     : (scheduleSuccess || isClosing)
                     ? 'bg-emerald-600 text-white shadow-none'
@@ -821,7 +848,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
                     ? (isEn ? 'Scheduling...' : 'Agendando...')
                     : (scheduleSuccess || isClosing)
                     ? (isEn ? 'Scheduled!' : 'Agendado!')
-                    : currentConflict
+                    : (currentConflict || checkSlotIsBooked(selectedStartTime))
                     ? (isEn ? 'Slot Unavailable (Already Booked)' : 'Horário Indisponível (Já Ocupado)')
                     : isEn ? 'Confirm & Schedule' : 'Confirmar Agendamento'}
                 </span>

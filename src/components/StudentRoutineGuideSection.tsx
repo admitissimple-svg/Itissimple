@@ -31,6 +31,9 @@ import {
   Loader2,
 } from 'lucide-react';
 import { StartNewWeekModal } from './StartNewWeekModal';
+import { StudentSpotifyCard } from './StudentSpotifyCard';
+import { StudentKeyWordsCard } from './StudentKeyWordsCard';
+import { StudentDailySentenceCard } from './StudentDailySentenceCard';
 import {
   DayOfWeek,
   Language,
@@ -2106,10 +2109,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
         </div>
       </div>
 
-      {/* 3. Media Row: YouTube Video Player (Left) + Spotify Teacher's Suggestion (Right) */}
+      {/* 3. Media & Practice Row: YouTube Video Player (Left) + 5 Key Words for this Moment (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* Left: YouTube Video Player */}
-        <div className="lg:col-span-7 bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-3 flex flex-col justify-between">
+        <div className="lg:col-span-6 bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-3 flex flex-col justify-between">
           <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2.5">
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-7 h-7 rounded-lg bg-red-600 text-white flex items-center justify-center shrink-0">
@@ -2179,759 +2182,62 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           </div>
         </div>
 
-        {/* Right: Teacher's Daily Listening Suggestion • Spotify */}
-        <div className="lg:col-span-5 bg-white rounded-3xl p-5 border border-[#1DB954]/30 shadow-xs space-y-3 flex flex-col justify-between">
-          {/* Card Header */}
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5 gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-[#1DB954] text-[#000035] flex items-center justify-center font-black shrink-0 shadow-xs">
-                <Headphones className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <h3 className="font-black text-xs text-[#000035] tracking-tight">
-                    {isEn
-                      ? "Teacher's Daily Listening • Spotify"
-                      : 'Sugestão Diária do Teacher • Spotify'}
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-[#1DB954]/15 text-emerald-800 border border-[#1DB954]/30">
-                    {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
-                  </span>
-                  {isAudioListenedToday && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-emerald-500/15 border border-emerald-500/40 text-emerald-800 shadow-2xs">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                      <span>{isEn ? 'Listened' : 'Ouvido'}</span>
-                    </span>
-                  )}
-                </div>
-                <p className="text-[10px] text-slate-500 font-medium">
-                  {isRestDay || !currentDayTrack
-                    ? (isEn
-                        ? `${getDayLabel(selectedDay, 'en')} • Rest Day • Relax & Recharge`
-                        : `${getDayLabel(selectedDay, 'pt')} • Dia de Descanso • Recarregue as energias`)
-                    : (isEn
-                        ? `${currentDayTrack.dayLabelEn} • Track ${currentStudyDayIndex + 1} of ${activeDaysInOrder.length} • Adm Itissimple`
-                        : `${currentDayTrack.dayLabelPt} • Faixa ${currentStudyDayIndex + 1} de ${activeDaysInOrder.length} • Adm Itissimple`)}
-                </p>
-              </div>
-            </div>
-
-            {/* Mode switch */}
-            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[10px]">
-              <button
-                type="button"
-                onClick={() => setSpotifyPlayerMode('app')}
-                className={`px-2 py-0.5 rounded-md font-bold transition cursor-pointer ${
-                  spotifyPlayerMode === 'app'
-                    ? 'bg-white text-[#000035] shadow-2xs'
-                    : 'text-slate-500 hover:text-[#000035]'
-                }`}
-              >
-                {isEn ? 'App Player' : 'No App'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSpotifyPlayerMode('web')}
-                className={`px-2 py-0.5 rounded-md font-bold transition cursor-pointer ${
-                  spotifyPlayerMode === 'web'
-                    ? 'bg-white text-[#000035] shadow-2xs'
-                    : 'text-slate-500 hover:text-[#000035]'
-                }`}
-              >
-                {isEn ? 'Spotify Web' : 'Spotify'}
-              </button>
-            </div>
-          </div>
-
-          {/* Subtitle / Playlist tag + View toggle */}
-          <div className="flex items-center justify-between gap-2 text-xs flex-wrap">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 shrink-0">
-                It's simple
-              </span>
-              <span className="text-[11px] font-bold text-slate-700 truncate">
-                {levelPlaylistConfig.playlistTitle}
-              </span>
-            </div>
-
-            {spotifyPlayerMode === 'app' ? (
-              <div className="flex items-center gap-1 text-[10px]">
-                <span className="px-2 py-0.5 rounded font-bold bg-emerald-600 text-white shadow-2xs">
-                  {isEn ? 'Song of the Day' : 'Música de Hoje'}
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <a
-                  href={effectiveDirectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-1 shrink-0"
-                  title={isEn ? 'Open song on Spotify' : 'Abrir música no Spotify'}
-                >
-                  <span>{isEn ? 'Open in Spotify' : 'Abrir no Spotify'}</span>
-                  <ExternalLink className="w-2.5 h-2.5" />
-                </a>
-                <a
-                  href={levelPlaylistConfig.playlistUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[10px] font-bold text-slate-500 hover:text-emerald-700 flex items-center gap-1 shrink-0"
-                  title={isEn ? 'Open complete playlist on Spotify' : 'Abrir playlist completa no Spotify'}
-                >
-                  <span>{isEn ? 'Playlist' : 'Playlist'}</span>
-                  <ExternalLink className="w-2.5 h-2.5" />
-                </a>
-              </div>
-            )}
-          </div>
-
-          {/* Spotify Item Card or Embed */}
-          {isRestDay || !currentDayTrack ? (
-            <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 flex flex-col items-center justify-center text-center space-y-2 py-8 my-auto">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-2xs">
-                <Music className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div className="space-y-0.5">
-                <h4 className="text-xs font-black text-[#000035]">
-                  {isEn ? 'Rest Day' : 'Dia de Descanso'}
-                </h4>
-                <p className="text-[11px] text-slate-500 max-w-xs leading-relaxed">
-                  {isEn
-                    ? 'No Spotify listening scheduled for today according to your weekly study plan. Take time to rest and consolidate what you learned!'
-                    : 'Nenhuma música do Spotify programada para hoje de acordo com seu plano de estudos. Aproveite para descansar e consolidar o aprendizado!'}
-                </p>
-              </div>
-              <div className="pt-1">
-                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200/60 px-2.5 py-1 rounded-full">
-                  {isEn
-                    ? `Study Plan: ${activeDaysInOrder.length} days/week`
-                    : `Plano de estudos: ${activeDaysInOrder.length} dias/semana`}
-                </span>
-              </div>
-            </div>
-          ) : spotifyPlayerMode === 'app' ? (
-            <div className="space-y-1.5" onClick={() => triggerAudioCompletion()}>
-              <div className="rounded-2xl overflow-hidden border border-[#1DB954]/40 shadow-xs h-[152px] bg-black">
-                <iframe
-                  src={sanitizedEmbedUrl}
-                  width="100%"
-                  height="152"
-                  frameBorder="0"
-                  allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                  loading="lazy"
-                  title="Spotify Daily Track Player"
-                />
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
-                <span className="font-semibold truncate">
-                  🎵 {effectiveTrackTitle} • {effectiveArtist}
-                </span>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {teacherOverride && (
-                    <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300 flex items-center gap-0.5">
-                      <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
-                      <span>{isEn ? 'Teacher Pick' : 'Recomendação'}</span>
-                    </span>
-                  )}
-                  <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                    {isEn
-                      ? `Track ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`
-                      : `Faixa ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`}
-                  </span>
-                  <a
-                    href={effectiveDirectUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] font-extrabold text-[#1DB954] hover:underline flex items-center gap-0.5"
-                  >
-                    <span>{isEn ? 'Open' : 'Abrir'}</span>
-                    <ExternalLink className="w-2.5 h-2.5" />
-                  </a>
-                </div>
-              </div>
-
-              {teacherOverride?.instructions && (
-                <div className="p-2 rounded-xl bg-emerald-50/90 border border-emerald-300 text-xs text-emerald-950 flex items-start gap-2">
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                  <div className="text-[11px] leading-relaxed">
-                    <span className="font-bold text-emerald-900 mr-1">
-                      {teacherOverride.teacherName ? `${teacherOverride.teacherName}:` : (isEn ? 'Teacher Note:' : 'Dica do Professor:')}
-                    </span>
-                    <span>{teacherOverride.instructions}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50/60 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                {effectiveCoverUrl ? (
-                  <img
-                    src={effectiveCoverUrl}
-                    alt={effectiveTrackTitle}
-                    className="w-10 h-10 rounded-xl object-cover shrink-0 shadow-xs border border-emerald-300"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="w-10 h-10 rounded-xl bg-[#1DB954] text-[#000035] flex items-center justify-center shrink-0 shadow-xs">
-                    <Music className="w-5 h-5" />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    {teacherOverride ? (
-                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-600 text-white uppercase flex items-center gap-0.5">
-                        <Sparkles className="w-2.5 h-2.5" />
-                        <span>{isEn ? 'Teacher Pick' : 'Recomendação'}</span>
-                      </span>
-                    ) : (
-                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-200 text-emerald-900 uppercase">
-                        {isEn ? levelPlaylistConfig.levelLabelEn : levelPlaylistConfig.levelLabelPt}
-                      </span>
-                    )}
-                    <span className="text-[9px] text-emerald-700 font-semibold">
-                      {isEn
-                        ? `Track ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`
-                        : `Faixa ${currentStudyDayIndex + 1}/${activeDaysInOrder.length}`}
-                    </span>
-                  </div>
-                  <h4 className="text-xs font-black text-[#000035] truncate mt-0.5">
-                    {effectiveTrackTitle}
-                  </h4>
-                  <p className="text-[10px] text-emerald-800 font-semibold truncate">
-                    {effectiveArtist}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1.5 shrink-0">
-                <a
-                  href={effectiveDirectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => triggerAudioCompletion()}
-                  className="px-3 py-1.5 bg-[#1DB954] hover:bg-[#1ed760] text-[#000035] rounded-xl text-[11px] font-extrabold flex items-center gap-1 transition shadow-xs cursor-pointer active:scale-95"
-                  title={isEn ? 'Play on Spotify & automatically register completion' : 'Ouvir no Spotify e registrar conclusão automaticamente'}
-                >
-                  <span>{isEn ? 'Play Track' : 'Tocar Faixa'}</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-                <a
-                  href={levelPlaylistConfig.playlistUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2 py-0.5 text-center text-[10px] font-bold text-emerald-800 hover:underline"
-                >
-                  {isEn ? 'Open Playlist' : 'Ver Playlist'}
-                </a>
-              </div>
-
-              {/* Native Friend / Teacher Live Recommendations on Today's Song */}
-              {activeNativeFriendFeedback && (activeNativeFriendFeedback.comment || activeNativeFriendFeedback.recommendation) && (
-                <div className="mt-3 p-3 rounded-2xl bg-emerald-50/90 border border-emerald-300/80 text-xs space-y-1.5 animate-in fade-in">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 font-black text-[#000035] text-[11px]">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      <span>
-                        {isEn ? 'Native Friend Note for Today’s Song:' : 'Dica do seu Amigo Nativo para esta música:'}
-                      </span>
-                    </div>
-                    {activeNativeFriendFeedback.teacherName && (
-                      <span className="text-[10px] text-emerald-800 font-bold bg-emerald-200/60 px-2 py-0.5 rounded-md">
-                        {activeNativeFriendFeedback.teacherName}
-                      </span>
-                    )}
-                  </div>
-                  {activeNativeFriendFeedback.comment && (
-                    <p className="text-slate-800 text-[11px] leading-relaxed">
-                      {activeNativeFriendFeedback.comment}
-                    </p>
-                  )}
-                  {activeNativeFriendFeedback.recommendation && (
-                    <p className="text-emerald-950 font-bold text-[11px]">
-                      💡 {activeNativeFriendFeedback.recommendation}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+        {/* Right: 5 Key Words for this Moment */}
+        <div className="lg:col-span-6">
+          <StudentKeyWordsCard
+            isEn={isEn}
+            words={words}
+            wordDefinitions={wordDefinitions}
+            wordsSaveFeedback={wordsSaveFeedback}
+            handleWordChange={handleWordChange}
+            handleSaveWords={handleSaveWords}
+            speakText={speakText}
+          />
         </div>
       </div>
 
-      {/* 4. Practice & Learning Row: 5 Key Words (Left) + Sentence of the Day (Right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-        {/* Left: 5 Key Words for this Moment */}
-        <div className="lg:col-span-6 bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-4 flex flex-col justify-between">
-          <div>
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2.5">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-[#000035] text-white flex items-center justify-center shrink-0">
-                  <BookOpen className="w-4 h-4 text-[#9AB4FF]" />
-                </div>
-                <h3 className="font-black text-xs text-[#000035] tracking-tight">
-                  {isEn ? '5 Key Words for this Moment' : '5 Palavras-Chave para este Momento'}
-                </h3>
-              </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#062863] border border-[#9AB4FF]/40">
-                {words.filter((w) => w.trim().length > 0).length}/5 {isEn ? 'recorded' : 'anotadas'}
-              </span>
-            </div>
+      {/* 4. Daily Wrap-up: Sentence of the Day (Top) + Teacher's Daily Listening • Spotify (Bottom) */}
+      <div className="bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-4">
+        <StudentDailySentenceCard
+          isEn={isEn}
+          reminderTime={reminderTime}
+          displayRoutineWords={displayRoutineWords}
+          matchedSentenceWords={matchedSentenceWords}
+          sentenceInput={sentenceInput}
+          sentenceSavedSuccess={sentenceSavedSuccess}
+          isCheckingSentence={isCheckingSentence}
+          sentenceEvaluation={sentenceEvaluation}
+          onOpenJournalModal={onOpenJournalModal}
+          onTest30MinReminder={onTest30MinReminder}
+          setSentenceInput={setSentenceInput}
+          setSentenceEvaluation={setSentenceEvaluation}
+          handleApplySentenceCorrection={handleApplySentenceCorrection}
+          handleCheckGrammar={handleCheckGrammar}
+          handleSaveSentence={handleSaveSentence}
+          speakText={speakText}
+        />
 
-            <p className="text-xs text-[#607EC9] mt-2 leading-relaxed">
-              {isEn
-                ? 'Record 5 English words or phrases you heard in the video or will use during this everyday moment.'
-                : 'Anote 5 palavras ou expressões em inglês que você ouviu no vídeo ou usará durante este momento diário.'}
-            </p>
-
-            {/* 5 Input Fields */}
-            <form onSubmit={handleSaveWords} className="space-y-2 mt-3">
-              {words.map((w, idx) => {
-                const cleanWord = w.trim();
-                const def = cleanWord
-                  ? wordDefinitions[idx] || getInstantOrCachedWord(cleanWord)
-                  : null;
-
-                return (
-                  <div
-                    key={idx}
-                    className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-50 border border-slate-200 focus-within:border-[#1C4C96] focus-within:ring-1 focus-within:ring-[#1C4C96] transition"
-                  >
-                    <span className="w-6 h-6 rounded-lg bg-[#000035] text-[#9AB4FF] text-[10px] font-black flex items-center justify-center shrink-0">
-                      {idx + 1}
-                    </span>
-
-                    {/* Word Input - reduced width */}
-                    <input
-                      type="text"
-                      value={w}
-                      onChange={(e) => handleWordChange(idx, e.target.value)}
-                      placeholder={
-                        isEn
-                          ? `Word ${idx + 1}`
-                          : `Palavra ${idx + 1}`
-                      }
-                      className="w-24 sm:w-32 md:w-36 shrink-0 text-xs font-bold text-[#000035] bg-transparent focus:outline-none placeholder:text-slate-400"
-                    />
-
-                    {/* Subtle divider */}
-                    <div className="w-px h-4 bg-slate-300/80 shrink-0" />
-
-                    {/* English Description from the Free Dictionary API */}
-                    {cleanWord && def ? (
-                      <div
-                        className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden"
-                        title={
-                          def.notFound
-                            ? (isEn ? 'Word not found in the official dictionary.' : 'Palavra não localizada no dicionário oficial.')
-                            : def.definitionEn
-                            ? `${def.partOfSpeech ? `[${def.partOfSpeech}] ` : ''}${def.definitionEn}${
-                                def.exampleSentenceEn ? ` — e.g. "${def.exampleSentenceEn}"` : ''
-                              }`
-                            : undefined
-                        }
-                      >
-                        {def.notFound ? (
-                          <span className="text-xs text-amber-600 font-medium italic truncate flex items-center gap-1">
-                            <span className="text-xs">⚠️</span>
-                            <span>{isEn ? 'Word not found in official dictionary.' : 'Palavra não localizada no dicionário oficial.'}</span>
-                          </span>
-                        ) : def.definitionEn ? (
-                          <>
-                            {def.partOfSpeech && (
-                              <span className="text-[9px] font-bold text-[#1C4C96] bg-[#9AB4FF]/20 border border-[#9AB4FF]/40 px-1 py-0.2 rounded uppercase tracking-wider shrink-0 select-none">
-                                {def.partOfSpeech.split('/')[0].trim()}
-                              </span>
-                            )}
-                            <span className="text-xs text-slate-700 truncate font-normal leading-tight">
-                              {def.definitionEn}
-                            </span>
-                            {def.exampleSentenceEn && (
-                              <span className="text-[11px] text-slate-500 italic truncate font-normal hidden md:inline">
-                                — "{def.exampleSentenceEn}"
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className="text-[11px] text-slate-400 italic truncate select-none">
-                            {isEn ? 'Consulting official dictionary...' : 'Consultando dicionário oficial...'}
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="flex-1 min-w-0 flex items-center overflow-hidden">
-                        <span className="text-[11px] text-slate-400 italic truncate select-none">
-                          {isEn ? 'English definition from official dictionary...' : 'Definição oficial em inglês...'}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Audio pronunciation & completion mark */}
-                    <div className="flex items-center gap-1 shrink-0 ml-auto">
-                      {cleanWord.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => speakText(cleanWord)}
-                          className="p-1 text-[#1C4C96] hover:bg-[#9AB4FF]/20 rounded-lg transition cursor-pointer shrink-0"
-                          title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
-                        >
-                          <Volume2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-
-                      {cleanWord.length > 0 && (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mr-1" />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </form>
-          </div>
-
-          {/* Footer Actions */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-3 border-t border-[#9AB4FF]/30">
-            <div>
-              {wordsSaveFeedback && (
-                <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" />
-                  {isEn ? '5 Words saved successfully!' : '5 Palavras salvas com sucesso!'}
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleSaveWords}
-                className="px-4 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-[11px] font-black flex items-center gap-1.5 transition cursor-pointer shadow-2xs border border-[#9AB4FF]/40"
-              >
-                <Save className="w-3 h-3" />
-                <span>{isEn ? 'Save 5 Words' : 'Salvar 5 Palavras'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Right: Sentence of the Day (Daily Wrap-up) */}
-        <div className="lg:col-span-6 bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-4 flex flex-col justify-between">
-          <div>
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#9AB4FF]/30 pb-2.5">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-[#9AB4FF]/20 text-[#062863] flex items-center justify-center shrink-0 border border-[#9AB4FF]/40">
-                  <PenTool className="w-4 h-4 text-[#1C4C96]" />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <h3 className="font-black text-xs text-[#000035] tracking-tight">
-                    {isEn ? 'Sentence of the Day' : 'Frase do Dia'}
-                  </h3>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#062863] border border-[#9AB4FF]/40">
-                    {isEn ? 'Daily Wrap-up' : 'Encerramento'}
-                  </span>
-                </div>
-              </div>
-
-              {onOpenJournalModal && (
-                <button
-                  type="button"
-                  onClick={onOpenJournalModal}
-                  className="px-2.5 py-1 bg-[#062863] hover:bg-[#000035] text-white border border-[#1C4C96] rounded-xl text-[10px] font-bold flex items-center gap-1 transition cursor-pointer self-start sm:self-auto shadow-xs"
-                  title={isEn ? 'View saved sentences & journal' : 'Ver diário de frases salvas'}
-                >
-                  <Sparkles className="w-3 h-3 text-[#F4CA54]" />
-                  <span>{isEn ? 'View Journal' : 'Ver Diário'}</span>
-                </button>
-              )}
-
-              {onTest30MinReminder && (
-                <button
-                  type="button"
-                  onClick={onTest30MinReminder}
-                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-[10px] font-bold flex items-center gap-1 transition cursor-pointer self-start sm:self-auto"
-                >
-                  <Clock className="w-3 h-3 text-amber-600" />
-                  <span>
-                    {isEn ? `Test 30-min reminder (${reminderTime})` : `Testar lembrete (${reminderTime})`}
-                  </span>
-                </button>
-              )}
-            </div>
-
-            <p className="text-xs text-[#607EC9] mt-2 leading-relaxed">
-              {isEn
-                ? 'Create a meaningful English sentence connecting your routine moments and the words you recorded today.'
-                : 'Crie uma frase em inglês conectando os momentos da sua rotina e as palavras que você registrou hoje.'}
-            </p>
-
-            {/* Routine Words Chips */}
-            <div className="mt-3 p-2.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
-              <span className="text-[10px] font-bold text-[#607EC9] block">
-                {isEn ? "Today's Routine Words to include:" : 'Palavras da rotina de hoje para incluir:'}{' '}
-                <span className="text-[#000035] font-black">
-                  ({matchedSentenceWords.length}/{displayRoutineWords.length} used)
-                </span>
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {displayRoutineWords.length === 0 ? (
-                  <span className="text-[11px] text-slate-400 italic">
-                    {isEn
-                      ? 'No routine words recorded yet. Type your 5 keywords on the left panel!'
-                      : 'Nenhuma palavra registrada ainda. Digite suas 5 palavras-chave no painel ao lado!'}
-                  </span>
-                ) : (
-                  displayRoutineWords.map((word) => {
-                    const isUsed = (sentenceInput || '')
-                      .toLowerCase()
-                      .includes(word.toLowerCase());
-                    return (
-                      <button
-                        key={word}
-                        type="button"
-                        onClick={() => {
-                          setSentenceInput((prev) => {
-                            const trimmed = prev.trim();
-                            return trimmed ? `${trimmed} ${word}` : word;
-                          });
-                          if (sentenceEvaluation) setSentenceEvaluation(null);
-                        }}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition cursor-pointer ${
-                          isUsed
-                            ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                            : 'bg-white text-[#062863] border-[#9AB4FF]/50 hover:border-[#1C4C96]'
-                        }`}
-                        title={isEn ? 'Click to insert word' : 'Clique para inserir a palavra'}
-                      >
-                        {word}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* Sentence Textarea */}
-            <form onSubmit={handleSaveSentence} className="mt-3">
-              <textarea
-                value={sentenceInput}
-                onChange={(e) => {
-                  setSentenceInput(e.target.value);
-                  if (sentenceEvaluation) setSentenceEvaluation(null);
-                }}
-                rows={3}
-                placeholder={
-                  isEn
-                    ? 'Your Daily English Sentence: e.g., Today I had my morning coffee at 7:30, caught the bus, and worked on my English goals...'
-                    : 'Sua Frase do Dia em Inglês: ex: Today I had my morning coffee at 7:30, caught the bus, and worked on my English goals...'
-                }
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-[#000035] focus:outline-none focus:ring-1 focus:ring-[#1C4C96] placeholder:text-slate-400 placeholder:font-normal"
-              />
-            </form>
-
-            {/* AI Grammar Analysis Result Card */}
-            {sentenceEvaluation && (
-              <div className="mt-3 animate-in fade-in duration-200">
-                {sentenceEvaluation.hasAnyError ||
-                sentenceEvaluation.isCorrect === false ||
-                (sentenceEvaluation.correctedSentence &&
-                  sentenceEvaluation.correctedSentence.trim().replace(/[.!?]+$/, '') !==
-                    sentenceInput.trim().replace(/[.!?]+$/, '')) ? (
-                  <div className="p-3.5 sm:p-4 bg-gradient-to-br from-[#FFF8F6] to-white rounded-2xl border-2 border-rose-200 shadow-xs space-y-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200">
-                          <AlertTriangle className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <h4 className="text-xs sm:text-sm font-extrabold text-rose-900">
-                              {isEn ? 'AI Grammar Analysis & Feedback' : 'Correção Gramatical da IA'}
-                            </h4>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-                              {isEn ? 'Improvement' : 'Melhoria'}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-rose-700 mt-0.5">
-                            {isEn
-                              ? 'Suggested adjustments to make your sentence natural and grammatically accurate:'
-                              : 'Ajustes sugeridos para tornar sua frase natural e gramaticalmente correta:'}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {sentenceEvaluation.correctedSentence && (
-                          <button
-                            type="button"
-                            onClick={handleApplySentenceCorrection}
-                            className="px-2.5 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white text-[11px] font-bold rounded-xl transition flex items-center gap-1.5 shadow-xs cursor-pointer"
-                            title={isEn ? 'Replace textarea with this corrected version' : 'Usar versão corrigida no campo'}
-                          >
-                            <Wand2 className="w-3 h-3 text-[#F4CA54]" />
-                            <span>{isEn ? 'Apply & Use' : 'Aplicar Frase'}</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setSentenceEvaluation(null)}
-                          className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
-                          title={isEn ? 'Dismiss' : 'Fechar'}
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {sentenceEvaluation.correctedSentence && (
-                      <div className="p-3 bg-white rounded-xl border border-rose-200 space-y-1.5 shadow-2xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-rose-900 uppercase tracking-wider block">
-                            {isEn ? '✨ Suggested Natural Version:' : '✨ Versão Natural Sugerida:'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => speakText(sentenceEvaluation.correctedSentence || '')}
-                            className="text-[#1C4C96] hover:text-[#062863] text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                            title={isEn ? 'Listen with audio' : 'Ouvir pronúncia'}
-                          >
-                            <Volume2 className="w-3.5 h-3.5" />
-                            <span>{isEn ? 'Listen' : 'Ouvir'}</span>
-                          </button>
-                        </div>
-                        <p className="text-xs sm:text-sm font-bold text-[#000035] leading-relaxed">
-                          "{sentenceEvaluation.correctedSentence}"
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Word-level highlights */}
-                    {sentenceEvaluation.wordFeedbacks && sentenceEvaluation.wordFeedbacks.some((wf) => wf.hasError) && (
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-bold text-slate-600 block">
-                          {isEn ? 'Target adjustments:' : 'Ajustes identificados:'}
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {sentenceEvaluation.wordFeedbacks.filter((wf) => wf.hasError).map((wf, i) => (
-                            <span
-                              key={i}
-                              className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white border border-rose-300 text-rose-900 font-bold"
-                              title={isEn ? wf.explanationEn : wf.explanationPt}
-                            >
-                              <span className="line-through text-rose-400">{wf.original}</span> → <span className="text-emerald-700">{wf.corrected}</span>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Constructive explanation */}
-                    {(sentenceEvaluation.sentenceFeedback?.explanationPt ||
-                      sentenceEvaluation.sentenceFeedback?.explanationEn ||
-                      sentenceEvaluation.explanation ||
-                      sentenceEvaluation.overallSummaryPt ||
-                      sentenceEvaluation.overallSummaryEn) && (
-                      <p className="text-[11px] text-rose-900 bg-rose-50/80 p-2.5 rounded-xl leading-relaxed border border-rose-100">
-                        💡 <span className="font-semibold">{isEn ? 'Explanation:' : 'Explicação:'}</span>{' '}
-                        {isEn
-                          ? (sentenceEvaluation.sentenceFeedback?.explanationEn || sentenceEvaluation.overallSummaryEn || sentenceEvaluation.explanation)
-                          : (sentenceEvaluation.sentenceFeedback?.explanationPt || sentenceEvaluation.overallSummaryPt || sentenceEvaluation.explanation)}
-                      </p>
-                    )}
-
-                    {/* Target word feedback */}
-                    {sentenceEvaluation.targetWordFeedback && (
-                      <p className="text-[11px] text-[#062863] bg-[#9AB4FF]/10 p-2.5 rounded-xl leading-relaxed border border-[#607EC9]/25">
-                        🎯 <span className="font-semibold">{isEn ? 'Vocabulary Requirement:' : 'Vocabulário da Rotina:'}</span>{' '}
-                        {sentenceEvaluation.targetWordFeedback}
-                      </p>
-                    )}
-
-                    {/* Pedagogical level tip */}
-                    {(sentenceEvaluation.levelTipsPt || sentenceEvaluation.levelTipsEn) && (
-                      <div className="text-[10px] text-[#062863] bg-[#9AB4FF]/15 p-2 rounded-xl border border-[#607EC9]/30 flex items-center gap-1.5">
-                        <Sparkles className="w-3 h-3 text-[#1C4C96] shrink-0" />
-                        <span>{isEn ? sentenceEvaluation.levelTipsEn : sentenceEvaluation.levelTipsPt}</span>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 text-emerald-900 flex items-center justify-between gap-2 text-xs shadow-2xs">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <div>
-                        <span className="font-bold block">
-                          {isEn
-                            ? '✨ Outstanding! Your sentence is grammatically correct and natural.'
-                            : '✨ Excelente! Sua frase está gramaticalmente correta e natural.'}
-                        </span>
-                        {(sentenceEvaluation.targetWordFeedback || sentenceEvaluation.overallSummaryPt || sentenceEvaluation.overallSummaryEn) && (
-                          <span className="text-[11px] text-emerald-700 block mt-0.5">
-                            {sentenceEvaluation.targetWordFeedback || (isEn ? sentenceEvaluation.overallSummaryEn : sentenceEvaluation.overallSummaryPt)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSentenceEvaluation(null)}
-                      className="text-emerald-700 hover:text-emerald-900 text-[10px] font-bold px-2 py-1 rounded-md hover:bg-emerald-100 transition cursor-pointer"
-                    >
-                      OK
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Footer Actions */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-3 border-t border-[#9AB4FF]/30">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-[#607EC9]">
-                {sentenceInput.trim().split(/\s+/).filter(Boolean).length}{' '}
-                {isEn ? 'words' : 'palavras'}
-              </span>
-              {sentenceSavedSuccess && (
-                <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" />
-                  {isEn ? 'Saved to your journal!' : 'Salvo no seu diário!'}
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCheckGrammar}
-                disabled={!sentenceInput.trim() || isCheckingSentence}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-[#000035] rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer border border-slate-300 disabled:opacity-50"
-              >
-                {isCheckingSentence ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1C4C96]" />
-                    <span>{isEn ? 'Checking...' : 'Verificando...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="w-3.5 h-3.5 text-[#1C4C96]" />
-                    <span>{isEn ? 'Check Grammar' : 'Verificar Gramática'}</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleSaveSentence}
-                disabled={!sentenceInput.trim() || isCheckingSentence}
-                className="px-4 py-1.5 bg-[#1C4C96] hover:bg-[#062863] text-white rounded-xl text-[11px] font-black flex items-center gap-1.5 transition cursor-pointer shadow-2xs border border-[#9AB4FF]/40 disabled:opacity-50"
-              >
-                <Save className="w-3 h-3" />
-                <span>{isEn ? 'Save Sentence of the Day' : 'Salvar Frase do Dia'}</span>
-              </button>
-            </div>
-          </div>
+        <div className="pt-2">
+          <StudentSpotifyCard
+            isEn={isEn}
+            selectedDay={selectedDay}
+            levelPlaylistConfig={levelPlaylistConfig}
+            isAudioListenedToday={isAudioListenedToday}
+            isRestDay={isRestDay}
+            currentDayTrack={currentDayTrack}
+            currentStudyDayIndex={currentStudyDayIndex}
+            activeDaysInOrder={activeDaysInOrder}
+            spotifyPlayerMode={spotifyPlayerMode}
+            setSpotifyPlayerMode={setSpotifyPlayerMode}
+            sanitizedEmbedUrl={sanitizedEmbedUrl}
+            effectiveDirectUrl={effectiveDirectUrl}
+            effectiveTrackTitle={effectiveTrackTitle}
+            effectiveArtist={effectiveArtist}
+            effectiveCoverUrl={effectiveCoverUrl}
+            teacherOverride={teacherOverride}
+            activeNativeFriendFeedback={activeNativeFriendFeedback}
+            triggerAudioCompletion={triggerAudioCompletion}
+          />
         </div>
       </div>
 

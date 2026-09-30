@@ -793,56 +793,58 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
 
     // 1. Root lessons collection
     const lessonRef = doc(db, 'lessons', sanitizedLesson.id);
-    await withFirestoreTimeout(setDoc(lessonRef, sanitizedLesson, { merge: true }), 3500, null);
+    await withFirestoreTimeout(setDoc(lessonRef, sanitizedLesson, { merge: true }), 2500, null);
 
-    // 2. Student user subcollections across canonical student doc IDs
+    // 2. Student user subcollections across canonical student doc IDs (concurrent execution)
     const studentDocIds = getUserDocIds(studentUid, cleanStudentEmail);
-    for (const sDocId of studentDocIds) {
+    const studentPromises = studentDocIds.map(async (sDocId) => {
       try {
         const userLessonRef = doc(db, 'users', sDocId, 'lessons', sanitizedLesson.id);
-        await withFirestoreTimeout(setDoc(userLessonRef, sanitizedLesson, { merge: true }), 2500, null);
+        await withFirestoreTimeout(setDoc(userLessonRef, sanitizedLesson, { merge: true }), 2000, null);
 
         // Also update scheduledLessons array on user doc
         const userRef = doc(db, 'users', sDocId);
-        const userSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        const userSnap = await withFirestoreTimeout(getDoc(userRef), 1500, null);
         if (userSnap && userSnap.exists()) {
           const data = userSnap.data();
           const prevLessons: LiveLesson[] = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
           const filtered = prevLessons.filter((l) => l.id !== sanitizedLesson.id);
           await withFirestoreTimeout(
             setDoc(userRef, { scheduledLessons: [sanitizedLesson, ...filtered], updatedAt: new Date().toISOString() }, { merge: true }),
-            2000,
+            1500,
             null
           );
         }
       } catch (subErr) {
         console.warn(`Notice persisting lesson to student doc ${sDocId}:`, subErr);
       }
-    }
+    });
 
-    // 3. Teacher user subcollections across canonical teacher doc IDs
+    // 3. Teacher user subcollections across canonical teacher doc IDs (concurrent execution)
     const teacherDocIds = getUserDocIds(teacherUid, cleanTeacherEmail);
-    for (const tDocId of teacherDocIds) {
+    const teacherPromises = teacherDocIds.map(async (tDocId) => {
       try {
         const teacherLessonRef = doc(db, 'users', tDocId, 'lessons', sanitizedLesson.id);
-        await withFirestoreTimeout(setDoc(teacherLessonRef, sanitizedLesson, { merge: true }), 2500, null);
+        await withFirestoreTimeout(setDoc(teacherLessonRef, sanitizedLesson, { merge: true }), 2000, null);
 
         const tUserRef = doc(db, 'users', tDocId);
-        const tUserSnap = await withFirestoreTimeout(getDoc(tUserRef), 2000, null);
+        const tUserSnap = await withFirestoreTimeout(getDoc(tUserRef), 1500, null);
         if (tUserSnap && tUserSnap.exists()) {
           const tData = tUserSnap.data();
-          const prevLessons: LiveLesson[] = Array.isArray(tData?.scheduledLessons) ? tData.scheduledLessons : [];
+          const prevLessons: LiveLesson[] = Array.isArray(tData?.scheduledLessons) ? data.scheduledLessons : [];
           const filtered = prevLessons.filter((l) => l.id !== sanitizedLesson.id);
           await withFirestoreTimeout(
             setDoc(tUserRef, { scheduledLessons: [sanitizedLesson, ...filtered], updatedAt: new Date().toISOString() }, { merge: true }),
-            2000,
+            1500,
             null
           );
         }
       } catch (tErr) {
         console.warn(`Notice persisting lesson to teacher doc ${tDocId}:`, tErr);
       }
-    }
+    });
+
+    await Promise.allSettled([...studentPromises, ...teacherPromises]);
 
     return true;
   } catch (error) {

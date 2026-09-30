@@ -2956,8 +2956,18 @@ export default function App() {
 
     setLessons((prev) => [newLesson, ...prev]);
 
-    // Direct Firestore persistence
-    await saveLiveLessonToFirestore(newLesson);
+    // Direct Firestore and Server persistence with fast safety race (never blocks UI)
+    const fsPersistPromise = saveLiveLessonToFirestore(newLesson).catch((err) => {
+      console.warn('Background Firestore save notice:', err);
+    });
+
+    const apiPersistPromise = fetch('/api/lessons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newLesson),
+    }).catch((err) => {
+      console.warn('Background API save notice:', err);
+    });
 
     // Update students state so student appears immediately in teacher's filter and list
     setStudents((prev) => {
@@ -3056,15 +3066,11 @@ export default function App() {
       }).catch(() => {});
     }
 
-    try {
-      await fetch('/api/lessons', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newLesson),
-      });
-    } catch {
-      // local fallback
-    }
+    // Allow up to 1200ms for network calls before advancing smoothly
+    await Promise.race([
+      Promise.allSettled([fsPersistPromise, apiPersistPromise]),
+      new Promise((resolve) => setTimeout(resolve, 1200)),
+    ]);
 
     // Direct student to their personal dashboard page and close modals
     setViewMode('dashboard');
