@@ -224,6 +224,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const isDirtyRef = useRef<boolean>(false);
   const isSavingRef = useRef<boolean>(false);
   const loadedSessionKeyRef = useRef<string>('');
+  const prevStudentFilterRef = useRef<string | undefined>(undefined);
+  const isInitialMountRef = useRef<boolean>(true);
   const lastSavedContentRef = useRef<{ content: string; topic: string; sessionKey: string }>({
     content: '',
     topic: '',
@@ -247,41 +249,62 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     } catch {}
   }, []);
 
-  // Synchronize when selectedStudentFilter changes from parent
+  // Synchronize student and initial default lesson when selectedStudentFilter changes from parent
   useEffect(() => {
     try {
+      // Check if filter has genuinely changed from parent or is initial mount
+      const filterHasChanged = selectedStudentFilter !== prevStudentFilterRef.current;
+      if (!filterHasChanged && !isInitialMountRef.current) {
+        return;
+      }
+      isInitialMountRef.current = false;
+      prevStudentFilterRef.current = selectedStudentFilter;
+
       if (selectedStudentFilter && selectedStudentFilter !== 'all') {
         const filterStr = String(selectedStudentFilter).toLowerCase().trim();
-        setSelectedStudentEmail((prev) => (prev !== selectedStudentFilter ? selectedStudentFilter : prev));
-        const studentLesson = teacherLessons.find(
+        setSelectedStudentEmail(selectedStudentFilter);
+
+        // Find matching lesson for this student: scheduled first, then any
+        const studentLessons = teacherLessons.filter(
           (l) => l?.studentEmail && l.studentEmail.toLowerCase().trim() === filterStr
         );
-        if (studentLesson && studentLesson.id) {
-          setSelectedLessonId((prev) => (prev !== studentLesson.id ? studentLesson.id : prev));
+        const scheduled = studentLessons.find((l) => l && l.status === 'scheduled');
+        const bestLesson = scheduled || studentLessons[0];
+
+        if (bestLesson && bestLesson.id) {
+          setSelectedLessonId(bestLesson.id);
+          if (bestLesson.startDateTime && typeof bestLesson.startDateTime === 'string') {
+            setSessionDate(bestLesson.startDateTime.split('T')[0]);
+          }
         } else {
-          setSelectedLessonId((prev) => (prev !== '' ? '' : prev));
+          setSelectedLessonId('');
+          setSessionDate(new Date().toISOString().split('T')[0]);
         }
       } else {
+        // No specific student filter from parent
         if (teacherLessons.length > 0 && !selectedLessonId) {
           const scheduled = teacherLessons.find((l) => l && l.status === 'scheduled');
           const first = scheduled || teacherLessons[0];
           if (first && first.id) {
-            setSelectedLessonId((prev) => (prev !== first.id ? first.id : prev));
+            setSelectedLessonId(first.id);
+            if (first.startDateTime && typeof first.startDateTime === 'string') {
+              setSessionDate(first.startDateTime.split('T')[0]);
+            }
             if (first.studentEmail) {
-              setSelectedStudentEmail((prev) => (prev !== first.studentEmail ? first.studentEmail : prev));
+              setSelectedStudentEmail(first.studentEmail);
             }
           }
         } else if (safeStudents.length > 0 && !selectedStudentEmail) {
           const firstValidStudent = safeStudents.find((s) => s && s.email);
           if (firstValidStudent?.email) {
-            setSelectedStudentEmail((prev) => (prev !== firstValidStudent.email ? firstValidStudent.email : prev));
+            setSelectedStudentEmail(firstValidStudent.email);
           }
         }
       }
     } catch (err) {
       console.warn('TeacherLiveLessonNotesPanel: Error syncing student filter', err);
     }
-  }, [selectedStudentFilter, teacherLessons, safeStudents, selectedLessonId, selectedStudentEmail]);
+  }, [selectedStudentFilter, teacherLessons, safeStudents]);
 
   // Selected student object (safe memoized lookup)
   const activeStudent = useMemo(() => {
@@ -296,16 +319,6 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const activeLesson = useMemo(() => {
     return teacherLessons.find((l) => l && l.id === selectedLessonId);
   }, [teacherLessons, selectedLessonId]);
-
-  // Compute effective session date only when lesson start date actually changes
-  useEffect(() => {
-    try {
-      if (activeLesson?.startDateTime && typeof activeLesson.startDateTime === 'string') {
-        const datePart = activeLesson.startDateTime.split('T')[0];
-        if (datePart) setSessionDate((prev) => (prev !== datePart ? datePart : prev));
-      }
-    } catch {}
-  }, [activeLesson?.startDateTime]);
 
   // Generate initial starter template: completely blank page with only Date, Student, and Topic annotations as shown in user screenshot
   const getStarterTemplate = useCallback(
@@ -414,37 +427,42 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           initialDriveSyncedAt = currentLesson.driveLastSyncedAt || null;
         }
       } else if (selectedStudentEmail) {
-        // Find latest notes for this student if any
         const studentEmailLower = selectedStudentEmail.toLowerCase().trim();
         const studentLessons = teacherLessons.filter(
           (l) => l?.studentEmail && l.studentEmail.toLowerCase().trim() === studentEmailLower
         );
-        const latestWithNotes = studentLessons.find(
-          (l) => l && (l.sessionNotesDocument || l.liveNotes || l.recommendations)
+        // Check if there is a lesson on this exact sessionDate with notes
+        const lessonOnDate = studentLessons.find(
+          (l) =>
+            l &&
+            l.startDateTime &&
+            typeof l.startDateTime === 'string' &&
+            l.startDateTime.startsWith(sessionDate) &&
+            (l.sessionNotesDocument || l.liveNotes || l.recommendations)
         );
 
         if (
-          latestWithNotes &&
+          lessonOnDate &&
           !isOnlyOldTemplate(
-            latestWithNotes.sessionNotesDocument ||
-              latestWithNotes.liveNotes ||
-              latestWithNotes.recommendations ||
+            lessonOnDate.sessionNotesDocument ||
+              lessonOnDate.liveNotes ||
+              lessonOnDate.recommendations ||
               ''
           )
         ) {
-          initialTopic = latestWithNotes.title || '';
+          initialTopic = lessonOnDate.title || 'Trial';
           initialContent =
-            latestWithNotes.sessionNotesDocument ||
-            latestWithNotes.liveNotes ||
-            latestWithNotes.recommendations ||
+            lessonOnDate.sessionNotesDocument ||
+            lessonOnDate.liveNotes ||
+            lessonOnDate.recommendations ||
             '';
-          if (latestWithNotes.notesLastSavedAt) {
-            initialSavedAt = latestWithNotes.notesLastSavedAt;
+          if (lessonOnDate.notesLastSavedAt) {
+            initialSavedAt = lessonOnDate.notesLastSavedAt;
           }
-          if (latestWithNotes.driveFileId) {
-            initialDriveId = latestWithNotes.driveFileId;
-            initialDriveUrl = latestWithNotes.driveFileUrl || null;
-            initialDriveSyncedAt = latestWithNotes.driveLastSyncedAt || null;
+          if (lessonOnDate.driveFileId) {
+            initialDriveId = lessonOnDate.driveFileId;
+            initialDriveUrl = lessonOnDate.driveFileUrl || null;
+            initialDriveSyncedAt = lessonOnDate.driveLastSyncedAt || null;
           }
         } else {
           const defaultTopic = 'Trial';
@@ -490,44 +508,100 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     return () => clearTimeout(timer);
   }, [currentSessionKey]);
 
+  const updateDocumentHeader = useCallback(
+    (newDate?: string, newStudentEmail?: string, newTopic?: string) => {
+      setNotesContent((prev) => {
+        if (!prev) return prev;
+        const lines = prev.split('\n');
+        if (lines.length >= 2 && lines[0]?.includes('Native Friend In-Session Notes')) {
+          if (newDate && lines[1]?.startsWith('Date:')) {
+            const studentPart = lines[1].includes('|')
+              ? lines[1].split('|')[1]
+              : ` Student: ${activeStudent?.name || 'Student'}`;
+            lines[1] = `Date: ${newDate} |${studentPart}`;
+          }
+          if (newTopic && lines[2]?.startsWith('Topic:')) {
+            lines[2] = `Topic: ${newTopic}`;
+          }
+          return lines.join('\n');
+        }
+        return prev;
+      });
+    },
+    [activeStudent?.name]
+  );
+
   const handleTopicChange = (newTopic: string) => {
     isDirtyRef.current = true;
     setTopic(newTopic);
-    setNotesContent((prev) => {
-      if (!prev) return prev;
-      const lines = prev.split('\n');
-      if (
-        lines.length <= 5 &&
-        lines[0]?.includes('Native Friend In-Session Notes') &&
-        lines[2]?.startsWith('Topic:')
-      ) {
-        lines[2] = `Topic: ${newTopic}`;
-        return lines.join('\n');
-      }
-      return prev;
-    });
+    updateDocumentHeader(undefined, undefined, newTopic);
   };
 
-  const handleDateChange = (newDate: string) => {
-    isDirtyRef.current = true;
-    setSessionDate(newDate);
-    setNotesContent((prev) => {
-      if (!prev) return prev;
-      const lines = prev.split('\n');
-      if (
-        lines.length <= 5 &&
-        lines[0]?.includes('Native Friend In-Session Notes') &&
-        lines[1]?.startsWith('Date:')
-      ) {
-        const studentPart = lines[1].includes('|')
-          ? lines[1].split('|')[1]
-          : ` Student: ${activeStudent?.name || 'Student'}`;
-        lines[1] = `Date: ${newDate} |${studentPart}`;
-        return lines.join('\n');
+  const handleSessionChange = useCallback(
+    (newLessonId: string) => {
+      // If dirty, persist current document before switching
+      if (isDirtyRef.current && lastSavedContentRef.current.sessionKey) {
+        persistSessionDocumentRef.current?.(notesContent, topic, false);
       }
-      return prev;
-    });
-  };
+
+      setSelectedLessonId(newLessonId);
+
+      if (newLessonId) {
+        const chosenLesson = teacherLessons.find((l) => l && l.id === newLessonId);
+        if (chosenLesson) {
+          if (chosenLesson.studentEmail && chosenLesson.studentEmail !== selectedStudentEmail) {
+            setSelectedStudentEmail(chosenLesson.studentEmail);
+          }
+          if (chosenLesson.startDateTime && typeof chosenLesson.startDateTime === 'string') {
+            const datePart = chosenLesson.startDateTime.split('T')[0];
+            if (datePart) {
+              setSessionDate(datePart);
+              updateDocumentHeader(datePart, chosenLesson.studentEmail, chosenLesson.title);
+            }
+          }
+          if (chosenLesson.title) {
+            setTopic(chosenLesson.title);
+          }
+        }
+      }
+    },
+    [teacherLessons, selectedStudentEmail, notesContent, topic, updateDocumentHeader]
+  );
+
+  const handleDateChange = useCallback(
+    (newDate: string) => {
+      if (!newDate) return;
+      isDirtyRef.current = true;
+      setSessionDate(newDate);
+      updateDocumentHeader(newDate);
+
+      // Check if there is an existing session for this student on the chosen date
+      const studentClean = (selectedStudentEmail || '').toLowerCase().trim();
+      const matchingLessons = teacherLessons.filter((l) => {
+        if (!l?.startDateTime || typeof l.startDateTime !== 'string') return false;
+        const lStudentClean = (l.studentEmail || '').toLowerCase().trim();
+        const matchesStudent = !studentClean || (lStudentClean && lStudentClean === studentClean);
+        return matchesStudent && l.startDateTime.startsWith(newDate);
+      });
+
+      if (matchingLessons.length > 0) {
+        // If current selectedLessonId is already one of the lessons on this date, keep it
+        const alreadySelected = matchingLessons.find((l) => l.id === selectedLessonId);
+        if (!alreadySelected) {
+          // Synchronize to the matching lesson on that date
+          const targetLesson = matchingLessons[0];
+          setSelectedLessonId(targetLesson.id);
+          if (targetLesson.title) {
+            setTopic(targetLesson.title);
+          }
+        }
+      } else {
+        // Independent: No existing lesson on this date, allow free custom date session on newDate without reverting!
+        setSelectedLessonId('');
+      }
+    },
+    [selectedStudentEmail, teacherLessons, selectedLessonId, updateDocumentHeader]
+  );
 
   const handleResetDocument = () => {
     try {
@@ -1606,7 +1680,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               </span>
               <select
                 value={selectedLessonId}
-                onChange={(e) => setSelectedLessonId(e.target.value)}
+                onChange={(e) => handleSessionChange(e.target.value)}
                 className="w-full bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] cursor-pointer shadow-2xs truncate"
               >
                 <option value="">-- Custom Date Session ({sessionDate}) --</option>
@@ -1616,7 +1690,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                       !selectedStudentEmail ||
                       (l?.studentEmail &&
                         l.studentEmail.toLowerCase().trim() ===
-                          selectedStudentEmail.toLowerCase().trim())
+                          selectedStudentEmail.toLowerCase().trim()) ||
+                      l.id === selectedLessonId
                   )
                   .map((l) => {
                     const lDate = l.startDateTime
@@ -2307,7 +2382,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                         <button
                           type="button"
                           onClick={() => {
-                            setSelectedLessonId(hist.id);
+                            handleSessionChange(hist.id);
                             if (hist.startDateTime && typeof hist.startDateTime === 'string') {
                               setSessionDate(hist.startDateTime.split('T')[0]);
                             }
