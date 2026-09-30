@@ -205,6 +205,16 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       .replace(/\[Pronounce\]/gi, PRONOUNCE_TAG_HTML);
   }, [CORRECT_TAG_HTML, INCORRECT_TAG_HTML, NEW_WORD_TAG_HTML, PRONOUNCE_TAG_HTML]);
 
+  // Safe formatter: Ensures tags are styled and raw newlines are cleanly converted to <br/> for seamless arrow key navigation
+  const formatContentForEditor = useCallback((content: string): string => {
+    if (!content) return '';
+    let formatted = convertPlainSymbolsToTags(content);
+    if (!formatted.includes('<div') && !formatted.includes('<p') && !formatted.includes('<br')) {
+      formatted = formatted.replace(/\r\n/g, '\n').replace(/\n/g, '<br/>');
+    }
+    return formatted;
+  }, [convertPlainSymbolsToTags]);
+
   // Safe converter: Inline tag HTML -> Clean plain symbols for Google Meet Chat
   const convertTagsToPlainSymbolsForMeet = useCallback((htmlOrText: string): string => {
     if (!htmlOrText) return '';
@@ -556,11 +566,12 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     };
 
     // Update DOM editor
-    const formatted = convertPlainSymbolsToTags(initialContent);
+    const formatted = formatContentForEditor(initialContent);
     const editor = getActiveEditor();
     if (editor) {
       if (editor.innerHTML !== formatted) {
         editor.innerHTML = formatted;
+        lastInternalHtmlRef.current = formatted;
       }
       focusEditorAtEnd(editor);
     }
@@ -682,7 +693,9 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       setNotesContent(starter);
       const editor = getActiveEditor();
       if (editor) {
-        editor.innerHTML = starter.replace(/\n/g, '<br/>');
+        const formatted = formatContentForEditor(starter);
+        editor.innerHTML = formatted;
+        lastInternalHtmlRef.current = formatted;
       }
       setTimeout(() => {
         focusEditorAtEnd(getActiveEditor());
@@ -1129,11 +1142,15 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
   const handleConnectDrive = handleSyncToGoogleDriveClick;
 
+  // Track HTML originating from internal editor actions to avoid unnecessary innerHTML rewrites
+  const lastInternalHtmlRef = useRef<string>('');
+
   // Dedicated editor change and auto-save handlers
   const handleEditorInput = (e: React.FormEvent<HTMLDivElement>) => {
     isUserTypingRef.current = true;
     isDirtyRef.current = true;
     const newHtml = (e.currentTarget as HTMLDivElement).innerHTML;
+    lastInternalHtmlRef.current = newHtml;
     setNotesContent(newHtml);
     setTimeout(() => {
       isUserTypingRef.current = false;
@@ -1146,6 +1163,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     if (editor) {
       const currentHtml = editor.innerHTML;
       if (currentHtml !== notesContent) {
+        lastInternalHtmlRef.current = currentHtml;
         setNotesContent(currentHtml);
       }
       if (isDirtyRef.current && !isSavingRef.current) {
@@ -1240,19 +1258,24 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     };
   }, [notesContent, topic]);
 
-  // Keep contentEditable innerHTML in sync when external notesContent changes (and not actively typing or focused)
+  // Keep contentEditable innerHTML in sync when external notesContent changes (and not from internal typing)
   useEffect(() => {
     const editor = getActiveEditor();
-    if (editor && !isUserTypingRef.current) {
-      const isFocused = document.activeElement === editor || editor.contains(document.activeElement);
-      if (isFocused) return;
+    if (!editor) return;
 
-      const formatted = convertPlainSymbolsToTags(notesContent);
-      if (editor.innerHTML !== formatted) {
-        editor.innerHTML = formatted;
-      }
+    // If the change came from user typing or editing inside this editor, NEVER overwrite innerHTML
+    if (notesContent === lastInternalHtmlRef.current) return;
+    if (isUserTypingRef.current) return;
+
+    const isFocused = document.activeElement === editor || editor.contains(document.activeElement);
+    if (isFocused) return;
+
+    const formatted = formatContentForEditor(notesContent);
+    if (editor.innerHTML !== formatted) {
+      editor.innerHTML = formatted;
+      lastInternalHtmlRef.current = formatted;
     }
-  }, [notesContent, getActiveEditor, convertPlainSymbolsToTags]);
+  }, [notesContent, getActiveEditor, formatContentForEditor]);
 
   /**
    * Helper: Insert fully formed, pre-styled inline tag component at current caret/selection position
@@ -1301,6 +1324,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     }
 
     const nextHtml = editor.innerHTML;
+    lastInternalHtmlRef.current = nextHtml;
     isDirtyRef.current = true;
     setNotesContent(nextHtml);
   }, [getActiveEditor, createTagElement]);
@@ -1512,7 +1536,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const wordCount = plainNotesText.trim() ? plainNotesText.trim().split(/\s+/).length : 0;
   const charCount = plainNotesText.length;
 
-  // Global hotkey listener for Coaching Stamps (Ctrl+Y, Alt+N, Alt+W, Alt+P)
+  // Global hotkey listener for Coaching Stamps (Alt+Y, Alt+N, Alt+W, Alt+P)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
@@ -2074,7 +2098,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => insertInlineTag('correct')}
                     className="group px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-[#ecfdf5] hover:bg-emerald-100/90 active:scale-95 text-[#15803d] border border-[#15803d] shadow-2xs"
-                    title="Insert Pre-styled Correct Tag (Shortcut: Ctrl+Y)"
+                    title="Insert Pre-styled Correct Tag (Shortcut: Alt+Y)"
                     aria-label="Insert Correct (✓) inline tag component"
                   >
                     <span
@@ -2084,7 +2108,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     </span>
                     <span>Correct</span>
                     <kbd className="hidden lg:inline-block px-1 py-0.2 rounded bg-emerald-100/90 text-[9px] font-mono text-emerald-800 border border-emerald-300/40">
-                      Ctrl+Y
+                      Alt+Y
                     </kbd>
                   </button>
 
@@ -2233,7 +2257,11 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                   id="session-notes-paper-sheet"
                   data-testid="session-notes-paper-sheet"
                   className="w-full max-w-4xl bg-white rounded-2xl border border-slate-300 shadow-sm p-6 sm:p-8 space-y-3 cursor-text focus-within:border-[#1C4C96] focus-within:ring-2 focus-within:ring-[#1C4C96]/20 transition"
-                  onClick={() => focusEditorAtEnd(editorRef.current)}
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) {
+                      focusEditorAtEnd(editorRef.current);
+                    }
+                  }}
                 >
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider flex-wrap gap-2 pointer-events-auto">
                     <span>DOCUMENT: Native Friend Coaching Record</span>
@@ -2267,7 +2295,14 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     </div>
                   </div>
 
-                  <div className="relative w-full min-h-[420px]">
+                  <div
+                    className="relative w-full min-h-[420px]"
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) {
+                        focusEditorAtEnd(editorRef.current);
+                      }
+                    }}
+                  >
                     <div
                       ref={editorRef}
                       id="session-notes-canvas-editor"
@@ -2280,6 +2315,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                       onInput={handleEditorInput}
                       onKeyDown={handleEditorKeyDown}
                       onBlur={handleEditorBlur}
+                      onClick={(e) => e.stopPropagation()}
                       className="relative z-10 w-full bg-transparent border-0 text-[#000035] text-sm leading-relaxed placeholder:text-slate-400 focus:outline-hidden min-h-[420px] font-sans selection:bg-[#9AB4FF]/40 p-0 m-0 block outline-none cursor-text whitespace-pre-wrap break-words"
                       spellCheck={false}
                     />
@@ -2295,7 +2331,11 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 <div
                   id="session-notes-split-sheet"
                   className="bg-white rounded-2xl border border-slate-300 shadow-sm p-5 sm:p-6 space-y-3 cursor-text focus-within:border-[#1C4C96] focus-within:ring-2 focus-within:ring-[#1C4C96]/20 transition"
-                  onClick={() => focusEditorAtEnd(splitEditorRef.current)}
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) {
+                      focusEditorAtEnd(splitEditorRef.current);
+                    }
+                  }}
                 >
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider">
                     <span>EDITING CANVAS</span>
@@ -2313,6 +2353,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     onInput={handleEditorInput}
                     onKeyDown={handleEditorKeyDown}
                     onBlur={handleEditorBlur}
+                    onClick={(e) => e.stopPropagation()}
                     className="w-full bg-transparent border-0 text-[#000035] text-sm leading-relaxed placeholder:text-slate-400 focus:outline-hidden min-h-[420px] font-sans selection:bg-[#9AB4FF]/40 p-0 m-0 block outline-none cursor-text whitespace-pre-wrap break-words"
                     spellCheck={false}
                   />
@@ -2403,7 +2444,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                   <span>Shortcuts:</span>
                   <span className="inline-flex items-center gap-1">
                     <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono">
-                      Ctrl+Y
+                      Alt+Y
                     </kbd>
                     <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] text-[10px] font-bold">
                       ✓ Correct
