@@ -103,9 +103,9 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const safeLessons = Array.isArray(lessons) ? lessons : [];
   const safeStudents = Array.isArray(students) ? students : [];
 
-  // Filter scheduled or completed lessons for this teacher
+  // Filter scheduled or completed lessons for this teacher (sorted descending by date: newest first)
   const teacherLessons = useMemo(() => {
-    return safeLessons.filter((l) => {
+    const list = safeLessons.filter((l) => {
       if (!l) return false;
       if (!currentAccount?.email) return true;
       const tEmail = (currentAccount.email || '').toLowerCase().trim();
@@ -117,7 +117,29 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
         (lTeacherUid && tUid && lTeacherUid === tUid)
       );
     });
+
+    // Sort in DESCENDING order: newest / most recent dates first
+    return list.sort((a, b) => {
+      const timeA = a?.startDateTime ? new Date(a.startDateTime).getTime() : 0;
+      const timeB = b?.startDateTime ? new Date(b.startDateTime).getTime() : 0;
+      return timeB - timeA;
+    });
   }, [safeLessons, currentAccount?.email, currentAccount?.id, (currentAccount as any)?.uid]);
+
+  // Reliable helper to obtain today's date string (YYYY-MM-DD) in the active timezone
+  const getTodayDateStr = useCallback((): string => {
+    try {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      return formatter.format(new Date());
+    } catch {
+      return new Date().toISOString().split('T')[0];
+    }
+  }, [timeZone]);
 
   // Safe helper to extract display name for student without crashing
   const resolveStudentName = useCallback(
@@ -133,12 +155,22 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     []
   );
 
-  // Selected session ID and student
+  // Selected session ID and student - Session date ALWAYS initialized to current date (=today)
   const [selectedLessonId, setSelectedLessonId] = useState<string>('');
   const [selectedStudentEmail, setSelectedStudentEmail] = useState<string>('');
-  const [sessionDate, setSessionDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+  const [sessionDate, setSessionDate] = useState<string>(() => {
+    try {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      return formatter.format(new Date());
+    } catch {
+      return new Date().toISOString().split('T')[0];
+    }
+  });
 
   // Note fields
   const [topic, setTopic] = useState<string>('');
@@ -250,6 +282,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   }, []);
 
   // Synchronize student and initial default lesson when selectedStudentFilter changes from parent
+  // ALWAYS defaults to today's date for a new lesson session
   useEffect(() => {
     try {
       // Check if filter has genuinely changed from parent or is initial mount
@@ -260,51 +293,66 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       isInitialMountRef.current = false;
       prevStudentFilterRef.current = selectedStudentFilter;
 
+      const todayStr = getTodayDateStr();
+
       if (selectedStudentFilter && selectedStudentFilter !== 'all') {
         const filterStr = String(selectedStudentFilter).toLowerCase().trim();
         setSelectedStudentEmail(selectedStudentFilter);
 
-        // Find matching lesson for this student: scheduled first, then any
+        // Find matching lessons for this student
         const studentLessons = teacherLessons.filter(
           (l) => l?.studentEmail && l.studentEmail.toLowerCase().trim() === filterStr
         );
-        const scheduled = studentLessons.find((l) => l && l.status === 'scheduled');
-        const bestLesson = scheduled || studentLessons[0];
 
-        if (bestLesson && bestLesson.id) {
-          setSelectedLessonId(bestLesson.id);
-          if (bestLesson.startDateTime && typeof bestLesson.startDateTime === 'string') {
-            setSessionDate(bestLesson.startDateTime.split('T')[0]);
-          }
+        // Check if there is an active lesson scheduled specifically for TODAY
+        const lessonToday = studentLessons.find(
+          (l) =>
+            l &&
+            l.startDateTime &&
+            typeof l.startDateTime === 'string' &&
+            l.startDateTime.startsWith(todayStr)
+        );
+
+        if (lessonToday && lessonToday.id) {
+          // If a lesson is scheduled for today, select it
+          setSelectedLessonId(lessonToday.id);
+          setSessionDate(todayStr);
         } else {
+          // Always default to today's date for a new lesson (never automatically select old past dates!)
           setSelectedLessonId('');
-          setSessionDate(new Date().toISOString().split('T')[0]);
+          setSessionDate(todayStr);
         }
       } else {
         // No specific student filter from parent
-        if (teacherLessons.length > 0 && !selectedLessonId) {
-          const scheduled = teacherLessons.find((l) => l && l.status === 'scheduled');
-          const first = scheduled || teacherLessons[0];
-          if (first && first.id) {
-            setSelectedLessonId(first.id);
-            if (first.startDateTime && typeof first.startDateTime === 'string') {
-              setSessionDate(first.startDateTime.split('T')[0]);
-            }
-            if (first.studentEmail) {
-              setSelectedStudentEmail(first.studentEmail);
-            }
+        const lessonToday = teacherLessons.find(
+          (l) =>
+            l &&
+            l.startDateTime &&
+            typeof l.startDateTime === 'string' &&
+            l.startDateTime.startsWith(todayStr)
+        );
+
+        if (lessonToday && lessonToday.id) {
+          setSelectedLessonId(lessonToday.id);
+          setSessionDate(todayStr);
+          if (lessonToday.studentEmail) {
+            setSelectedStudentEmail(lessonToday.studentEmail);
           }
-        } else if (safeStudents.length > 0 && !selectedStudentEmail) {
-          const firstValidStudent = safeStudents.find((s) => s && s.email);
-          if (firstValidStudent?.email) {
-            setSelectedStudentEmail(firstValidStudent.email);
+        } else {
+          setSelectedLessonId('');
+          setSessionDate(todayStr);
+          if (safeStudents.length > 0 && !selectedStudentEmail) {
+            const firstValidStudent = safeStudents.find((s) => s && s.email);
+            if (firstValidStudent?.email) {
+              setSelectedStudentEmail(firstValidStudent.email);
+            }
           }
         }
       }
     } catch (err) {
       console.warn('TeacherLiveLessonNotesPanel: Error syncing student filter', err);
     }
-  }, [selectedStudentFilter, teacherLessons, safeStudents]);
+  }, [selectedStudentFilter, teacherLessons, safeStudents, getTodayDateStr]);
 
   // Selected student object (safe memoized lookup)
   const activeStudent = useMemo(() => {
@@ -563,9 +611,15 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
             setTopic(chosenLesson.title);
           }
         }
+      } else {
+        // Switched to New Lesson Today: always reset date to current date (=today)
+        const todayStr = getTodayDateStr();
+        setSessionDate(todayStr);
+        setTopic('Trial');
+        updateDocumentHeader(todayStr, undefined, 'Trial');
       }
     },
-    [teacherLessons, selectedStudentEmail, notesContent, topic, updateDocumentHeader]
+    [teacherLessons, selectedStudentEmail, notesContent, topic, updateDocumentHeader, getTodayDateStr]
   );
 
   const handleDateChange = useCallback(
@@ -622,20 +676,28 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     }
   };
 
-  // Past notes history for this student (null-safe)
-  const studentHistory = teacherLessons.filter((l) => {
-    if (!l) return false;
-    const lEmail = (l.studentEmail || '').toLowerCase().trim();
-    const currEmail = (selectedStudentEmail || '').toLowerCase().trim();
-    const matchesStudent = !currEmail || (lEmail && lEmail === currEmail);
-    const hasNotes = Boolean(
-      (l.sessionNotesDocument && l.sessionNotesDocument.trim()) ||
-      (l.liveNotes && l.liveNotes.trim()) ||
-      (l.recommendations && l.recommendations.trim()) ||
-      (Array.isArray(l.vocabularyNotes) && l.vocabularyNotes.length > 0)
-    );
-    return matchesStudent && hasNotes;
-  });
+  // Past notes history for this student (sorted in descending order by date)
+  const studentHistory = useMemo(() => {
+    return teacherLessons
+      .filter((l) => {
+        if (!l) return false;
+        const lEmail = (l.studentEmail || '').toLowerCase().trim();
+        const currEmail = (selectedStudentEmail || '').toLowerCase().trim();
+        const matchesStudent = !currEmail || (lEmail && lEmail === currEmail);
+        const hasNotes = Boolean(
+          (l.sessionNotesDocument && l.sessionNotesDocument.trim()) ||
+          (l.liveNotes && l.liveNotes.trim()) ||
+          (l.recommendations && l.recommendations.trim()) ||
+          (Array.isArray(l.vocabularyNotes) && l.vocabularyNotes.length > 0)
+        );
+        return matchesStudent && hasNotes;
+      })
+      .sort((a, b) => {
+        const timeA = a.startDateTime ? new Date(a.startDateTime).getTime() : 0;
+        const timeB = b.startDateTime ? new Date(b.startDateTime).getTime() : 0;
+        return timeB - timeA; // Descending: newest first
+      });
+  }, [teacherLessons, selectedStudentEmail]);
 
   /**
    * Executes Google Drive file upload/update using the teacher's Google OAuth credentials directly
@@ -1683,7 +1745,11 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 onChange={(e) => handleSessionChange(e.target.value)}
                 className="w-full bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96] cursor-pointer shadow-2xs truncate"
               >
-                <option value="">-- Custom Date Session ({sessionDate}) --</option>
+                <option value="">
+                  {sessionDate === getTodayDateStr()
+                    ? `-- ➕ New Lesson (Today - ${formatDateInTimeZone(getTodayDateStr(), timeZone, 'en')}) --`
+                    : `-- ➕ New Lesson (${sessionDate}) --`}
+                </option>
                 {teacherLessons
                   .filter(
                     (l) =>
@@ -1693,6 +1759,11 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                           selectedStudentEmail.toLowerCase().trim()) ||
                       l.id === selectedLessonId
                   )
+                  .sort((a, b) => {
+                    const timeA = a.startDateTime ? new Date(a.startDateTime).getTime() : 0;
+                    const timeB = b.startDateTime ? new Date(b.startDateTime).getTime() : 0;
+                    return timeB - timeA; // Descending: newest first
+                  })
                   .map((l) => {
                     const lDate = l.startDateTime
                       ? formatDateInTimeZone(l.startDateTime, timeZone, 'en')
@@ -1712,8 +1783,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
             <div className="hidden md:block w-px h-6 bg-slate-200 shrink-0" />
 
-            {/* Session Date */}
-            <div className="flex items-center gap-2 shrink-0">
+            {/* Session Date with quick 'Today' button */}
+            <div className="flex items-center gap-1.5 shrink-0">
               <Clock className="w-4 h-4 text-slate-500 shrink-0" />
               <span className="text-xs font-bold text-slate-600">Date:</span>
               <input
@@ -1722,6 +1793,21 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 onChange={(e) => handleDateChange(e.target.value)}
                 className="bg-white border border-[#607EC9]/40 rounded-xl px-2.5 py-1 text-xs font-medium text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
               />
+              <button
+                type="button"
+                onClick={() => {
+                  const today = getTodayDateStr();
+                  handleDateChange(today);
+                }}
+                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer ${
+                  sessionDate === getTodayDateStr()
+                    ? 'bg-[#1C4C96] text-white shadow-2xs'
+                    : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                }`}
+                title="Select current date (=today)"
+              >
+                Today
+              </button>
             </div>
 
             <div className="hidden md:block w-px h-6 bg-slate-200 shrink-0" />
@@ -2131,7 +2217,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               </div>
 
               {/* Firestore & Google Drive Real-time Persistence Status */}
-              <div className="flex items-center gap-3 flex-wrap">
+              {/* Firestore Real-time Persistence Status */}
+              <div className="flex items-center gap-2">
                 {isSaving ? (
                   <div className="flex items-center gap-1.5 text-blue-600 font-medium text-xs">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2147,135 +2234,22 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 ) : (
                   <span className="text-slate-400 text-xs">Firestore Ready</span>
                 )}
-
-                <span className="text-slate-300">•</span>
-
-                {driveSyncStatus === 'syncing' ? (
-                  <div className="flex items-center gap-1.5 text-blue-600 font-medium text-xs">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Sincronizando com o Google Drive...</span>
-                  </div>
-                ) : driveFileUrl ? (
-                  <div className="flex items-center gap-2 text-emerald-700 font-semibold text-xs flex-wrap">
-                    <div className="flex items-center gap-1">
-                      <FolderCheck className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Sincronizado no Google Drive</span>
-                    </div>
-                    <a
-                      href={driveFileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-[#1C4C96] hover:underline flex items-center gap-0.5 ml-0.5 font-bold"
-                    >
-                      Abrir <ExternalLink className="w-3 h-3" />
-                    </a>
-                    <button
-                      type="button"
-                      onClick={handleSyncToGoogleDriveClick}
-                      className="text-[11px] text-slate-500 hover:text-[#1C4C96] hover:underline flex items-center gap-0.5 cursor-pointer ml-1"
-                      title="Atualizar arquivo existente no Google Drive"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      <span>Atualizar</span>
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleSyncToGoogleDriveClick}
-                    className="text-xs font-semibold text-[#1C4C96] hover:underline flex items-center gap-1 cursor-pointer"
-                    title="Sincronizar anotações da sessão com o seu Google Drive na pasta 'It's Simple - Session Notes'"
-                  >
-                    <FolderSync className="w-3.5 h-3.5 text-[#1C4C96]" />
-                    <span>Sincronizar com o Google Drive</span>
-                  </button>
-                )}
               </div>
             </div>
           </div>
 
-          {/* Action Bar (Save Document & Drive Sync) */}
+          {/* Action Bar (Save Document to Firestore) */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
             <div className="flex items-center gap-2 flex-wrap">
               {savedSuccessBanner && (
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold animate-in fade-in duration-200 shadow-2xs">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Documento salvo com sucesso no Firestore!</span>
-                </div>
-              )}
-              {driveSuccessToast && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-100 text-blue-900 text-xs font-bold animate-in fade-in duration-200 shadow-2xs">
-                  <FolderCheck className="w-4 h-4 text-blue-700" />
-                  <span>{driveSuccessToast}</span>
-                  {driveFileUrl && (
-                    <a
-                      href={driveFileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline text-blue-800 hover:text-blue-950 ml-1 inline-flex items-center gap-0.5 font-extrabold"
-                    >
-                      Ver no Drive <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
-                </div>
-              )}
-              {driveSyncError && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-100 text-rose-800 text-xs font-semibold animate-in fade-in duration-200 shadow-2xs">
-                  <AlertCircle className="w-4 h-4 text-rose-600" />
-                  <span>{driveSyncError}</span>
-                  <button
-                    type="button"
-                    onClick={handleSyncToGoogleDriveClick}
-                    className="underline font-bold text-rose-900 hover:text-black ml-1 cursor-pointer"
-                  >
-                    Tentar Novamente
-                  </button>
+                  <span>Document saved successfully to Firestore!</span>
                 </div>
               )}
             </div>
 
             <div className="flex items-center gap-2.5 flex-wrap justify-end">
-              {/* Dedicated Google Drive Sync Button */}
-              {driveSyncStatus === 'syncing' ? (
-                <div className="px-4 py-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                  <span>Sincronizando com o Google Drive...</span>
-                </div>
-              ) : driveFileUrl ? (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <a
-                    href={driveFileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3.5 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                    title="Abrir anotações na pasta 'It's Simple - Session Notes' do seu Google Drive"
-                  >
-                    <FolderCheck className="w-4 h-4 text-emerald-600" />
-                    <span>Ver no Google Drive</span>
-                    <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
-                  </a>
-                  <button
-                    type="button"
-                    onClick={handleSyncToGoogleDriveClick}
-                    className="px-3 py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                    title="Atualizar documento existente no seu Google Drive pessoal"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 text-[#1C4C96]" />
-                    <span>Atualizar no Drive</span>
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleSyncToGoogleDriveClick}
-                  className="px-4 py-2.5 rounded-xl bg-white hover:bg-blue-50/70 border-2 border-[#1C4C96] text-[#1C4C96] hover:text-[#062863] text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-xs active:scale-98"
-                  title="Sincronizar diretamente com o seu Google Drive na pasta 'It's Simple - Session Notes'"
-                >
-                  <CloudUpload className="w-4 h-4 text-[#1C4C96]" />
-                  <span>Sincronizar com o Google Drive</span>
-                </button>
-              )}
-
               <button
                 type="button"
                 disabled={isSaving}
@@ -2291,7 +2265,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 ) : (
                   <Save className="w-4 h-4 text-[#9AB4FF]" />
                 )}
-                <span>{isSaving ? 'Salvando...' : 'Salvar no Firestore'}</span>
+                <span>{isSaving ? 'Saving...' : 'Save to Firestore'}</span>
               </button>
             </div>
           </div>
@@ -2345,19 +2319,6 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                       </div>
 
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        {hist.driveFileUrl && (
-                          <a
-                            href={hist.driveFileUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold border border-emerald-200 transition cursor-pointer flex items-center gap-1"
-                            title="Open session notes in Google Drive"
-                          >
-                            <FolderCheck className="w-3 h-3 text-emerald-600" />
-                            <span>Drive</span>
-                            <ExternalLink className="w-2.5 h-2.5" />
-                          </a>
-                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -2409,60 +2370,6 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               })}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Explicit User Confirmation Dialog before Updating/Overwriting existing Google Drive document */}
-      {showDriveConfirmModal && pendingDriveUpdate && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 border border-amber-200 shadow-2xs">
-                <FileText className="w-6 h-6 text-amber-700" />
-              </div>
-              <div>
-                <h4 className="font-extrabold text-base text-[#000035]">Atualizar arquivo no Google Drive?</h4>
-                <p className="text-xs text-slate-500 font-medium">
-                  Este documento já existe na pasta do seu Google Drive pessoal.
-                </p>
-              </div>
-            </div>
-
-            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2 text-slate-700">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-bold text-slate-500 shrink-0">Arquivo:</span>
-                <span className="font-mono font-bold text-[#000035] truncate">{pendingDriveUpdate.fileName}</span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-bold text-slate-500 shrink-0">Pasta:</span>
-                <span className="font-semibold text-slate-800">{GOOGLE_DRIVE_SESSION_FOLDER}</span>
-              </div>
-              <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-200 leading-relaxed">
-                Ao confirmar, o documento correspondente na sua conta pessoal do Google Drive será atualizado diretamente com as notas e correções mais recentes desta sessão.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowDriveConfirmModal(false);
-                  setPendingDriveUpdate(null);
-                }}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDriveUpdate}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#1C4C96] hover:bg-[#062863] transition cursor-pointer shadow-md flex items-center gap-1.5"
-              >
-                <FolderCheck className="w-4 h-4 text-[#9AB4FF]" />
-                <span>Confirmar e Atualizar</span>
-              </button>
-            </div>
-          </div>
         </div>
       )}
     </div>

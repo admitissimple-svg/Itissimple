@@ -3398,28 +3398,57 @@ export default function App() {
       driveLastSyncedAt?: string;
     }
   ) => {
-    setLessons((prev) =>
-      prev.map((l) =>
-        l.id === lessonId
-          ? {
-              ...l,
-              title: notes.topic || l.title,
-              liveNotes: notes.liveNotes || notes.sessionNotesDocument,
-              recommendations: notes.recommendations || notes.sessionNotesDocument,
-              pronunciationNotes: notes.pronunciationNotes,
-              grammarAndPhrasing: notes.grammarAndPhrasing,
-              vocabularyNotes: notes.vocabularyNotes,
-              sessionNotesDocument: notes.sessionNotesDocument || notes.liveNotes || notes.recommendations,
-              sessionDate: notes.sessionDate,
-              notesLastSavedAt: new Date().toISOString(),
-              ...(notes.driveFileId ? { driveFileId: notes.driveFileId } : {}),
-              ...(notes.driveFileUrl ? { driveFileUrl: notes.driveFileUrl } : {}),
-              ...(notes.driveFolderName ? { driveFolderName: notes.driveFolderName } : {}),
-              ...(notes.driveLastSyncedAt ? { driveLastSyncedAt: notes.driveLastSyncedAt } : {}),
-            }
-          : l
-      )
-    );
+    setLessons((prev) => {
+      const exists = prev.some((l) => l.id === lessonId);
+      if (exists) {
+        return prev.map((l) =>
+          l.id === lessonId
+            ? {
+                ...l,
+                title: notes.topic || l.title,
+                liveNotes: notes.liveNotes || notes.sessionNotesDocument,
+                recommendations: notes.recommendations || notes.sessionNotesDocument,
+                pronunciationNotes: notes.pronunciationNotes,
+                grammarAndPhrasing: notes.grammarAndPhrasing,
+                vocabularyNotes: notes.vocabularyNotes,
+                sessionNotesDocument: notes.sessionNotesDocument || notes.liveNotes || notes.recommendations,
+                sessionDate: notes.sessionDate,
+                notesLastSavedAt: new Date().toISOString(),
+                ...(notes.driveFileId ? { driveFileId: notes.driveFileId } : {}),
+                ...(notes.driveFileUrl ? { driveFileUrl: notes.driveFileUrl } : {}),
+                ...(notes.driveFolderName ? { driveFolderName: notes.driveFolderName } : {}),
+                ...(notes.driveLastSyncedAt ? { driveLastSyncedAt: notes.driveLastSyncedAt } : {}),
+              }
+            : l
+        );
+      } else {
+        const studentClean = (selectedStudentFilter !== 'all' ? selectedStudentFilter : '').toLowerCase().trim();
+        const foundStudent = studentsList.find((s) => (s.email || '').toLowerCase().trim() === studentClean);
+        const effDate = notes.sessionDate || new Date().toISOString().split('T')[0];
+        const newLessonItem: LiveLesson = {
+          id: lessonId,
+          title: notes.topic || 'Live Coaching Session',
+          description: 'Live Session Notes',
+          startDateTime: `${effDate}T10:00:00Z`,
+          endDateTime: `${effDate}T11:00:00Z`,
+          studentEmail: studentClean || '',
+          studentName: foundStudent?.name || (foundStudent as any)?.studentName || studentClean.split('@')[0] || 'Student',
+          teacherEmail: currentAccount?.email || '',
+          teacherName: currentAccount?.name || 'Native Friend',
+          status: 'completed',
+          liveNotes: notes.liveNotes || notes.sessionNotesDocument,
+          recommendations: notes.recommendations || notes.sessionNotesDocument,
+          sessionNotesDocument: notes.sessionNotesDocument || notes.liveNotes || notes.recommendations,
+          sessionDate: effDate,
+          notesLastSavedAt: new Date().toISOString(),
+          ...(notes.driveFileId ? { driveFileId: notes.driveFileId } : {}),
+          ...(notes.driveFileUrl ? { driveFileUrl: notes.driveFileUrl } : {}),
+          ...(notes.driveFolderName ? { driveFolderName: notes.driveFolderName } : {}),
+          ...(notes.driveLastSyncedAt ? { driveLastSyncedAt: notes.driveLastSyncedAt } : {}),
+        };
+        return [newLessonItem, ...prev];
+      }
+    });
 
     // Auto-migrate vocabulary notes to student's personal dictionary
     const targetLesson = lessons.find((l) => l.id === lessonId);
