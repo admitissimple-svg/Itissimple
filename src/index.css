@@ -28,6 +28,18 @@
   color: #b91c1c !important;
 }
 
+.inline-coaching-tag.new-word-tag {
+  background-color: #eff6ff !important;
+  border: 1px solid #1d4ed8 !important;
+  color: #1d4ed8 !important;
+}
+
+.inline-coaching-tag.pronounce-tag {
+  background-color: #faf5ff !important;
+  border: 1px solid #7e22ce !important;
+  color: #7e22ce !important;
+}
+
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;

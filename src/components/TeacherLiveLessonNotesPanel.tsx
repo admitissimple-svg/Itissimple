@@ -187,8 +187,12 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   // Pre-styled Inline Coaching Tag Constants (mirrors exact design system references)
   // Correct tag: Rounded rectangle (6px radius), light green bg (#ecfdf5), dark green border (#15803d), green checkmark (✓)
   // Incorrect tag: Rounded rectangle (6px radius), light red bg (#fff1f2), dark red border (#b91c1c), red cross (✗)
+  // New Word tag: Rounded rectangle (6px radius), light blue bg (#eff6ff), dark blue border (#1d4ed8), ✦ New Word
+  // Pronounce tag: Rounded rectangle (6px radius), light purple bg (#faf5ff), dark purple border (#7e22ce), 🎯 Pronounce
   const CORRECT_TAG_HTML = `<span class="inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none" data-tag-type="correct" contenteditable="false" style="display: inline-flex; align-items: center; justify-content: center; background-color: #ecfdf5; border: 1px solid #15803d; color: #15803d; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;" title="Correct (✓)" role="img" aria-label="Correct">✓</span>`;
   const INCORRECT_TAG_HTML = `<span class="inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none" data-tag-type="incorrect" contenteditable="false" style="display: inline-flex; align-items: center; justify-content: center; background-color: #fff1f2; border: 1px solid #b91c1c; color: #b91c1c; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;" title="Incorrect (✗)" role="img" aria-label="Incorrect">✗</span>`;
+  const NEW_WORD_TAG_HTML = `<span class="inline-coaching-tag new-word-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#eff6ff] border border-[#1d4ed8] text-[#1d4ed8] mx-1 align-baseline shadow-2xs select-none" data-tag-type="new-word" contenteditable="false" style="display: inline-flex; align-items: center; justify-content: center; background-color: #eff6ff; border: 1px solid #1d4ed8; color: #1d4ed8; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;" title="New Word" role="img" aria-label="New Word">✦ New Word</span>`;
+  const PRONOUNCE_TAG_HTML = `<span class="inline-coaching-tag pronounce-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#faf5ff] border border-[#7e22ce] text-[#7e22ce] mx-1 align-baseline shadow-2xs select-none" data-tag-type="pronounce" contenteditable="false" style="display: inline-flex; align-items: center; justify-content: center; background-color: #faf5ff; border: 1px solid #7e22ce; color: #7e22ce; border-radius: 6px; padding: 1px 6px; font-weight: 700; font-size: 12px; line-height: 1.3; vertical-align: baseline; margin: 0 4px; user-select: none;" title="Pronounce" role="img" aria-label="Pronounce">🎯 Pronounce</span>`;
 
   // Safe converter: Plain Unicode symbols -> Pre-styled inline tags
   const convertPlainSymbolsToTags = useCallback((htmlOrText: string): string => {
@@ -196,8 +200,10 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     if (htmlOrText.includes('data-tag-type=')) return htmlOrText;
     return htmlOrText
       .replace(/✓/g, CORRECT_TAG_HTML)
-      .replace(/✗/g, INCORRECT_TAG_HTML);
-  }, [CORRECT_TAG_HTML, INCORRECT_TAG_HTML]);
+      .replace(/✗/g, INCORRECT_TAG_HTML)
+      .replace(/\[New Word\]/gi, NEW_WORD_TAG_HTML)
+      .replace(/\[Pronounce\]/gi, PRONOUNCE_TAG_HTML);
+  }, [CORRECT_TAG_HTML, INCORRECT_TAG_HTML, NEW_WORD_TAG_HTML, PRONOUNCE_TAG_HTML]);
 
   // Safe converter: Inline tag HTML -> Clean plain symbols for Google Meet Chat
   const convertTagsToPlainSymbolsForMeet = useCallback((htmlOrText: string): string => {
@@ -205,6 +211,8 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     return htmlOrText
       .replace(/<span[^>]*data-tag-type="correct"[^>]*>[\s\S]*?<\/span>/gi, '✓')
       .replace(/<span[^>]*data-tag-type="incorrect"[^>]*>[\s\S]*?<\/span>/gi, '✗')
+      .replace(/<span[^>]*data-tag-type="new-word"[^>]*>[\s\S]*?<\/span>/gi, '[New Word]')
+      .replace(/<span[^>]*data-tag-type="pronounce"[^>]*>[\s\S]*?<\/span>/gi, '[Pronounce]')
       .replace(/<br\s*[\/]?>/gi, '\n')
       .replace(/<\/div>/gi, '\n')
       .replace(/<div>/gi, '')
@@ -225,6 +233,14 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const tagIncorrectCount = (notesContent.match(/data-tag-type="incorrect"/g) || []).length;
   const plainIncorrectCount = (notesContent.replace(/<span[^>]*data-tag-type="incorrect"[^>]*>[\s\S]*?<\/span>/gi, '').match(/✗/g) || []).length;
   const incorrectCount = tagIncorrectCount + plainIncorrectCount;
+
+  const tagNewWordCount = (notesContent.match(/data-tag-type="new-word"/g) || []).length;
+  const plainNewWordCount = (notesContent.replace(/<span[^>]*data-tag-type="new-word"[^>]*>[\s\S]*?<\/span>/gi, '').match(/\[New Word\]/gi) || []).length;
+  const newWordCount = tagNewWordCount + plainNewWordCount;
+
+  const tagPronounceCount = (notesContent.match(/data-tag-type="pronounce"/g) || []).length;
+  const plainPronounceCount = (notesContent.replace(/<span[^>]*data-tag-type="pronounce"[^>]*>[\s\S]*?<\/span>/gi, '').match(/\[Pronounce\]/gi) || []).length;
+  const pronounceCount = tagPronounceCount + plainPronounceCount;
 
   // Google Drive state & backend service integration (uses pre-authenticated platform credentials mapped to teacher's email)
   const [driveSyncStatus, setDriveSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
@@ -1143,16 +1159,11 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   };
 
   // Helper: Create the DOM element for the inline tag component
-  const createTagElement = useCallback((type: 'correct' | 'incorrect'): HTMLSpanElement => {
+  const createTagElement = useCallback((type: 'correct' | 'incorrect' | 'new-word' | 'pronounce'): HTMLSpanElement => {
     const span = document.createElement('span');
-    span.className = type === 'correct'
-      ? 'inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none'
-      : 'inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none';
     span.setAttribute('data-tag-type', type);
     span.setAttribute('contenteditable', 'false');
     span.setAttribute('role', 'img');
-    span.setAttribute('aria-label', type === 'correct' ? 'Correct' : 'Incorrect');
-    span.title = type === 'correct' ? 'Correct (✓)' : 'Incorrect (✗)';
 
     // Direct inline styles enforcing the exact design system colors and border radii
     span.style.display = 'inline-flex';
@@ -1166,21 +1177,41 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     span.style.verticalAlign = 'baseline';
     span.style.margin = '0 4px';
     span.style.userSelect = 'none';
+    span.style.borderWidth = '1px';
+    span.style.borderStyle = 'solid';
 
     if (type === 'correct') {
+      span.className = 'inline-coaching-tag correct-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] mx-1 align-baseline shadow-2xs select-none';
+      span.setAttribute('aria-label', 'Correct');
+      span.title = 'Correct (✓)';
       span.style.backgroundColor = '#ecfdf5'; // Light green background
       span.style.borderColor = '#15803d';     // Dark green border
-      span.style.borderWidth = '1px';
-      span.style.borderStyle = 'solid';
       span.style.color = '#15803d';           // Dark green symbol
       span.textContent = '✓';
-    } else {
+    } else if (type === 'incorrect') {
+      span.className = 'inline-coaching-tag incorrect-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] mx-1 align-baseline shadow-2xs select-none';
+      span.setAttribute('aria-label', 'Incorrect');
+      span.title = 'Incorrect (✗)';
       span.style.backgroundColor = '#fff1f2'; // Light red background
       span.style.borderColor = '#b91c1c';     // Dark red border
-      span.style.borderWidth = '1px';
-      span.style.borderStyle = 'solid';
       span.style.color = '#b91c1c';           // Dark red symbol
       span.textContent = '✗';
+    } else if (type === 'new-word') {
+      span.className = 'inline-coaching-tag new-word-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#eff6ff] border border-[#1d4ed8] text-[#1d4ed8] mx-1 align-baseline shadow-2xs select-none';
+      span.setAttribute('aria-label', 'New Word');
+      span.title = 'New Word (✦)';
+      span.style.backgroundColor = '#eff6ff'; // Light blue background
+      span.style.borderColor = '#1d4ed8';     // Blue border
+      span.style.color = '#1d4ed8';           // Blue text
+      span.textContent = '✦ New Word';
+    } else if (type === 'pronounce') {
+      span.className = 'inline-coaching-tag pronounce-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#faf5ff] border border-[#7e22ce] text-[#7e22ce] mx-1 align-baseline shadow-2xs select-none';
+      span.setAttribute('aria-label', 'Pronounce');
+      span.title = 'Pronounce (🎯)';
+      span.style.backgroundColor = '#faf5ff'; // Light purple background
+      span.style.borderColor = '#7e22ce';     // Purple border
+      span.style.color = '#7e22ce';           // Purple text
+      span.textContent = '🎯 Pronounce';
     }
 
     return span;
@@ -1226,7 +1257,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   /**
    * Helper: Insert fully formed, pre-styled inline tag component at current caret/selection position
    */
-  const insertInlineTag = useCallback((type: 'correct' | 'incorrect') => {
+  const insertInlineTag = useCallback((type: 'correct' | 'incorrect' | 'new-word' | 'pronounce') => {
     const editor = getActiveEditor();
     if (!editor) return;
 
@@ -1339,8 +1370,10 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
   /**
    * Keyboard Shortcuts Handler:
-   * - Ctrl+Alt+C / Cmd+Alt+C: Insert Pre-styled Correct Tag Component
-   * - Ctrl+Alt+E / Cmd+Alt+E (or Ctrl+Alt+X): Insert Pre-styled Incorrect Tag Component
+   * - Ctrl+Y / Alt+Y: Insert Pre-styled Correct Tag Component (✓)
+   * - Alt+N / Ctrl+Alt+N (or Ctrl+N): Insert Pre-styled Incorrect Tag Component (✗)
+   * - Alt+W / Ctrl+Alt+W (or Ctrl+W): Insert Pre-styled New Word Tag Component (✦ New Word)
+   * - Alt+P / Ctrl+P: Insert Pre-styled Pronounce Tag Component (🎯 Pronounce)
    * - Ctrl+B / Cmd+B: Bold
    * - Ctrl+I / Cmd+I: Italic
    * - Ctrl+U / Cmd+U: Underline
@@ -1353,10 +1386,11 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     const keyLower = (e.key || '').toLowerCase();
     const code = e.code || '';
 
-    // Hotkey: Ctrl+Alt+C / Cmd+Alt+C -> Insert Pre-styled Green Correct Tag
+    // Hotkey: Ctrl+Y / Cmd+Y / Alt+Y -> Insert Pre-styled Green Correct Tag
     if (
-      (isCmdOrCtrl && isAlt && (keyLower === 'c' || code === 'KeyC')) ||
-      (e.altKey && !isMac && (keyLower === 'c' || code === 'KeyC') && e.ctrlKey)
+      (isCmdOrCtrl && (keyLower === 'y' || code === 'KeyY')) ||
+      (isAlt && (keyLower === 'y' || code === 'KeyY')) ||
+      (isCmdOrCtrl && isAlt && (keyLower === 'c' || code === 'KeyC'))
     ) {
       e.preventDefault();
       e.stopPropagation();
@@ -1364,14 +1398,37 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       return;
     }
 
-    // Hotkey: Ctrl+Alt+E / Cmd+Alt+E or Ctrl+Alt+X / Cmd+Alt+X -> Insert Pre-styled Red Incorrect Tag
+    // Hotkey: Alt+N / Ctrl+Alt+N / Ctrl+N -> Insert Pre-styled Red Incorrect Tag
     if (
-      (isCmdOrCtrl && isAlt && (keyLower === 'e' || code === 'KeyE' || keyLower === 'x' || code === 'KeyX')) ||
-      (e.altKey && !isMac && (keyLower === 'e' || code === 'KeyE' || keyLower === 'x' || code === 'KeyX') && e.ctrlKey)
+      (isAlt && (keyLower === 'n' || code === 'KeyN')) ||
+      (isCmdOrCtrl && (keyLower === 'n' || code === 'KeyN')) ||
+      (isCmdOrCtrl && isAlt && (keyLower === 'e' || code === 'KeyE' || keyLower === 'x' || code === 'KeyX'))
     ) {
       e.preventDefault();
       e.stopPropagation();
       insertInlineTag('incorrect');
+      return;
+    }
+
+    // Hotkey: Alt+W / Ctrl+Alt+W / Ctrl+W -> Insert Pre-styled Blue New Word Tag
+    if (
+      (isAlt && (keyLower === 'w' || code === 'KeyW')) ||
+      (isCmdOrCtrl && (keyLower === 'w' || code === 'KeyW'))
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      insertInlineTag('new-word');
+      return;
+    }
+
+    // Hotkey: Alt+P / Ctrl+P / Ctrl+Alt+P -> Insert Pre-styled Purple Pronounce Tag
+    if (
+      (isAlt && (keyLower === 'p' || code === 'KeyP')) ||
+      (isCmdOrCtrl && (keyLower === 'p' || code === 'KeyP'))
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      insertInlineTag('pronounce');
       return;
     }
 
@@ -1455,7 +1512,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
   const wordCount = plainNotesText.trim() ? plainNotesText.trim().split(/\s+/).length : 0;
   const charCount = plainNotesText.length;
 
-  // Global hotkey listener for Coaching Stamps (Ctrl+Alt+C and Ctrl+Alt+E)
+  // Global hotkey listener for Coaching Stamps (Ctrl+Y, Alt+N, Alt+W, Alt+P)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
@@ -1471,29 +1528,63 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       const keyLower = (e.key || '').toLowerCase();
       const code = e.code || '';
 
-      if (isCmdOrCtrl && isAlt && (keyLower === 'c' || code === 'KeyC')) {
+      // Correct Tag: Ctrl+Y / Alt+Y
+      if (
+        (isCmdOrCtrl && (keyLower === 'y' || code === 'KeyY')) ||
+        (isAlt && (keyLower === 'y' || code === 'KeyY')) ||
+        (isCmdOrCtrl && isAlt && (keyLower === 'c' || code === 'KeyC'))
+      ) {
         e.preventDefault();
         e.stopPropagation();
         insertInlineTag('correct');
-      } else if (
-        isCmdOrCtrl &&
-        isAlt &&
-        (keyLower === 'e' || code === 'KeyE' || keyLower === 'x' || code === 'KeyX')
+        return;
+      }
+
+      // Incorrect Tag: Alt+N / Ctrl+Alt+N / Ctrl+N
+      if (
+        (isAlt && (keyLower === 'n' || code === 'KeyN')) ||
+        (isCmdOrCtrl && (keyLower === 'n' || code === 'KeyN')) ||
+        (isCmdOrCtrl && isAlt && (keyLower === 'e' || code === 'KeyE' || keyLower === 'x' || code === 'KeyX'))
       ) {
         e.preventDefault();
         e.stopPropagation();
         insertInlineTag('incorrect');
+        return;
+      }
+
+      // New Word Tag: Alt+W / Ctrl+Alt+W / Ctrl+W
+      if (
+        (isAlt && (keyLower === 'w' || code === 'KeyW')) ||
+        (isCmdOrCtrl && (keyLower === 'w' || code === 'KeyW'))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        insertInlineTag('new-word');
+        return;
+      }
+
+      // Pronounce Tag: Alt+P / Ctrl+P / Ctrl+Alt+P
+      if (
+        (isAlt && (keyLower === 'p' || code === 'KeyP')) ||
+        (isCmdOrCtrl && (keyLower === 'p' || code === 'KeyP'))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        insertInlineTag('pronounce');
+        return;
       }
     };
 
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown, true);
   }, [getActiveEditor, insertInlineTag]);
 
   /**
    * High-fidelity parser that renders session notes with pre-styled colored tag components:
    * - Correct tag: Rounded rectangle (6px radius), light green bg (#ecfdf5), dark green border (#15803d), green checkmark (✓)
    * - Incorrect tag: Rounded rectangle (6px radius), light red bg (#fff1f2), dark red border (#b91c1c), red cross (✗)
+   * - New Word tag: Rounded rectangle (6px radius), light blue bg (#eff6ff), dark blue border (#1d4ed8), ✦ New Word
+   * - Pronounce tag: Rounded rectangle (6px radius), light purple bg (#faf5ff), dark purple border (#7e22ce), 🎯 Pronounce
    * - Supports Markdown bold (**), italic (*), underline (<u>), quotes (>), bullets (•), dividers (---)
    */
   const renderRichSessionNotes = (content: string) => {
@@ -1510,7 +1601,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
     const lines = normalizedContent.split('\n');
 
     const parseLineTokens = (text: string) => {
-      const regex = /(<span[^>]*data-tag-type="correct"[^>]*>[\s\S]*?<\/span>|<span[^>]*data-tag-type="incorrect"[^>]*>[\s\S]*?<\/span>|✓|✗|\*\*[^*]+\*\*|\*[^*]+\*|<u>.*?<\/u>)/gi;
+      const regex = /(<span[^>]*data-tag-type="correct"[^>]*>[\s\S]*?<\/span>|<span[^>]*data-tag-type="incorrect"[^>]*>[\s\S]*?<\/span>|<span[^>]*data-tag-type="new-word"[^>]*>[\s\S]*?<\/span>|<span[^>]*data-tag-type="pronounce"[^>]*>[\s\S]*?<\/span>|✓|✗|\[New Word\]|\[Pronounce\]|\*\*[^*]+\*\*|\*[^*]+\*|<u>.*?<\/u>)/gi;
       const parts = text.split(regex);
 
       return parts.map((part, pIdx) => {
@@ -1576,6 +1667,70 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               data-tag-type="incorrect"
             >
               ✗
+            </span>
+          );
+        }
+
+        const isNewWord = part === '[New Word]' || part.includes('data-tag-type="new-word"');
+        if (isNewWord) {
+          return (
+            <span
+              key={pIdx}
+              className="inline-coaching-tag new-word-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#eff6ff] border border-[#1d4ed8] text-[#1d4ed8] mx-1 align-baseline shadow-2xs select-none"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#eff6ff',
+                borderColor: '#1d4ed8',
+                borderWidth: '1px',
+                borderStyle: 'solid',
+                color: '#1d4ed8',
+                borderRadius: '6px',
+                padding: '1px 6px',
+                fontWeight: 700,
+                fontSize: '12px',
+                lineHeight: 1.3,
+                verticalAlign: 'baseline',
+                margin: '0 4px',
+                userSelect: 'none',
+              }}
+              title="New Word"
+              data-tag-type="new-word"
+            >
+              ✦ New Word
+            </span>
+          );
+        }
+
+        const isPronounce = part === '[Pronounce]' || part.includes('data-tag-type="pronounce"');
+        if (isPronounce) {
+          return (
+            <span
+              key={pIdx}
+              className="inline-coaching-tag pronounce-tag inline-flex items-center justify-center font-bold text-xs px-1.5 py-0.5 rounded-md bg-[#faf5ff] border border-[#7e22ce] text-[#7e22ce] mx-1 align-baseline shadow-2xs select-none"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#faf5ff',
+                borderColor: '#7e22ce',
+                borderWidth: '1px',
+                borderStyle: 'solid',
+                color: '#7e22ce',
+                borderRadius: '6px',
+                padding: '1px 6px',
+                fontWeight: 700,
+                fontSize: '12px',
+                lineHeight: 1.3,
+                verticalAlign: 'baseline',
+                margin: '0 4px',
+                userSelect: 'none',
+              }}
+              title="Pronounce"
+              data-tag-type="pronounce"
+            >
+              🎯 Pronounce
             </span>
           );
         }
@@ -1908,7 +2063,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 <div className="w-px h-5 bg-slate-200 mx-0.5" />
 
                 {/* Pre-styled Coaching Stamp Toolbar Group */}
-                <div className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200/90 shadow-2xs">
+                <div className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200/90 shadow-2xs flex-wrap">
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider hidden sm:inline mr-0.5">
                     Stamps:
                   </span>
@@ -1919,7 +2074,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => insertInlineTag('correct')}
                     className="group px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-[#ecfdf5] hover:bg-emerald-100/90 active:scale-95 text-[#15803d] border border-[#15803d] shadow-2xs"
-                    title="Insert Pre-styled Correct Tag (Shortcut: Ctrl+Alt+C)"
+                    title="Insert Pre-styled Correct Tag (Shortcut: Ctrl+Y)"
                     aria-label="Insert Correct (✓) inline tag component"
                   >
                     <span
@@ -1929,7 +2084,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     </span>
                     <span>Correct</span>
                     <kbd className="hidden lg:inline-block px-1 py-0.2 rounded bg-emerald-100/90 text-[9px] font-mono text-emerald-800 border border-emerald-300/40">
-                      Ctrl+Alt+C
+                      Ctrl+Y
                     </kbd>
                   </button>
 
@@ -1939,7 +2094,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => insertInlineTag('incorrect')}
                     className="group px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-[#fff1f2] hover:bg-rose-100/90 active:scale-95 text-[#b91c1c] border border-[#b91c1c] shadow-2xs"
-                    title="Insert Pre-styled Incorrect Tag (Shortcut: Ctrl+Alt+E)"
+                    title="Insert Pre-styled Incorrect Tag (Shortcut: Alt+N or Ctrl+Alt+N)"
                     aria-label="Insert Incorrect (✗) inline tag component"
                   >
                     <span
@@ -1949,7 +2104,47 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                     </span>
                     <span>Incorrect</span>
                     <kbd className="hidden lg:inline-block px-1 py-0.2 rounded bg-rose-100/90 text-[9px] font-mono text-rose-800 border border-rose-300/40">
-                      Ctrl+Alt+E
+                      Alt+N
+                    </kbd>
+                  </button>
+
+                  {/* Pre-styled Quick-Click Button for "New Word" (light blue bg #eff6ff, dark blue border #1d4ed8, star/glyph ✦) */}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertInlineTag('new-word')}
+                    className="group px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-[#eff6ff] hover:bg-blue-100/90 active:scale-95 text-[#1d4ed8] border border-[#1d4ed8] shadow-2xs"
+                    title="Insert Pre-styled New Word Tag (Shortcut: Alt+W or Ctrl+Alt+W)"
+                    aria-label="Insert New Word inline tag component"
+                  >
+                    <span
+                      className="inline-flex items-center justify-center font-bold text-xs px-1 py-0.2 rounded-md bg-[#eff6ff] border border-[#1d4ed8] text-[#1d4ed8]"
+                    >
+                      ✦
+                    </span>
+                    <span>New Word</span>
+                    <kbd className="hidden lg:inline-block px-1 py-0.2 rounded bg-blue-100/90 text-[9px] font-mono text-blue-800 border border-blue-300/40">
+                      Alt+W
+                    </kbd>
+                  </button>
+
+                  {/* Pre-styled Quick-Click Button for "Pronounce" (light purple bg #faf5ff, dark purple border #7e22ce, target 🎯) */}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertInlineTag('pronounce')}
+                    className="group px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer bg-[#faf5ff] hover:bg-purple-100/90 active:scale-95 text-[#7e22ce] border border-[#7e22ce] shadow-2xs"
+                    title="Insert Pre-styled Pronounce Tag (Shortcut: Alt+P or Ctrl+P)"
+                    aria-label="Insert Pronounce inline tag component"
+                  >
+                    <span
+                      className="inline-flex items-center justify-center font-bold text-xs px-1 py-0.2 rounded-md bg-[#faf5ff] border border-[#7e22ce] text-[#7e22ce]"
+                    >
+                      🎯
+                    </span>
+                    <span>Pronounce</span>
+                    <kbd className="hidden lg:inline-block px-1 py-0.2 rounded bg-purple-100/90 text-[9px] font-mono text-purple-800 border border-purple-300/40">
+                      Alt+P
                     </kbd>
                   </button>
                 </div>
@@ -2042,7 +2237,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 >
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider flex-wrap gap-2 pointer-events-auto">
                     <span>DOCUMENT: Native Friend Coaching Record</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#ecfdf5] text-[#15803d] border border-[#15803d] text-[10px] font-bold shadow-2xs"
                         title="Total Correct (✓) Tags"
@@ -2054,6 +2249,18 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                         title="Total Incorrect (✗) Tags"
                       >
                         <span className="font-black text-xs">✗</span> {incorrectCount} Corrections
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#eff6ff] text-[#1d4ed8] border border-[#1d4ed8] text-[10px] font-bold shadow-2xs"
+                        title="Total New Word Tags"
+                      >
+                        <span className="font-black text-xs">✦</span> {newWordCount} Words
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#faf5ff] text-[#7e22ce] border border-[#7e22ce] text-[10px] font-bold shadow-2xs"
+                        title="Total Pronounce Tags"
+                      >
+                        <span className="font-black text-xs">🎯</span> {pronounceCount} Pronounce
                       </span>
                       <span className="hidden sm:inline text-slate-300">•</span>
                       <span>Session Date: {sessionDate}</span>
@@ -2113,14 +2320,20 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
 
                 {/* Right Column: Live Rich-Text Rendered Document */}
                 <div className="bg-white rounded-2xl border border-slate-300 shadow-sm p-5 sm:p-6 space-y-3 overflow-y-auto max-h-[580px]">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider flex-wrap gap-2">
                     <span>FORMATTED DOCUMENT PREVIEW</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#ecfdf5] text-[#15803d] text-[10px] font-bold border border-[#15803d]">
                         ✓ {correctCount}
                       </span>
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#fff1f2] text-[#b91c1c] text-[10px] font-bold border border-[#b91c1c]">
                         ✗ {incorrectCount}
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#eff6ff] text-[#1d4ed8] text-[10px] font-bold border border-[#1d4ed8]">
+                        ✦ {newWordCount}
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#faf5ff] text-[#7e22ce] text-[10px] font-bold border border-[#7e22ce]">
+                        🎯 {pronounceCount}
                       </span>
                     </div>
                   </div>
@@ -2145,12 +2358,18 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                 >
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-[11px] text-slate-400 font-mono uppercase tracking-wider flex-wrap gap-2">
                     <span>RICH FORMATTED DOCUMENT</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#ecfdf5] text-[#15803d] border border-[#15803d] text-[10px] font-bold shadow-2xs">
                         <span className="font-black text-xs">✓</span> {correctCount} Correct
                       </span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#fff1f2] text-[#b91c1c] border border-[#b91c1c] text-[10px] font-bold shadow-2xs">
                         <span className="font-black text-xs">✗</span> {incorrectCount} Corrections
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#eff6ff] text-[#1d4ed8] border border-[#1d4ed8] text-[10px] font-bold shadow-2xs">
+                        <span className="font-black text-xs">✦</span> {newWordCount} Words
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#faf5ff] text-[#7e22ce] border border-[#7e22ce] text-[10px] font-bold shadow-2xs">
+                        <span className="font-black text-xs">🎯</span> {pronounceCount} Pronounce
                       </span>
                       <span>Session Date: {sessionDate}</span>
                       <button
@@ -2184,19 +2403,37 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
                   <span>Shortcuts:</span>
                   <span className="inline-flex items-center gap-1">
                     <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono">
-                      Ctrl+Alt+C
+                      Ctrl+Y
                     </kbd>
                     <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-[#ecfdf5] border border-[#15803d] text-[#15803d] text-[10px] font-bold">
-                      ✓ Correct Tag
+                      ✓ Correct
                     </span>
                   </span>
                   <span>•</span>
                   <span className="inline-flex items-center gap-1">
                     <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono">
-                      Ctrl+Alt+E
+                      Alt+N
                     </kbd>
                     <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-[#fff1f2] border border-[#b91c1c] text-[#b91c1c] text-[10px] font-bold">
-                      ✗ Incorrect Tag
+                      ✗ Incorrect
+                    </span>
+                  </span>
+                  <span>•</span>
+                  <span className="inline-flex items-center gap-1">
+                    <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono">
+                      Alt+W
+                    </kbd>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-[#eff6ff] border border-[#1d4ed8] text-[#1d4ed8] text-[10px] font-bold">
+                      ✦ New Word
+                    </span>
+                  </span>
+                  <span>•</span>
+                  <span className="inline-flex items-center gap-1">
+                    <kbd className="px-1 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono">
+                      Alt+P
+                    </kbd>
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-[#faf5ff] border border-[#7e22ce] text-[#7e22ce] text-[10px] font-bold">
+                      🎯 Pronounce
                     </span>
                   </span>
                   <span>•</span>
