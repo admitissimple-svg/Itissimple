@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   UserCheck,
   Sparkles,
+  BookOpen,
 } from 'lucide-react';
 import {
   LiveLesson,
@@ -18,6 +19,7 @@ import {
 } from '../types';
 import { Translations } from '../utils/i18n';
 import { LiveMeetLessonsPanel } from './LiveMeetLessonsPanel';
+import { NativeFriendsNotesModal } from './NativeFriendsNotesModal';
 
 interface StudentHeaderSectionProps {
   lessons: LiveLesson[];
@@ -65,8 +67,9 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
   timeZone = 'America/Sao_Paulo',
 }) => {
   const isEn = currentLanguage === 'en';
+  const [isNotesModalOpen, setIsNotesModalOpen] = useState(false);
   const studentEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
-  const studentUid = (currentAccount as any)?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+  const studentUid = (currentAccount as any)?.uid || currentAccount?.id || userProfile?.uid || userProfile?.id || '';
 
   const studentLessons = useMemo(() => {
     return [...lessons]
@@ -342,6 +345,37 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
         currentLanguage={currentLanguage}
         t={t}
         timeZone={timeZone}
+      />
+
+      {/* Button: Native Friends Notes (placed immediately below Live 1-on-1 Sessions with Your Native Friend) */}
+      <div className="flex justify-end pt-1" id="native-friends-notes-button-container">
+        <button
+          type="button"
+          onClick={() => setIsNotesModalOpen(true)}
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-6 py-3 rounded-2xl bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] hover:from-[#062863] hover:to-[#000035] text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all duration-200 border border-[#9AB4FF]/40 cursor-pointer active:scale-98 group"
+          id="btn-native-friends-notes"
+        >
+          <div className="w-7 h-7 rounded-xl bg-[#9AB4FF]/20 flex items-center justify-center text-[#9AB4FF] group-hover:scale-110 transition-transform">
+            <BookOpen className="w-4 h-4 text-[#9AB4FF]" />
+          </div>
+          <span className="tracking-wide">Native Friends Notes</span>
+          <span className="text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-extrabold border border-emerald-400/30">
+            {isEn ? 'Pedagogical Guide' : 'Guia Pedagógico'}
+          </span>
+        </button>
+      </div>
+
+      {/* Native Friends Notes Pedagogical Modal */}
+      <NativeFriendsNotesModal
+        isOpen={isNotesModalOpen}
+        onClose={() => setIsNotesModalOpen(false)}
+        studentUid={studentUid}
+        studentEmail={studentEmail}
+        currentAccount={currentAccount}
+        userProfile={userProfile}
+        lessons={lessons}
+        timeZone={timeZone}
+        currentLanguage={currentLanguage}
       />
     </div>
   );
