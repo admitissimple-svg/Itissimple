@@ -8,6 +8,11 @@ import {
 } from 'firebase/firestore';
 import { getDb, auth } from '../firebase';
 import { DirectMessage } from '../types';
+import { assertSafeFirestoreWrite, stampSchemaVersion } from './firestoreSchemaValidator';
+
+// Pure in-memory session cache for non-blocking active session rendering
+// ZERO dependency on localStorage: Cloud Firestore is the 100% persistent master
+const inMemoryDmCache = new Map<string, DirectMessage[]>();
 
 export enum OperationType {
   CREATE = 'create',
@@ -77,18 +82,15 @@ export function subscribeDirectMessages(
     return () => {};
   }
 
-  const localCacheKey = `its_simple_dm_${cleanStudent}_${cleanNativeFriend}`;
+  const cacheKey = `${cleanStudent}_${cleanNativeFriend}`;
 
-  // Helper to load initial cached messages
-  try {
-    const raw = localStorage.getItem(localCacheKey);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        onUpdate(parsed);
-      }
+  // Helper to load initial in-memory cached messages for zero-flicker UI
+  if (inMemoryDmCache.has(cacheKey)) {
+    const cached = inMemoryDmCache.get(cacheKey) || [];
+    if (cached.length > 0) {
+      onUpdate(cached);
     }
-  } catch {}
+  }
 
   let unsubscribeFirestore: (() => void) | null = null;
 
@@ -121,10 +123,8 @@ export function subscribeDirectMessages(
         // Sort chronologically ascending
         msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-        // Cache locally for instant offline/re-render access
-        try {
-          localStorage.setItem(localCacheKey, JSON.stringify(msgs));
-        } catch {}
+        // Cache in memory for instant active session access
+        inMemoryDmCache.set(cacheKey, msgs);
 
         onUpdate(msgs);
       },
@@ -251,11 +251,13 @@ export async function sendDirectMessage(params: {
     ...(params.isNotice ? { isNotice: true } : {}),
   };
 
-  // 1. Write to Firebase Firestore
+  // 1. Write to Firebase Firestore with schema validation
   try {
     const db = getDb();
     const docRef = doc(db, 'direct_messages', msgId);
-    await setDoc(docRef, message);
+    const stampedMessage = stampSchemaVersion(message);
+    assertSafeFirestoreWrite(`direct_messages/${msgId}`, stampedMessage, undefined, true);
+    await setDoc(docRef, stampedMessage);
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `direct_messages/${msgId}`);
   }
@@ -276,16 +278,12 @@ export async function sendDirectMessage(params: {
     console.warn('Could not mirror message to server:', err);
   }
 
-  // 3. Update local cache
-  const localCacheKey = `its_simple_dm_${cleanStudent}_${cleanNativeFriend}`;
-  try {
-    const raw = localStorage.getItem(localCacheKey);
-    const list: DirectMessage[] = raw ? JSON.parse(raw) : [];
-    if (!list.some((m) => m.id === msgId)) {
-      list.push(message);
-      localStorage.setItem(localCacheKey, JSON.stringify(list));
-    }
-  } catch {}
+  // 3. Update in-memory session cache
+  const cacheKey = `${cleanStudent}_${cleanNativeFriend}`;
+  const list: DirectMessage[] = inMemoryDmCache.get(cacheKey) || [];
+  if (!list.some((m) => m.id === msgId)) {
+    inMemoryDmCache.set(cacheKey, [...list, message]);
+  }
 
   return message;
 }

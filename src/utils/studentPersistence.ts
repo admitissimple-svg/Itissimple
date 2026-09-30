@@ -22,6 +22,20 @@ import {
 } from '../types';
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from './notifications';
+import {
+  assertSafeFirestoreWrite,
+  validateFirestoreDocument,
+  stampSchemaVersion,
+  CURRENT_SCHEMA_VERSION,
+  migrateLegacyLocalStorageToFirestore,
+} from './firestoreSchemaValidator';
+
+// Pure in-memory session caches to provide instant zero-delay UI rendering during active session
+// ZERO dependency on localStorage: 100% of persistent data is stored in Cloud Firestore
+const inMemoryVocabularyCache = new Map<string, StudentDictionaryEntry[]>();
+const inMemoryWeeklyChecksCache = new Map<string, Record<string, boolean>>();
+
+export { migrateLegacyLocalStorageToFirestore };
 
 export function normalizeUid(rawId?: string | null, email?: string | null): string {
   // 1. If a valid, non-placeholder, non-email UID was provided, use it
@@ -75,97 +89,67 @@ export function getUserDocIds(rawId?: string | null, email?: string | null): str
 }
 
 /**
- * Retrieve cached vocabulary from localStorage for immediate, non-empty rendering
+ * Retrieve cached vocabulary from in-memory session cache for immediate, non-empty rendering.
+ * ZERO localStorage dependency: 100% backed permanently by Cloud Firestore.
  */
 export function getCachedLocalVocabulary(studentUid?: string | null, studentEmail?: string | null): StudentDictionaryEntry[] {
-  if (typeof window === 'undefined' || !window.localStorage) return [];
-  try {
-    const cleanUid = studentUid?.trim();
-    const cleanEmail = studentEmail?.toLowerCase().trim();
-    const keysToCheck = [
-      cleanUid ? `its_simple_vocabulary_${cleanUid}` : '',
-      cleanEmail ? `its_simple_vocabulary_${cleanEmail}` : '',
-      'its_simple_vocabulary_master',
-    ].filter(Boolean);
-
-    for (const key of keysToCheck) {
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    }
-  } catch {}
+  const cleanUid = studentUid?.trim();
+  const cleanEmail = studentEmail?.toLowerCase().trim();
+  if (cleanUid && inMemoryVocabularyCache.has(cleanUid)) {
+    return inMemoryVocabularyCache.get(cleanUid) || [];
+  }
+  if (cleanEmail && inMemoryVocabularyCache.has(cleanEmail)) {
+    return inMemoryVocabularyCache.get(cleanEmail) || [];
+  }
   return [];
 }
 
 /**
- * Retrieve cached weekly checks from localStorage for instant, non-flickering checkmarks
+ * Retrieve cached weekly checks from in-memory session cache for instant, non-flickering checkmarks.
+ * ZERO localStorage dependency: 100% backed permanently by Cloud Firestore.
  */
 export function getCachedWeeklyChecks(studentUid?: string | null, studentEmail?: string | null): Record<string, boolean> {
-  if (typeof window === 'undefined' || !window.localStorage) return {};
-  try {
-    const cleanUid = studentUid?.trim();
-    const cleanEmail = studentEmail?.toLowerCase().trim();
-    const keysToCheck = [
-      cleanUid ? `its_simple_weekly_checks_${cleanUid}` : '',
-      cleanEmail ? `its_simple_weekly_checks_${cleanEmail}` : '',
-      'its_simple_weekly_checks_default',
-    ].filter(Boolean);
-
-    for (const key of keysToCheck) {
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-          return parsed;
-        }
-      }
-    }
-  } catch {}
+  const cleanUid = studentUid?.trim();
+  const cleanEmail = studentEmail?.toLowerCase().trim();
+  if (cleanUid && inMemoryWeeklyChecksCache.has(cleanUid)) {
+    return inMemoryWeeklyChecksCache.get(cleanUid) || {};
+  }
+  if (cleanEmail && inMemoryWeeklyChecksCache.has(cleanEmail)) {
+    return inMemoryWeeklyChecksCache.get(cleanEmail) || {};
+  }
   return {};
 }
 
 /**
- * Cache weekly checks in localStorage for immediate reflection upon page reopen
+ * Cache weekly checks in in-memory session cache for instant active session reflection.
+ * Never touches browser localStorage; Firestore users/{studentUID} is the exclusive master.
  */
 export function cacheWeeklyChecksLocally(
   studentUid?: string | null,
   studentEmail?: string | null,
   checks?: Record<string, boolean>
 ) {
-  if (typeof window === 'undefined' || !window.localStorage || !checks) return;
-  try {
-    const cleanUid = studentUid?.trim();
-    const cleanEmail = studentEmail?.toLowerCase().trim();
-    const jsonStr = JSON.stringify(checks);
-    if (cleanUid) localStorage.setItem(`its_simple_weekly_checks_${cleanUid}`, jsonStr);
-    if (cleanEmail) localStorage.setItem(`its_simple_weekly_checks_${cleanEmail}`, jsonStr);
-    localStorage.setItem('its_simple_weekly_checks_default', jsonStr);
-  } catch {}
+  if (!checks) return;
+  const cleanUid = studentUid?.trim();
+  const cleanEmail = studentEmail?.toLowerCase().trim();
+  if (cleanUid) inMemoryWeeklyChecksCache.set(cleanUid, checks);
+  if (cleanEmail) inMemoryWeeklyChecksCache.set(cleanEmail, checks);
 }
 
 /**
- * Cache vocabulary in localStorage for instant retrieval across page loads and component switches
+ * Cache vocabulary in in-memory session cache for instant retrieval across component switches.
+ * Never touches browser localStorage; Firestore users/{studentUID}/vocabulary is the exclusive master.
  */
 export function cacheVocabularyLocally(
   studentUid?: string | null,
   studentEmail?: string | null,
   entries?: StudentDictionaryEntry[]
 ) {
-  if (typeof window === 'undefined' || !window.localStorage || !Array.isArray(entries)) return;
-  try {
-    const cleanUid = studentUid?.trim();
-    const cleanEmail = studentEmail?.toLowerCase().trim();
-    const jsonStr = JSON.stringify(entries);
-    if (cleanUid) localStorage.setItem(`its_simple_vocabulary_${cleanUid}`, jsonStr);
-    if (cleanEmail) localStorage.setItem(`its_simple_vocabulary_${cleanEmail}`, jsonStr);
-    if (entries.length > 0) {
-      localStorage.setItem('its_simple_vocabulary_master', jsonStr);
-    }
-  } catch {}
+  if (!Array.isArray(entries)) return;
+  const cleanUid = studentUid?.trim();
+  const cleanEmail = studentEmail?.toLowerCase().trim();
+  if (cleanUid) inMemoryVocabularyCache.set(cleanUid, entries);
+  if (cleanEmail) inMemoryVocabularyCache.set(cleanEmail, entries);
 }
 
 /**
@@ -285,17 +269,16 @@ export async function saveStudentVocabularyToFirestore(
     // Cache accumulated list locally immediately
     cacheVocabularyLocally(cleanUid, cleanEmail, accumulatedList);
 
-    // Write strictly to Cloud Firestore users/{cleanUid} with accumulatedList
+    // Write strictly to Cloud Firestore users/{cleanUid} with accumulatedList and schema validation
+    const userPayload = stampSchemaVersion({
+      vocabulary: accumulatedList,
+      updatedAt: new Date().toISOString(),
+    });
+    assertSafeFirestoreWrite(`users/${cleanUid}`, userPayload, undefined, true);
+
     const userRef = doc(db, 'users', cleanUid);
     const writePromises: Promise<any>[] = [
-      setDoc(
-        userRef,
-        {
-          vocabulary: accumulatedList,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ),
+      setDoc(userRef, userPayload, { merge: true }),
     ];
 
     // Write individual entries to subcollection users/{cleanUid}/vocabulary/{wordDocId}
@@ -306,17 +289,15 @@ export async function saveStudentVocabularyToFirestore(
       if (!fullItem) return;
       const wordDocId = key.replace(/[^a-zA-Z0-9_-]/g, '_');
       const itemRef = doc(db, 'users', cleanUid, 'vocabulary', wordDocId);
+      const wordPayload = stampSchemaVersion({
+        ...fullItem,
+        studentUid: cleanUid,
+        studentEmail: cleanEmail,
+        updatedAt: new Date().toISOString(),
+      });
+      assertSafeFirestoreWrite(`users/${cleanUid}/vocabulary/${wordDocId}`, wordPayload, undefined, true);
       writePromises.push(
-        setDoc(
-          itemRef,
-          {
-            ...fullItem,
-            studentUid: cleanUid,
-            studentEmail: cleanEmail,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        )
+        setDoc(itemRef, wordPayload, { merge: true })
       );
     });
 
@@ -650,8 +631,10 @@ export async function saveStudentJournalEntryToFirestore(
     );
 
     // 1. Save in dedicated subcollection
+    const stampedEntry = stampSchemaVersion(sanitizedEntry);
+    assertSafeFirestoreWrite(`users/${cleanUid}/journal/${sanitizedEntry.id}`, stampedEntry, undefined, true);
     const entryRef = doc(db, 'users', cleanUid, 'journal', sanitizedEntry.id);
-    await withFirestoreTimeout(setDoc(entryRef, sanitizedEntry, { merge: true }), 3000, null);
+    await withFirestoreTimeout(setDoc(entryRef, stampedEntry, { merge: true }), 3000, null);
 
     // 2. Also retrieve and update list in user profile doc for single-fetch efficiency
     const userRef = doc(db, 'users', cleanUid);
@@ -666,16 +649,14 @@ export async function saveStudentJournalEntryToFirestore(
 
     const filtered = existingList.filter((e) => e.id !== sanitizedEntry.id);
     const updatedList = [sanitizedEntry, ...filtered];
+    const stampedUserUpdate = stampSchemaVersion({
+      dailyJournalEntries: updatedList,
+      updatedAt: new Date().toISOString(),
+    });
+    assertSafeFirestoreWrite(`users/${cleanUid}`, stampedUserUpdate, userSnap?.data(), true);
 
     await withFirestoreTimeout(
-      setDoc(
-        userRef,
-        {
-          dailyJournalEntries: updatedList,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      ),
+      setDoc(userRef, stampedUserUpdate, { merge: true }),
       2500,
       null
     );
@@ -781,7 +762,7 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
     const studentUid = normalizeUid(lesson.studentUid, cleanStudentEmail);
     const teacherUid = normalizeUid(lesson.teacherUid, cleanTeacherEmail);
 
-    const sanitizedLesson: LiveLesson = {
+    const sanitizedLesson: LiveLesson = stampSchemaVersion({
       ...JSON.parse(JSON.stringify(lesson)),
       id: lesson.id,
       studentUid: studentUid || lesson.studentUid,
@@ -789,7 +770,9 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
       studentEmail: cleanStudentEmail,
       teacherEmail: cleanTeacherEmail,
       updatedAt: lesson.updatedAt || new Date().toISOString(),
-    };
+    });
+
+    assertSafeFirestoreWrite(`lessons/${sanitizedLesson.id}`, sanitizedLesson, undefined, true);
 
     // 1. Root lessons collection
     const lessonRef = doc(db, 'lessons', sanitizedLesson.id);
@@ -831,7 +814,7 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
         const tUserSnap = await withFirestoreTimeout(getDoc(tUserRef), 1500, null);
         if (tUserSnap && tUserSnap.exists()) {
           const tData = tUserSnap.data();
-          const prevLessons: LiveLesson[] = Array.isArray(tData?.scheduledLessons) ? data.scheduledLessons : [];
+          const prevLessons: LiveLesson[] = Array.isArray(tData?.scheduledLessons) ? tData.scheduledLessons : [];
           const filtered = prevLessons.filter((l) => l.id !== sanitizedLesson.id);
           await withFirestoreTimeout(
             setDoc(tUserRef, { scheduledLessons: [sanitizedLesson, ...filtered], updatedAt: new Date().toISOString() }, { merge: true }),
@@ -941,8 +924,11 @@ export async function saveStudentProfileToFirestore(
   };
 
   try {
+    const stampedPayload = stampSchemaVersion(payload);
+    assertSafeFirestoreWrite(`users/${cleanUid}`, stampedPayload, undefined, true);
+
     // Strictly write to doc(db, 'users', cleanUid) - authenticated user UID single source of truth
-    await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), payload, { merge: true }), 3000, null);
+    await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), stampedPayload, { merge: true }), 3000, null);
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
@@ -970,6 +956,9 @@ export async function fetchStudentProfileFromFirestore(
     const snap = await withFirestoreTimeout(getDoc(doc(db, 'users', cleanUid)), 2500, null);
     if (snap && snap.exists()) {
       const data = snap.data() as Partial<UserProfile>;
+      // Validate schema and detect if migration is needed
+      validateFirestoreDocument('users', data, { path: `users/${cleanUid}` });
+
       if (data && (data.email || data.name || data.teacherEmail !== undefined)) {
         return {
           ...data,
@@ -1066,7 +1055,7 @@ export async function updateLiveLessonInFirestore(
     }
 
     // 2. Prepare complete root lesson payload
-    const rootPayload = {
+    const rootPayload = stampSchemaVersion({
       ...(lessonData || {}),
       id: lessonId,
       ...(effStudentUid ? { studentUid: effStudentUid } : {}),
@@ -1075,7 +1064,9 @@ export async function updateLiveLessonInFirestore(
       ...(effTeacherEmail ? { teacherEmail: effTeacherEmail } : {}),
       ...(effStartDateTime ? { startDateTime: effStartDateTime } : {}),
       ...fullUpdates,
-    };
+    });
+
+    assertSafeFirestoreWrite(`lessons/${lessonId}`, rootPayload, lessonSnap?.data(), true);
 
     // Update root lessons/{lessonId}
     await withFirestoreTimeout(setDoc(lessonRef, rootPayload, { merge: true }), 3000, null);
@@ -1785,7 +1776,10 @@ export async function saveStudentWeeklyChecksToFirestore(
         payload.weeklyStudyDaysTarget = weeklyStudyDaysTarget;
       }
 
-      await withFirestoreTimeout(setDoc(userRef, payload, { merge: true }), 3500, null);
+      const stampedPayload = stampSchemaVersion(payload);
+      assertSafeFirestoreWrite(`users/${cleanUid}`, stampedPayload, existingChecks, true);
+
+      await withFirestoreTimeout(setDoc(userRef, stampedPayload, { merge: true }), 3500, null);
 
       // Ensure memorization checkmarks are also recorded in users/{cleanUid}/memorization/{day} subcollection
       const memoPromises: Promise<any>[] = [];
@@ -1796,12 +1790,12 @@ export async function saveStudentWeeklyChecksToFirestore(
           memoPromises.push(
             setDoc(
               memoDocRef,
-              {
+              stampSchemaVersion({
                 day,
                 completed: true,
                 completedAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
-              },
+              }),
               { merge: true }
             )
           );
@@ -1844,7 +1838,7 @@ export async function saveStudentWeeklyChecksToFirestore(
  * 2. users/{cleanUid}/memorization/{day} subcollection document ({ day, completed: isCompleted, completedAt: ISO, updatedAt: ISO })
  * 3. users/{cleanUid}/homework/{weekId} subcollection document ({ completedPartsByDay: { [day]: isCompleted }, isDayPartCompleted: isCompleted })
  * 4. users/{cleanUid}/studentJournal/memorization_{day}_{weekId} subcollection document & journal entry
- * 5. Mirrors to server API and local storage cache
+ * 5. Mirrors to server API and in-memory session cache
  */
 export async function saveMemorizationCompletionToFirestore(
   studentUid: string,
@@ -1863,7 +1857,7 @@ export async function saveMemorizationCompletionToFirestore(
   const checkKey = `memorization_${day}`;
   const nowIso = new Date().toISOString();
 
-  // 1. Immediately update localStorage cache for instant 0ms offline/reload hydration
+  // 1. Immediately update in-memory session cache for instant 0ms non-blocking hydration
   if (cleanUid) {
     const currentCached = getCachedWeeklyChecks(cleanUid, cleanEmail);
     cacheWeeklyChecksLocally(cleanUid, cleanEmail, {
@@ -2054,7 +2048,7 @@ export async function fetchStudentWeeklyChecksFromFirestore(
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
 
-  // Check localStorage cache first for fast 0ms hydration
+  // Check in-memory session cache first for fast 0ms hydration
   const localCached = getCachedWeeklyChecks(cleanUid, cleanEmail);
 
   // 1. Try reading directly strictly from Firestore users/{cleanUid}
@@ -2064,6 +2058,7 @@ export async function fetchStudentWeeklyChecksFromFirestore(
       const userSnap = await withFirestoreTimeout(getDoc(userRef), 2500, null);
       if (userSnap && userSnap.exists()) {
         const data = userSnap.data();
+        validateFirestoreDocument('users', data, { path: `users/${cleanUid}` });
         const mergedChecks: Record<string, boolean> = {
           ...localCached,
           ...(data?.weeklyChecks || {}),
@@ -2648,15 +2643,18 @@ export async function saveStudentHomeworkProgressToFirestore(
 
   try {
     const sanitizedHomework = JSON.parse(JSON.stringify(homework));
-    const payload = {
+    const payload = stampSchemaVersion({
       ...sanitizedHomework,
       id: weekId,
       studentUid: cleanUid,
       studentEmail: cleanEmail,
       updatedAt: new Date().toISOString(),
-    };
+    });
 
     if (db && cleanUid) {
+      assertSafeFirestoreWrite(`users/${cleanUid}/homework/${weekId}`, payload, undefined, true);
+      assertSafeFirestoreWrite(`student_homework/${cleanUid}`, payload, undefined, true);
+
       // 1. Save directly to subcollection users/{cleanUid}/homework/{weekId}
       const hwDocRef = doc(db, 'users', cleanUid, 'homework', weekId);
       await withFirestoreTimeout(

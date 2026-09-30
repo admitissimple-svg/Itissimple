@@ -121,7 +121,9 @@ import {
   getTodayIsoDate,
   mapStepIdToJournalType,
   deriveWeeklyChecksFromJournal,
+  migrateLegacyLocalStorageToFirestore,
 } from './utils/studentPersistence';
+import { FirestoreSchemaAlertBanner } from './components/FirestoreSchemaAlertBanner';
 import { StudentJournalEntry } from './types';
 import { ManageSubscriptionModal } from './components/ManageSubscriptionModal';
 import { RoutineRemindersManager } from './components/RoutineRemindersManager';
@@ -213,44 +215,34 @@ export default function App() {
   const [currentLanguage, setCurrentLanguage] = useState<Language>('en');
   const t = useMemo(() => getTranslations(currentLanguage), [currentLanguage]);
 
-  // 2. Authentication & Accounts
-  const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(() => {
-    try {
-      const saved = localStorage.getItem('its_simple_current_account');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
+  // 2. Authentication & Accounts - 100% managed in Cloud Firestore and Firebase Auth (ZERO localStorage dependency)
+  const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(null);
+  const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>([]);
+
+  // Startup hook: Permanently purge any legacy browser localStorage keys to enforce strict Firestore exclusivity
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const legacyKeys = [
+        'its_simple_current_account',
+        'currentUserAccount',
+        'its_simple_available_accounts',
+        'its_simple_vocabulary_master',
+        'its_simple_weekly_checks_default',
+      ];
+      legacyKeys.forEach((k) => {
+        try {
+          localStorage.removeItem(k);
+        } catch {}
+      });
     }
-  });
+  }, []);
 
-  const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>(() => {
-    try {
-      const saved = localStorage.getItem('its_simple_available_accounts');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch {}
-    return [];
-  });
-
+  // One-time automatic migration of any legacy data to Cloud Firestore
   useEffect(() => {
-    try {
-      if (currentAccount) {
-        localStorage.setItem('its_simple_current_account', JSON.stringify(currentAccount));
-      } else {
-        localStorage.removeItem('its_simple_current_account');
-      }
-    } catch {}
-  }, [currentAccount]);
-
-  useEffect(() => {
-    try {
-      if (availableAccounts && availableAccounts.length > 0) {
-        localStorage.setItem('its_simple_available_accounts', JSON.stringify(availableAccounts));
-      }
-    } catch {}
-  }, [availableAccounts]);
+    if (currentAccount?.uid) {
+      migrateLegacyLocalStorageToFirestore(currentAccount.uid, currentAccount.email);
+    }
+  }, [currentAccount?.uid, currentAccount?.email]);
 
   // Synchronize Firebase Auth state with React app state for multi-account isolation & published profile detection
   useEffect(() => {
@@ -335,17 +327,9 @@ export default function App() {
       } else {
         // If Firebase Auth is signed out, clear currentAccount if it was tied to Firebase Auth
         if (currentAccount && auth.currentUser === null) {
-          // If the user actively signed out, ensure local state reflects it
-          try {
-            const savedAcc = localStorage.getItem('its_simple_current_account');
-            if (savedAcc) {
-              const parsed = JSON.parse(savedAcc);
-              if (parsed?.uid && !parsed.uid.startsWith('usr-') && parsed.uid !== 'user-default') {
-                setCurrentAccount(null);
-                localStorage.removeItem('its_simple_current_account');
-              }
-            }
-          } catch {}
+          if (currentAccount.uid && !currentAccount.uid.startsWith('usr-') && currentAccount.uid !== 'user-default') {
+            setCurrentAccount(null);
+          }
         }
       }
     });
@@ -1612,8 +1596,6 @@ export default function App() {
       setWeeklyChecks({});
       setStudentJournal([]);
       setWeeklyHomework(null);
-      localStorage.setItem('currentUserAccount', JSON.stringify(newStudentAccount));
-      localStorage.setItem('its_simple_current_account', JSON.stringify(newStudentAccount));
 
       // Update contractedLessons map with trial lesson immediately
       if (cleanEmail) {
@@ -2037,10 +2019,6 @@ export default function App() {
   const handleLogout = () => {
     try {
       firebaseSignOutAuth(auth).catch(() => {});
-    } catch {}
-    try {
-      localStorage.removeItem('its_simple_current_account');
-      localStorage.removeItem('currentUserAccount');
     } catch {}
     setCurrentAccount(null);
     setUserProfile(createDefaultStudentProfile(null));
@@ -3009,7 +2987,6 @@ export default function App() {
           avatar: '',
         };
         setCurrentAccount(studentAccount);
-        localStorage.setItem('currentUserAccount', JSON.stringify(studentAccount));
       }
 
       setUserProfile((prev) => ({
@@ -5526,6 +5503,9 @@ export default function App() {
         onDeleteEntry={handleDeleteJournalEntry}
         onOpenDailySentenceSection={() => setIsDailySentenceModalOpen(true)}
       />
+
+      {/* Developer & Admin Real-time Firestore Schema Protection & Migration Alert Banner */}
+      <FirestoreSchemaAlertBanner isAdmin={currentAccount?.role === 'admin'} />
     </div>
   );
 }

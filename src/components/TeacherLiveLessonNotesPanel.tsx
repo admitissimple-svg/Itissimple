@@ -43,6 +43,7 @@ import {
 import { formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
 import { doc, setDoc } from 'firebase/firestore';
 import { getDb } from '../firebase';
+import { assertSafeFirestoreWrite, stampSchemaVersion } from '../utils/firestoreSchemaValidator';
 import { useAuth } from '../context/AuthContext';
 import { getGoogleOAuthToken, setGoogleOAuthToken, requestGoogleDriveAuth } from '../utils/auth';
 import {
@@ -979,15 +980,19 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               updatedAt: nowIso,
             };
 
-            setDoc(doc(firestore, 'session_notes', sessionKey), documentPayload, {
+            const stampedPayload = stampSchemaVersion(documentPayload);
+            assertSafeFirestoreWrite(`session_notes/${sessionKey}`, stampedPayload, undefined, true);
+
+            setDoc(doc(firestore, 'session_notes', sessionKey), stampedPayload, {
               merge: true,
             }).catch((err) => console.warn('Firestore /session_notes notice:', err));
 
             const userDocId = activeStudent?.uid || activeStudent?.id || (cleanEmail ? cleanEmail.replace(/[^a-zA-Z0-9_-]/g, '_') : '');
             if (userDocId) {
+              assertSafeFirestoreWrite(`users/${userDocId}/session_notes/${sessionKey}`, stampedPayload, undefined, true);
               setDoc(
                 doc(firestore, 'users', userDocId, 'session_notes', sessionKey),
-                documentPayload,
+                stampedPayload,
                 { merge: true }
               ).catch((err) => console.warn('Firestore /users/.../session_notes notice:', err));
             }

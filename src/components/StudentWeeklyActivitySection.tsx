@@ -458,7 +458,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
           return false;
         });
         if (hasMemoInJournal) return true;
-        // LocalStorage cache fallback
+        // In-memory cache fallback (Firestore users/{studentUID} is the master)
         const localCached = getCachedWeeklyChecks(studentUid, studentEmail);
         if (localCached && Boolean(localCached[checkKey])) return true;
         return false;
@@ -517,7 +517,7 @@ export const StudentWeeklyActivitySection: React.FC<StudentWeeklyActivitySection
 
         if (hasValidJournalVideo) return true;
 
-        // LocalStorage cache fallback
+        // In-memory cache fallback (Firestore users/{studentUID} is the master)
         const localCached = getCachedWeeklyChecks(studentUid, studentEmail);
         if (localCached && Boolean(localCached[checkKey])) return true;
 

@@ -214,108 +214,90 @@ export interface SpotifyPlaylistCacheEntry {
   timestamp: number;
 }
 
+// In-memory runtime cache: eliminates reliance on browser localStorage
+const spotifyMemoryCache = new Map<string, SpotifyPlaylistCacheEntry>();
+
 /**
- * Checks all levels in localStorage and purges entries whose playlistId no longer matches
- * the active configuration.
+ * Checks in-memory cache and purges legacy localStorage entries permanently.
  */
 export function checkAndInvalidateSpotifyCache(): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
   (['beginner', 'intermediate', 'advanced'] as NormalizedStudentLevel[]).forEach((lvl) => {
-    try {
-      // Purge old v3 cache if present
-      localStorage.removeItem(`its_simple_spotify_playlist_v3_${lvl}`);
-
-      const raw = localStorage.getItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
-      if (raw) {
-        const parsed: SpotifyPlaylistCacheEntry = JSON.parse(raw);
-        if (parsed.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[lvl].playlistId) {
-          console.info(
-            `[Spotify Cache] Invalidação automática para "${lvl}": removendo cache da playlist antiga "${parsed.playlistId}". Nova playlist: "${SPOTIFY_LEVEL_PLAYLISTS[lvl].playlistId}".`
-          );
-          localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
-        }
-      }
-    } catch {
-      localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
+    // Purge in-memory if invalid
+    const cached = spotifyMemoryCache.get(lvl);
+    if (cached && cached.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[lvl].playlistId) {
+      spotifyMemoryCache.delete(lvl);
     }
   });
-}
 
-/**
- * Retrieves cached playlist tracks from localStorage with strict playlistId validation.
- * If the playlist ID stored in cache does not match the current level's playlist ID (e.g. updated Intermediate playlist),
- * the cache is automatically invalidated, cleared from persistent storage, and null is returned to force fresh consumption.
- */
-export function getCachedPlaylistTracks(rawLevel?: string | EnglishLevel | null): SpotifyDailyTrack[] | null {
-  if (typeof window === 'undefined' || !window.localStorage) return null;
-  const norm = normalizeStudentLevel(rawLevel);
-  const currentConfig = SPOTIFY_LEVEL_PLAYLISTS[norm];
-  if (!currentConfig) return null;
-
-  try {
-    const raw = localStorage.getItem(`${SPOTIFY_CACHE_KEY_PREFIX}${norm}`);
-    if (!raw) return null;
-    const parsed: SpotifyPlaylistCacheEntry = JSON.parse(raw);
-
-    // Strict validation: Invalidate cache when playlist ID changed
-    if (parsed.playlistId !== currentConfig.playlistId) {
-      console.info(
-        `[Spotify Cache] Invalidação detectada no nível "${norm}": ID armazenado ("${parsed.playlistId}") diferente do atual ("${currentConfig.playlistId}"). Limpando cache.`
-      );
-      invalidateSpotifyPlaylistCache(norm);
-      return null;
-    }
-
-    if (Date.now() - parsed.timestamp > SPOTIFY_CACHE_TTL_MS) {
-      invalidateSpotifyPlaylistCache(norm);
-      return null;
-    }
-
-    return parsed.tracks;
-  } catch (e) {
-    invalidateSpotifyPlaylistCache(norm);
-    return null;
+  // Permanently clean legacy browser localStorage keys to satisfy zero-localStorage policy
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      (['beginner', 'intermediate', 'advanced'] as NormalizedStudentLevel[]).forEach((lvl) => {
+        localStorage.removeItem(`its_simple_spotify_playlist_v3_${lvl}`);
+        localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
+      });
+    } catch {}
   }
 }
 
 /**
- * Saves tracks in localStorage cache alongside the playlistId for future invalidation checks.
+ * Retrieves cached playlist tracks from in-memory cache with strict playlistId validation.
+ */
+export function getCachedPlaylistTracks(rawLevel?: string | EnglishLevel | null): SpotifyDailyTrack[] | null {
+  const norm = normalizeStudentLevel(rawLevel);
+  const currentConfig = SPOTIFY_LEVEL_PLAYLISTS[norm];
+  if (!currentConfig) return null;
+
+  const cached = spotifyMemoryCache.get(norm);
+  if (!cached) return null;
+
+  if (cached.playlistId !== currentConfig.playlistId) {
+    spotifyMemoryCache.delete(norm);
+    return null;
+  }
+
+  if (Date.now() - cached.timestamp > SPOTIFY_CACHE_TTL_MS) {
+    spotifyMemoryCache.delete(norm);
+    return null;
+  }
+
+  return cached.tracks;
+}
+
+/**
+ * Saves tracks in runtime in-memory cache.
  */
 export function setCachedPlaylistTracks(
   rawLevel: string | EnglishLevel | null | undefined,
   playlistId: string,
   tracks: SpotifyDailyTrack[]
 ): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
   const norm = normalizeStudentLevel(rawLevel);
-  try {
-    const entry: SpotifyPlaylistCacheEntry = {
-      playlistId,
-      tracks,
-      timestamp: Date.now(),
-    };
-    localStorage.setItem(`${SPOTIFY_CACHE_KEY_PREFIX}${norm}`, JSON.stringify(entry));
-  } catch (e) {
-    console.warn('[Spotify Cache] Erro ao salvar cache de faixas:', e);
-  }
+  const entry: SpotifyPlaylistCacheEntry = {
+    playlistId,
+    tracks,
+    timestamp: Date.now(),
+  };
+  spotifyMemoryCache.set(norm, entry);
 }
 
 /**
- * Explicitly clears/invalidates the Spotify playlist cache for a specific level or all levels.
+ * Explicitly clears/invalidates the Spotify playlist cache in memory.
  */
 export function invalidateSpotifyPlaylistCache(level?: NormalizedStudentLevel | string): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  try {
-    if (level) {
-      const norm = normalizeStudentLevel(level);
-      localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${norm}`);
-    } else {
+  if (level) {
+    const norm = normalizeStudentLevel(level);
+    spotifyMemoryCache.delete(norm);
+  } else {
+    spotifyMemoryCache.clear();
+  }
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
       (['beginner', 'intermediate', 'advanced'] as NormalizedStudentLevel[]).forEach((lvl) => {
         localStorage.removeItem(`${SPOTIFY_CACHE_KEY_PREFIX}${lvl}`);
       });
-    }
-  } catch (e) {
-    console.warn('[Spotify Cache] Erro ao invalidar cache:', e);
+    } catch {}
   }
 }
 
