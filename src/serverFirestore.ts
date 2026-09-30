@@ -9,10 +9,11 @@ try {
 
 // Active and exclusive project identifiers
 export const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
-export const ACTIVE_PROJECT_NUMBER = '681085451337';
+export const ACTIVE_PROJECT_NUMBER = 'gen-lang-client-0507076122';
 export const ACTIVE_FIREBASE_AUTH_DOMAIN = `${ACTIVE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
 export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.firebasestorage.app`;
-export const ACTIVE_OAUTH_CLIENT_ID = `${ACTIVE_PROJECT_NUMBER}-${ACTIVE_FIREBASE_PROJECT_ID}.apps.googleusercontent.com`;
+export const ACTIVE_OAUTH_CLIENT_ID = `${ACTIVE_FIREBASE_PROJECT_ID}.apps.googleusercontent.com`;
+export const ACTIVE_APP_ID = `1:${ACTIVE_FIREBASE_PROJECT_ID}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
 export const ACTIVE_FIRESTORE_DATABASE_ID = 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
 
 let dbInstance: any = null;

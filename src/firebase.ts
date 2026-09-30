@@ -15,23 +15,23 @@ const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.met
 
 // Active and exclusive project constants for gen-lang-client-0507076122
 export const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
-export const ACTIVE_PROJECT_NUMBER = '681085451337';
+export const ACTIVE_PROJECT_NUMBER = 'gen-lang-client-0507076122';
 export const ACTIVE_FIREBASE_AUTH_DOMAIN = `${ACTIVE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
 export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.firebasestorage.app`;
-export const ACTIVE_OAUTH_CLIENT_ID = `${ACTIVE_PROJECT_NUMBER}-${ACTIVE_FIREBASE_PROJECT_ID}.apps.googleusercontent.com`;
-export const ACTIVE_APP_ID = `1:${ACTIVE_PROJECT_NUMBER}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
+export const ACTIVE_OAUTH_CLIENT_ID = `${ACTIVE_FIREBASE_PROJECT_ID}.apps.googleusercontent.com`;
+export const ACTIVE_APP_ID = `1:${ACTIVE_FIREBASE_PROJECT_ID}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
 export const ACTIVE_FIRESTORE_DATABASE_ID = 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
 
-// Strict sanitization: completely block and override any legacy or divergent project identifiers
+// Strict sanitization: completely block and override any legacy (e.g. 167755700011) or divergent project identifiers
 function sanitizeProjectId(raw?: string): string {
-  if (raw && raw === ACTIVE_FIREBASE_PROJECT_ID) {
+  if (raw && raw !== '167755700011' && raw === ACTIVE_FIREBASE_PROJECT_ID) {
     return ACTIVE_FIREBASE_PROJECT_ID;
   }
   return ACTIVE_FIREBASE_PROJECT_ID;
 }
 
 function sanitizeAuthDomain(raw?: string): string {
-  if (raw && raw === ACTIVE_FIREBASE_AUTH_DOMAIN) {
+  if (raw && !raw.includes('167755700011') && raw === ACTIVE_FIREBASE_AUTH_DOMAIN) {
     return ACTIVE_FIREBASE_AUTH_DOMAIN;
   }
   return ACTIVE_FIREBASE_AUTH_DOMAIN;
@@ -39,14 +39,14 @@ function sanitizeAuthDomain(raw?: string): string {
 
 export const effectiveFirebaseConfig = {
   projectId: sanitizeProjectId(env.VITE_FIREBASE_PROJECT_ID || baseFirebaseConfig.projectId),
-  appId: ACTIVE_APP_ID,
+  appId: env.VITE_FIREBASE_APP_ID || baseFirebaseConfig.appId || ACTIVE_APP_ID,
   apiKey: env.VITE_FIREBASE_API_KEY || baseFirebaseConfig.apiKey || 'AIzaSyBVAXfOGPV11t7HIkgb6YH4GScws1mfTzk',
   authDomain: sanitizeAuthDomain(env.VITE_FIREBASE_AUTH_DOMAIN || baseFirebaseConfig.authDomain),
   firestoreDatabaseId: ACTIVE_FIRESTORE_DATABASE_ID,
   storageBucket: ACTIVE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: ACTIVE_PROJECT_NUMBER,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || baseFirebaseConfig.messagingSenderId || ACTIVE_PROJECT_NUMBER,
   measurementId: baseFirebaseConfig.measurementId || '',
-  oAuthClientId: ACTIVE_OAUTH_CLIENT_ID,
+  oAuthClientId: env.VITE_FIREBASE_OAUTH_CLIENT_ID || baseFirebaseConfig.oAuthClientId || ACTIVE_OAUTH_CLIENT_ID,
   recaptchaSiteKey: baseFirebaseConfig.recaptchaSiteKey || '',
 };
 
