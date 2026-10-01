@@ -75,17 +75,13 @@ import {
   getEndOfDayReminderTime,
   getTodayDayOfWeek,
 } from '../utils/notifications';
-
-interface YouTubePlaylistItem {
-  id: string;
-  title: string;
-  videos?: Array<{
-    id?: string;
-    videoId?: string;
-    title: string;
-    url?: string;
-  }>;
-}
+import {
+  fetchDynamicYouTubePlaylists,
+  authenticateYouTubeAccount,
+  YouTubePlaylistItem,
+  YOUTUBE_ASSOCIATED_ACCOUNT,
+  DEFAULT_CURATED_PLAYLISTS,
+} from '../utils/youtubeService';
 
 interface StudentRoutineGuideSectionProps {
   routinesByDay: Record<DayOfWeek, RoutineItem[]>;
@@ -171,8 +167,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [isNewWeekModalOpen, setIsNewWeekModalOpen] = useState(false);
   const [isStartingNewWeek, setIsStartingNewWeek] = useState(false);
 
-  // Playlists from active admin YouTube channel
-  const [playlists, setPlaylists] = useState<YouTubePlaylistItem[]>([]);
+  // Playlists from active admin YouTube channel (adm.itissimple@gmail.com)
+  const [playlists, setPlaylists] = useState<YouTubePlaylistItem[]>(DEFAULT_CURATED_PLAYLISTS);
+  const [isLoadingPlaylists, setIsLoadingPlaylists] = useState(false);
+  const [isSyncingPlaylists, setIsSyncingPlaylists] = useState(false);
+  const [playlistsError, setPlaylistsError] = useState<string | null>(null);
+  const [reauthRequired, setReauthRequired] = useState(false);
+  const [isReauthenticating, setIsReauthenticating] = useState(false);
 
   // Alphabetically sorted playlists for topic selector (preserving Your Suggestion as the first item)
   const sortedPlaylists = useMemo(() => {
@@ -193,23 +194,67 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [suggestingUrlValues, setSuggestingUrlValues] = useState<Record<string, string>>({});
   const [isSavingSuggestionId, setIsSavingSuggestionId] = useState<string | null>(null);
 
-  // Fetch active playlists dynamically
+  // Fetch active playlists dynamically from server or YouTube Data API v3
+  const loadPlaylists = useCallback(async (force = false) => {
+    if (force) {
+      setIsSyncingPlaylists(true);
+    } else {
+      setIsLoadingPlaylists(true);
+    }
+    setPlaylistsError(null);
+
+    try {
+      const result = await fetchDynamicYouTubePlaylists({ force });
+      if (result.playlists && result.playlists.length > 0) {
+        setPlaylists(result.playlists);
+      }
+      if (result.reauthRequired) {
+        setReauthRequired(true);
+        if (result.error) setPlaylistsError(result.error);
+      } else {
+        setReauthRequired(false);
+        setPlaylistsError(null);
+      }
+    } catch (err: any) {
+      console.warn('Error fetching playlists for timeline selector:', err);
+      setPlaylistsError(
+        err?.message || (isEn ? 'Failed to fetch YouTube playlists' : 'Erro ao sincronizar playlists do YouTube')
+      );
+    } finally {
+      setIsLoadingPlaylists(false);
+      setIsSyncingPlaylists(false);
+    }
+  }, [isEn]);
+
   useEffect(() => {
-    let isMounted = true;
-    fetch('/api/youtube-playlists')
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => {
-        if (isMounted && Array.isArray(data) && data.length > 0) {
-          setPlaylists(data);
-        }
-      })
-      .catch((err) => {
-        console.warn('Error fetching playlists for timeline selector:', err);
+    loadPlaylists(false);
+  }, [loadPlaylists]);
+
+  const handleReauthenticateYouTube = async () => {
+    setIsReauthenticating(true);
+    setPlaylistsError(null);
+    try {
+      await authenticateYouTubeAccount(YOUTUBE_ASSOCIATED_ACCOUNT);
+      await loadPlaylists(true);
+      setPlaylistFeedback({
+        activityId: selectedActivityId || '',
+        type: 'success',
+        message: isEn
+          ? '✨ YouTube account connected and playlists updated!'
+          : '✨ Conta do YouTube conectada e playlists atualizadas!',
       });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+      setTimeout(() => setPlaylistFeedback(null), 4000);
+    } catch (err: any) {
+      console.warn('Failed to reauthenticate YouTube:', err);
+      setPlaylistsError(
+        isEn
+          ? 'Could not connect YouTube account. Please allow popup access.'
+          : 'Não foi possível conectar a conta do YouTube. Permita a janela pop-up.'
+      );
+    } finally {
+      setIsReauthenticating(false);
+    }
+  };
 
   // Inline time editing state for individual activity row
   const [editingTimeActivityId, setEditingTimeActivityId] = useState<string | null>(null);
@@ -1872,7 +1917,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                             <select
                               value={isRepeatVideo ? '' : safePlaylistValue}
                               onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
-                              disabled={isRepeatVideo || loadingPlaylistAssignId === act.id}
+                              disabled={isRepeatVideo || loadingPlaylistAssignId === act.id || isLoadingPlaylists}
                               aria-label={isEn ? 'Playlist Topic / Routine name' : 'Tópico da Playlist / Nome da Rotina'}
                               className={`text-xs font-bold py-1 pl-2.5 pr-7 rounded-xl border appearance-none transition focus:outline-hidden max-w-[180px] sm:max-w-[240px] truncate shadow-2xs ${
                                 isRepeatVideo
@@ -1894,7 +1939,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                               }
                             >
                               <option value="" className="text-slate-600 bg-white font-medium">
-                                {loadingPlaylistAssignId === act.id
+                                {isLoadingPlaylists
+                                  ? (isEn ? '⏳ Loading topics...' : '⏳ Carregando tópicos...')
+                                  : loadingPlaylistAssignId === act.id
                                   ? (isEn ? '⏳ Assigning Topic...' : '⏳ Injetando Tópico...')
                                   : isRepeatVideo
                                   ? (isEn ? '🔁 Repeat Previous Video' : '🔁 Repetir Vídeo Anterior')
@@ -1919,6 +1966,71 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                               }`}
                             />
                           </div>
+
+                          {/* Dynamic Refresh / Sync Playlists button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              loadPlaylists(true);
+                            }}
+                            disabled={isSyncingPlaylists || isLoadingPlaylists}
+                            title={
+                              isEn
+                                ? 'Sync & update YouTube playlists from adm.itissimple@gmail.com'
+                                : 'Sincronizar e atualizar playlists do YouTube de adm.itissimple@gmail.com'
+                            }
+                            className={`p-1.5 rounded-xl border text-xs transition shrink-0 select-none shadow-2xs ${
+                              isSelected
+                                ? 'bg-white/10 hover:bg-white/20 text-[#9AB4FF] border-white/20'
+                                : 'bg-white hover:bg-slate-50 text-[#1C4C96] border-slate-300'
+                            } ${isSyncingPlaylists ? 'opacity-70 cursor-wait' : ''}`}
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingPlaylists ? 'animate-spin text-amber-400' : ''}`} />
+                          </button>
+
+                          {/* Re-authenticate / Connect button if required */}
+                          {reauthRequired && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReauthenticateYouTube();
+                              }}
+                              disabled={isReauthenticating}
+                              title={
+                                isEn
+                                  ? 'Connect YouTube account (adm.itissimple@gmail.com) to load dynamic playlists'
+                                  : 'Conectar conta do YouTube (adm.itissimple@gmail.com) para carregar playlists dinâmicas'
+                              }
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border transition shrink-0 shadow-2xs ${
+                                isSelected
+                                  ? 'bg-amber-400/20 text-amber-200 border-amber-300/40 hover:bg-amber-400/30'
+                                  : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                              } ${isReauthenticating ? 'opacity-70 cursor-wait' : ''}`}
+                            >
+                              {isReauthenticating ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                              ) : (
+                                <Youtube className="w-3.5 h-3.5 text-red-500" />
+                              )}
+                              <span className="whitespace-nowrap">
+                                {isReauthenticating
+                                  ? (isEn ? 'Connecting...' : 'Conectando...')
+                                  : (isEn ? 'Connect YouTube' : 'Conectar YouTube')}
+                              </span>
+                            </button>
+                          )}
+
+                          {/* Display non-blocking error badge if present and reauth not required */}
+                          {playlistsError && !reauthRequired && (
+                            <span
+                              className="text-[10px] text-amber-500 font-medium truncate max-w-[160px]"
+                              title={playlistsError}
+                            >
+                              ⚠️ {playlistsError}
+                            </span>
+                          )}
 
                           {/* Requirement 2 & 3: "Repeat Previous Video" Checkbox/Toggle, shown ONLY from 2nd active study day onwards */}
                           {canShowRepeatVideoOption && (

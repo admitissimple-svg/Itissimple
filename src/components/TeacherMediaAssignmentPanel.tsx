@@ -23,6 +23,7 @@ import {
   Info,
   ShieldCheck,
   Calendar,
+  RefreshCw,
 } from 'lucide-react';
 import {
   RoutineItem,
@@ -33,6 +34,7 @@ import {
   GoogleAccount,
 } from '../types';
 import { extractYouTubeVideoId, getDailyYouTubeVideoForStudent } from '../utils/youtube';
+import { fetchDynamicYouTubePlaylists, DEFAULT_CURATED_PLAYLISTS } from '../utils/youtubeService';
 import {
   isValidSpotifyUrl,
   parseSpotifyUrl,
@@ -194,7 +196,7 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   const [studentProfile, setStudentProfile] = useState<any>(null);
 
   // YouTube Playlist & Anti-Repetition Video Assignment State
-  const [playlists, setPlaylists] = useState<any[]>([]);
+  const [playlists, setPlaylists] = useState<any[]>(DEFAULT_CURATED_PLAYLISTS);
 
   // Alphabetically sorted playlists for topic selector (preserving Your Suggestion as the first item)
   const sortedPlaylists = React.useMemo(() => {
@@ -202,7 +204,9 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
       (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
     );
   }, [playlists]);
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>('pl-eating-habits');
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>(
+    DEFAULT_CURATED_PLAYLISTS[0]?.id || 'PLUj52KVM_CdY'
+  );
   const [dayPlaylistIds, setDayPlaylistIds] = useState<Partial<Record<DayOfWeek, string>>>({});
   const [studentAssignments, setStudentAssignments] = useState<any[]>([]);
   const [studentWatched, setStudentWatched] = useState<string[]>([]);
@@ -226,20 +230,28 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
   const currentNormalizedLevel = normalizeStudentLevel(currentLevelRaw);
   const currentLevelConfig = getSpotifyPlaylistForLevel(currentNormalizedLevel);
 
-  // Fetch all playlists
-  React.useEffect(() => {
-    fetch('/api/youtube-playlists')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setPlaylists(data);
-          if (!selectedPlaylistId) {
-            setSelectedPlaylistId(data[0].id);
-          }
+  // Fetch all playlists dynamically from server or YouTube
+  const [isSyncingPlaylists, setIsSyncingPlaylists] = useState(false);
+  const loadPlaylists = React.useCallback(async (force = false) => {
+    if (force) setIsSyncingPlaylists(true);
+    try {
+      const res = await fetchDynamicYouTubePlaylists({ force });
+      if (res.playlists && res.playlists.length > 0) {
+        setPlaylists(res.playlists);
+        if (!selectedPlaylistId) {
+          setSelectedPlaylistId(res.playlists[0].id);
         }
-      })
-      .catch(() => {});
-  }, []);
+      }
+    } catch (e) {
+      console.warn('TeacherMediaAssignmentPanel fetch playlists error:', e);
+    } finally {
+      setIsSyncingPlaylists(false);
+    }
+  }, [selectedPlaylistId]);
+
+  React.useEffect(() => {
+    loadPlaylists(false);
+  }, [loadPlaylists]);
 
   // Fetch student routines & assignment history strictly synchronized with student page
   const loadStudentMediaData = React.useCallback(async () => {
@@ -1493,6 +1505,15 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  onClick={() => loadPlaylists(true)}
+                  disabled={isSyncingPlaylists}
+                  title="Sincronizar playlists do YouTube (adm.itissimple@gmail.com)"
+                  className="p-1 rounded-lg text-slate-500 hover:text-[#1C4C96] hover:bg-slate-100 transition shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingPlaylists ? 'animate-spin text-amber-500' : ''}`} />
+                </button>
               </div>
 
               {/* Real-time anti-repetition counter badge */}

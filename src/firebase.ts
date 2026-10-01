@@ -21,7 +21,7 @@ export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.app
 export const ACTIVE_OAUTH_CLIENT_ID = '';
 export const ACTIVE_FIREBASE_APP_ID = '1:245342369537:web:7c8551e8eeb3933ed68d00';
 export const ACTIVE_APP_ID = ACTIVE_FIREBASE_APP_ID;
-export const ACTIVE_FIREBASE_DATABASE_ID = '(default)';
+export const ACTIVE_FIREBASE_DATABASE_ID = env.VITE_FIREBASE_DATABASE_ID || baseFirebaseConfig.firestoreDatabaseId || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
 export const ACTIVE_FIRESTORE_DATABASE_ID = ACTIVE_FIREBASE_DATABASE_ID;
 
 // Strict sanitization: completely block and override any legacy (e.g. 245342369537) or divergent project identifiers
@@ -64,6 +64,7 @@ googleAuthProvider.setCustomParameters({ prompt: 'select_account' });
 googleAuthProvider.addScope('https://www.googleapis.com/auth/calendar.events');
 googleAuthProvider.addScope('https://www.googleapis.com/auth/gmail.send');
 googleAuthProvider.addScope('https://www.googleapis.com/auth/drive.file');
+googleAuthProvider.addScope('https://www.googleapis.com/auth/youtube.readonly');
 
 // Lazy-initialized Firestore instance to avoid starting unused background gRPC streams
 let _firestoreDb: Firestore | null = null;

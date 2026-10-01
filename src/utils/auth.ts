@@ -20,6 +20,35 @@ export function setGoogleOAuthToken(token: string | null) {
 }
 
 /**
+ * YouTube OAuth authorization for adm.itissimple@gmail.com
+ */
+export async function requestYouTubeAuth(hintEmail = 'adm.itissimple@gmail.com'): Promise<string | null> {
+  try {
+    const provider = new GoogleAuthProvider();
+    const customParams: Record<string, string> = { prompt: 'consent' };
+    if (hintEmail && hintEmail.includes('@')) {
+      customParams.login_hint = hintEmail.trim();
+    }
+    provider.setCustomParameters(customParams);
+    provider.addScope('https://www.googleapis.com/auth/youtube.readonly');
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    provider.addScope('https://www.googleapis.com/auth/calendar.events');
+    provider.addScope('https://www.googleapis.com/auth/gmail.send');
+
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken = credential?.accessToken || null;
+    if (accessToken) {
+      setGoogleOAuthToken(accessToken);
+    }
+    return accessToken;
+  } catch (err: any) {
+    console.error('Failed to authenticate YouTube with OAuth:', err);
+    throw err;
+  }
+}
+
+/**
  * Teacher Google Drive OAuth authorization.
  * Authenticates the teacher with Google and requests the drive.file scope,
  * returning the active OAuth access token to manage files directly in their personal Google Drive.
@@ -36,6 +65,7 @@ export async function requestGoogleDriveAuth(hintEmail?: string): Promise<string
     provider.addScope('https://www.googleapis.com/auth/drive.file');
     provider.addScope('https://www.googleapis.com/auth/calendar.events');
     provider.addScope('https://www.googleapis.com/auth/gmail.send');
+    provider.addScope('https://www.googleapis.com/auth/youtube.readonly');
 
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -90,7 +120,7 @@ export async function googleSignIn(): Promise<RealAuthResult> {
   const credential = GoogleAuthProvider.credentialFromResult(result);
   const googleOAuthAccessToken = credential?.accessToken || null;
   if (googleOAuthAccessToken) {
-    inMemoryGoogleAccessToken = googleOAuthAccessToken;
+    setGoogleOAuthToken(googleOAuthAccessToken);
   }
 
   return {

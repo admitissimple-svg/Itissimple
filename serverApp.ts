@@ -23,7 +23,10 @@ import {
   saveStudentVocabularyToFirestoreServer,
   saveSessionNotesToFirestoreServer,
   fetchSessionNotesFromFirestoreServer,
+  saveYouTubePlaylistsToFirestore,
+  fetchYouTubePlaylistsFromFirestore,
 } from './src/serverFirestore';
+import { DEFAULT_CURATED_PLAYLISTS } from './src/utils/youtubeService';
 import {
   syncSessionNotesWithPlatformDrive,
   getStoredDriveFile,
@@ -215,6 +218,7 @@ const DEFAULT_DB: AppDb = {
       password: 'Makeiteasy2026*',
     },
   },
+  youtubePlaylists: DEFAULT_CURATED_PLAYLISTS,
 };
 
 // In-memory runtime state hydrated exclusively from Cloud Firestore
@@ -345,6 +349,10 @@ function mergeDbWithDefaults(parsed: any): AppDb {
     }),
     contractedLessons: (parsed && parsed.contractedLessons) || {},
     userProfiles: (parsed && parsed.userProfiles) || DEFAULT_DB.userProfiles,
+    youtubePlaylists:
+      Array.isArray(parsed?.youtubePlaylists) && parsed.youtubePlaylists.length > 5
+        ? parsed.youtubePlaylists
+        : DEFAULT_CURATED_PLAYLISTS,
   };
 
   // Sanitize routinesByDay for corrupted Spotify entries and daily sequential uniqueness
@@ -7317,115 +7325,311 @@ app.get('/api/spotify/verify', async (req, res) => {
 let lastYouTubeSyncTime = 0;
 const YOUTUBE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
 
-async function syncYouTubePlaylistsFromApi(force = false): Promise<any[]> {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  const channelId = 'UCdimJysdxd2Hu9YmlVHB98A';
+async function fetchPlaylistsDirectlyFromChannel(): Promise<any[]> {
+  try {
+    const channelUrl = 'https://www.youtube.com/@admitissimple/playlists';
+    const res = await fetch(channelUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const m = html.match(/ytInitialData = ({.*?});<\/script>/);
+    if (!m) return [];
+    const d = JSON.parse(m[1]);
+    const tabs = d?.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
+    const plTab = tabs.find((t: any) => t.tabRenderer?.title?.toLowerCase()?.includes('playlist'));
+    const items =
+      plTab?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents?.[0]?.gridRenderer
+        ?.items || [];
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const parsedPlaylists: any[] = [];
+    for (const item of items) {
+      const lockup = item.lockupViewModel;
+      if (!lockup) continue;
+      const title =
+        lockup.metadata?.lockupMetadataViewModel?.title?.content ||
+        lockup.title?.content ||
+        'Playlist';
+      
+      // Robust extraction of Playlist ID
+      const plId =
+        lockup.contentId ||
+        lockup.itemPlayback?.inlinePlayerData?.onSelect?.innertubeCommand?.watchEndpoint?.playlistId ||
+        lockup.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows?.[1]?.metadataParts?.[0]?.text?.commandRuns?.[0]?.onTap?.innertubeCommand?.browseEndpoint?.browseId?.replace(/^VL/, '') ||
+        null;
+
+      const countText =
+        lockup.contentImage?.collectionThumbnailViewModel?.primaryThumbnail?.thumbnailViewModel?.overlays?.[0]
+          ?.thumbnailOverlayBadgeViewModel?.thumbnailBadges?.[0]?.thumbnailBadgeViewModel?.text || '';
+      const numMatch = countText.match(/(\d+)/);
+      const count = numMatch ? parseInt(numMatch[1], 10) : 0;
+      const thumb =
+        lockup.contentImage?.collectionThumbnailViewModel?.primaryThumbnail?.thumbnailViewModel?.image?.sources?.[0]?.url ||
+        'https://i.ytimg.com/vi/5P773n6aDoQ/hqdefault.jpg';
+
+      if (plId && title) {
+        parsedPlaylists.push({
+          id: plId,
+          title,
+          description: `Playlist oficial "${title}" da conta Adm Itissimple no YouTube.`,
+          thumbnailUrl: thumb,
+          channelId: 'UCdimJysdxd2Hu9YmlVHB98A',
+          channelTitle: 'Adm Itissimple',
+          itemCount: count,
+          updatedAt: new Date().toISOString(),
+          isPublic: true,
+          videos: [],
+        });
+      }
+    }
+
+    if (parsedPlaylists.length === 0) return [];
+
+    // Fetch videos for each playlist with controlled concurrency and retries
+    const fetchVideosForPlaylist = async (pl: any, attempt = 1): Promise<void> => {
+      try {
+        const plRes = await fetch(`https://www.youtube.com/playlist?list=${pl.id}`, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        });
+        if (plRes.ok) {
+          const plHtml = await plRes.text();
+          const plM = plHtml.match(/ytInitialData = ({.*?});<\/script>/);
+          if (plM) {
+            const plD = JSON.parse(plM[1]);
+            const contents = plD?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content;
+            const isrContents =
+              contents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
+            const videos: any[] = [];
+            for (const vItem of isrContents) {
+              const lvm = vItem.lockupViewModel;
+              if (lvm) {
+                const vidId =
+                  lvm.contentId ||
+                  lvm.commandContext?.onTap?.innertubeCommand?.watchEndpoint?.videoId ||
+                  null;
+                const vTitle = lvm.metadata?.lockupMetadataViewModel?.title?.content || 'Video';
+                const duration =
+                  lvm.rendererContext?.accessibilityContext?.label?.match(/(\d+\s*min[^\.,]*|\d+:\d+)/i)?.[0] ||
+                  '6-8 min';
+
+                if (vidId && vTitle) {
+                  videos.push({
+                    id: `vid-${vidId}`,
+                    videoId: vidId,
+                    title: vTitle,
+                    description: '',
+                    thumbnailUrl: `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+                    url: `https://www.youtube.com/watch?v=${vidId}`,
+                    embedUrl: `https://www.youtube-nocookie.com/embed/${vidId}?rel=0&modestbranding=1&enablejsapi=1`,
+                    playlistId: pl.id,
+                    playlistTitle: pl.title,
+                    instructions: `Assista a esta aula sobre "${pl.title}" e anote 3 termos ou frases úteis para a rotina.`,
+                    duration,
+                  });
+                }
+              }
+            }
+            if (videos.length > 0) {
+              pl.videos = videos;
+              pl.itemCount = videos.length;
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 600));
+          return fetchVideosForPlaylist(pl, attempt + 1);
+        }
+        console.warn(`Error fetching videos for playlist ${pl.id}:`, e);
+      }
+    };
+
+    // Process in batches of 4 to avoid throttling
+    const batchSize = 4;
+    for (let i = 0; i < parsedPlaylists.length; i += batchSize) {
+      const batch = parsedPlaylists.slice(i, i + batchSize);
+      await Promise.all(batch.map((pl) => fetchVideosForPlaylist(pl)));
+    }
+
+    return parsedPlaylists;
+  } catch (err) {
+    console.warn('Error fetching playlists directly from channel:', err);
+    return [];
+  }
+}
+
+async function syncYouTubePlaylistsFromApi(force = false, oauthToken?: string): Promise<any[]> {
   const db = readDb();
 
-  if (!apiKey) {
-    return db.youtubePlaylists || [];
+  // If memory already has live channel playlists and not forced, return cached
+  const hasLiveChannelPlaylists =
+    Array.isArray(db.youtubePlaylists) &&
+    db.youtubePlaylists.length > 5;
+
+  if (!force && !oauthToken && hasLiveChannelPlaylists && lastYouTubeSyncTime && Date.now() - lastYouTubeSyncTime < YOUTUBE_CACHE_TTL_MS) {
+    return db.youtubePlaylists;
   }
 
-  if (!force && lastYouTubeSyncTime && Date.now() - lastYouTubeSyncTime < YOUTUBE_CACHE_TTL_MS) {
-    if (db.youtubePlaylists && db.youtubePlaylists.length > 0) {
-      return db.youtubePlaylists;
-    }
-  }
-
-  try {
-    const plUrl = `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&channelId=${channelId}&maxResults=50&key=${apiKey}`;
-    const plRes = await fetch(plUrl);
-    if (!plRes.ok) {
-      console.warn('YouTube API playlists fetch status:', plRes.status);
-      return db.youtubePlaylists || [];
-    }
-
-    const plData = (await plRes.json()) as any;
-    const items = plData.items || [];
-    if (items.length === 0) {
-      return db.youtubePlaylists || [];
-    }
-
-    const syncedPlaylists: any[] = [];
-    for (const pl of items) {
-      const plId = pl.id;
-      const title = pl.snippet?.title || 'English Practice';
-      const description = pl.snippet?.description || '';
-      const thumbnailUrl =
-        pl.snippet?.thumbnails?.high?.url ||
-        pl.snippet?.thumbnails?.medium?.url ||
-        pl.snippet?.thumbnails?.default?.url ||
-        '';
-      const itemCount = pl.contentDetails?.itemCount || 0;
-
-      const itemsUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${plId}&maxResults=50&key=${apiKey}`;
-      const itemsRes = await fetch(itemsUrl);
-      let videos: any[] = [];
-
-      if (itemsRes.ok) {
-        const itemsData = (await itemsRes.json()) as any;
-        const rawItems = itemsData.items || [];
-        videos = rawItems
-          .filter(
-            (v: any) =>
-              v.snippet?.resourceId?.videoId &&
-              v.snippet?.title !== 'Private video' &&
-              v.snippet?.title !== 'Deleted video'
-          )
-          .map((v: any) => {
-            const vidId = v.snippet.resourceId.videoId;
-            return {
-              id: `vid-${vidId}`,
-              videoId: vidId,
-              title: v.snippet.title,
-              description: v.snippet.description || '',
-              thumbnailUrl:
-                v.snippet?.thumbnails?.high?.url ||
-                v.snippet?.thumbnails?.medium?.url ||
-                `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
-              url: `https://www.youtube.com/watch?v=${vidId}`,
-              playlistId: plId,
-              playlistTitle: title,
-              instructions: `Assista a esta aula sobre "${title}" e anote 3 expressões novas.`,
-              duration: '6 min',
-            };
-          });
+  // 1. Check Firestore for persisted live playlists
+  if (!force && !hasLiveChannelPlaylists) {
+    try {
+      const persisted = await fetchYouTubePlaylistsFromFirestore();
+      if (Array.isArray(persisted) && persisted.length > 5) {
+        db.youtubePlaylists = persisted;
+        writeDb(db);
+        lastYouTubeSyncTime = Date.now();
+        return persisted;
       }
+    } catch (e) {
+      console.warn('Firestore fetchYouTubePlaylists notice:', e);
+    }
+  }
 
-      // Preserve fallback videos if sub-request didn't return any
-      if (videos.length === 0 && db.youtubePlaylists) {
-        const existingPl = db.youtubePlaylists.find((p: any) => p.id === plId);
-        if (existingPl?.videos?.length) {
-          videos = existingPl.videos;
+  // 2. If an OAuth token is available, dynamically query YouTube Data API v3 (mine=true)
+  if (oauthToken) {
+    try {
+      const plUrl = 'https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails,status&mine=true&maxResults=50';
+      const plRes = await fetch(plUrl, {
+        headers: {
+          Authorization: `Bearer ${oauthToken}`,
+          Accept: 'application/json',
+        },
+      });
+
+      if (plRes.ok) {
+        const plData = (await plRes.json()) as any;
+        const items = plData.items || [];
+        if (items.length > 0) {
+          const syncedPlaylists: any[] = [];
+          for (const pl of items) {
+            const plId = pl.id;
+            const title = pl.snippet?.title || 'English Practice';
+            const description = pl.snippet?.description || '';
+            const thumbnailUrl =
+              pl.snippet?.thumbnails?.high?.url ||
+              pl.snippet?.thumbnails?.medium?.url ||
+              pl.snippet?.thumbnails?.default?.url ||
+              '';
+            const itemCount = pl.contentDetails?.itemCount || 0;
+
+            const itemsUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${plId}&maxResults=50`;
+            let videos: any[] = [];
+            try {
+              const itemsRes = await fetch(itemsUrl, {
+                headers: {
+                  Authorization: `Bearer ${oauthToken}`,
+                  Accept: 'application/json',
+                },
+              });
+              if (itemsRes.ok) {
+                const itemsData = (await itemsRes.json()) as any;
+                const rawItems = itemsData.items || [];
+                videos = rawItems
+                  .filter(
+                    (v: any) =>
+                      v.snippet?.resourceId?.videoId &&
+                      v.snippet?.title !== 'Private video' &&
+                      v.snippet?.title !== 'Deleted video'
+                  )
+                  .map((v: any) => {
+                    const vidId = v.snippet.resourceId.videoId;
+                    return {
+                      id: `vid-${vidId}`,
+                      videoId: vidId,
+                      title: v.snippet.title,
+                      description: v.snippet.description || '',
+                      thumbnailUrl:
+                        v.snippet?.thumbnails?.high?.url ||
+                        v.snippet?.thumbnails?.medium?.url ||
+                        `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+                      url: `https://www.youtube.com/watch?v=${vidId}`,
+                      embedUrl: `https://www.youtube-nocookie.com/embed/${vidId}?rel=0&modestbranding=1&enablejsapi=1`,
+                      playlistId: plId,
+                      playlistTitle: title,
+                      instructions: `Assista a esta aula sobre "${title}" e anote 3 expressões novas.`,
+                      duration: '6 min',
+                    };
+                  });
+              }
+            } catch (err) {
+              console.warn(`Error fetching items for ${plId}:`, err);
+            }
+
+            if (videos.length === 0 && db.youtubePlaylists) {
+              const existingPl = db.youtubePlaylists.find((p: any) => p.id === plId);
+              if (existingPl?.videos?.length) {
+                videos = existingPl.videos;
+              }
+            }
+
+            syncedPlaylists.push({
+              id: plId,
+              title,
+              description,
+              thumbnailUrl,
+              channelId: pl.snippet?.channelId,
+              channelTitle: pl.snippet?.channelTitle || 'Adm Itissimple',
+              itemCount: itemCount || videos.length,
+              updatedAt: new Date().toISOString(),
+              isPublic: pl.status?.privacyStatus === 'public',
+              videos,
+            });
+          }
+
+          if (syncedPlaylists.length > 0) {
+            db.youtubePlaylists = syncedPlaylists;
+            writeDb(db);
+            saveYouTubePlaylistsToFirestore(syncedPlaylists).catch(() => {});
+            lastYouTubeSyncTime = Date.now();
+            return syncedPlaylists;
+          }
         }
       }
-
-      syncedPlaylists.push({
-        id: plId,
-        title,
-        description,
-        thumbnailUrl,
-        channelId,
-        channelTitle: pl.snippet?.channelTitle || 'Adm Itissimple',
-        itemCount: itemCount || videos.length,
-        updatedAt: new Date().toISOString(),
-        isPublic: true,
-        videos,
-      });
+    } catch (err) {
+      console.warn('OAuth syncYouTubePlaylists error:', err);
     }
-
-    if (syncedPlaylists.length > 0) {
-      db.youtubePlaylists = syncedPlaylists;
-      writeDb(db);
-      lastYouTubeSyncTime = Date.now();
-      return syncedPlaylists;
-    }
-  } catch (err) {
-    console.warn('Error fetching YouTube playlists:', err);
   }
 
-  return db.youtubePlaylists || [];
+  // 3. Direct Live YouTube Channel Synchronizer for @admitissimple (UCdimJysdxd2Hu9YmlVHB98A)
+  try {
+    const channelPlaylists = await fetchPlaylistsDirectlyFromChannel();
+    if (channelPlaylists.length > 0) {
+      db.youtubePlaylists = channelPlaylists;
+      writeDb(db);
+      lastYouTubeSyncTime = Date.now();
+      saveYouTubePlaylistsToFirestore(channelPlaylists).catch((err) => {
+        console.warn('Firestore saveYouTubePlaylists error:', err);
+      });
+      return channelPlaylists;
+    }
+  } catch (err) {
+    console.warn('Channel sync error:', err);
+  }
+
+  // 4. Fallback: if db has playlists, return them
+  if (db.youtubePlaylists && db.youtubePlaylists.length > 0) {
+    return db.youtubePlaylists;
+  }
+
+  return DEFAULT_CURATED_PLAYLISTS;
 }
+
+// Automatically detect new playlists and videos added to the YouTube channel every 15 minutes
+setInterval(() => {
+  syncYouTubePlaylistsFromApi(true).catch((err) => {
+    console.warn('Background periodic YouTube sync notice:', err);
+  });
+}, 15 * 60 * 1000);
 
 let lastSpotifySyncTime = 0;
 const SPOTIFY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -7533,7 +7737,9 @@ async function syncSpotifyPlaylistsFromApi(force = false): Promise<any> {
 
 app.get('/api/youtube-playlists', async (req, res) => {
   const force = req.query.refresh === 'true' || req.query.force === 'true';
-  const playlists = await syncYouTubePlaylistsFromApi(force);
+  const authHeader = req.headers.authorization || '';
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : undefined;
+  const playlists = await syncYouTubePlaylistsFromApi(force, bearerToken);
   const sortedPlaylists = [...playlists].sort((a, b) =>
     (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
   );
@@ -7541,7 +7747,24 @@ app.get('/api/youtube-playlists', async (req, res) => {
 });
 
 app.post('/api/youtube-playlists/sync', async (req, res) => {
-  const playlists = await syncYouTubePlaylistsFromApi(true);
+  const authHeader = req.headers.authorization || '';
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : undefined;
+  const playlists = await syncYouTubePlaylistsFromApi(true, bearerToken);
+  res.json({ success: true, count: playlists.length, playlists });
+});
+
+app.post('/api/youtube-playlists/save', async (req, res) => {
+  const { playlists } = req.body;
+  if (!Array.isArray(playlists)) {
+    return res.status(400).json({ error: 'Playlists array is required' });
+  }
+  const db = readDb();
+  db.youtubePlaylists = playlists;
+  writeDb(db);
+  lastYouTubeSyncTime = Date.now();
+  saveYouTubePlaylistsToFirestore(playlists).catch((err) => {
+    console.warn('saveYouTubePlaylistsToFirestore notice:', err);
+  });
   res.json({ success: true, count: playlists.length, playlists });
 });
 

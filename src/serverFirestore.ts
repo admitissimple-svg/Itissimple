@@ -15,7 +15,7 @@ export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.app
 export const ACTIVE_OAUTH_CLIENT_ID = '';
 export const ACTIVE_FIREBASE_APP_ID = '1:245342369537:web:7c8551e8eeb3933ed68d00';
 export const ACTIVE_APP_ID = ACTIVE_FIREBASE_APP_ID;
-export const ACTIVE_FIREBASE_DATABASE_ID = '(default)';
+export const ACTIVE_FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
 export const ACTIVE_FIRESTORE_DATABASE_ID = ACTIVE_FIREBASE_DATABASE_ID;
 
 let dbInstance: any = null;
@@ -83,8 +83,9 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
       fetchDoc('tutors'),
       fetchDoc('assignments'),
       fetchDoc('lessons'),
-    ]).then(([mainData, routines, tutors, assignments, lessons]) => {
-      if (!mainData && !routines && !tutors && !assignments && !lessons) {
+      fetchDoc('youtube_playlists'),
+    ]).then(([mainData, routines, tutors, assignments, lessons, ytPlaylists]) => {
+      if (!mainData && !routines && !tutors && !assignments && !lessons && !ytPlaylists) {
         return null;
       }
       return {
@@ -93,6 +94,7 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
         ...(tutors || {}),
         ...(assignments || {}),
         ...(lessons || {}),
+        ...(ytPlaylists && ytPlaylists.playlists ? { youtubePlaylists: ytPlaylists.playlists } : {}),
       };
     });
     return await withTimeout(fetchAllPromise, 3500);
@@ -102,14 +104,58 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
   return null;
 }
 
+export async function saveYouTubePlaylistsToFirestore(playlists: any[]): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !Array.isArray(playlists)) return false;
+  try {
+    const sanitized = JSON.parse(JSON.stringify(playlists));
+    const savePromise = setDoc(
+      doc(db, 'app_state', 'youtube_playlists'),
+      {
+        playlists: sanitized,
+        count: sanitized.length,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    ).then(() => true);
+    const result = await withTimeout(savePromise, 3000);
+    return !!result;
+  } catch (err) {
+    console.warn('Firestore saveYouTubePlaylists error:', err);
+    return false;
+  }
+}
+
+export async function fetchYouTubePlaylistsFromFirestore(): Promise<any[] | null> {
+  const db = getFirestoreDb();
+  if (!db) return null;
+  try {
+    const fetchPromise = async () => {
+      const snap = await getDoc(doc(db, 'app_state', 'youtube_playlists'));
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data?.playlists)) {
+          return data.playlists;
+        }
+      }
+      return null;
+    };
+    return await withTimeout(fetchPromise(), 3000);
+  } catch (err) {
+    console.warn('Firestore fetchYouTubePlaylists error:', err);
+    return null;
+  }
+}
+
 export async function saveAppStateToFirestore(data: any): Promise<boolean> {
   const db = getFirestoreDb();
   if (!db || !data) return false;
   try {
     // Sanitize data: JSON roundtrip eliminates any undefined properties that cause Firestore setDoc to fail
     const sanitized = JSON.parse(JSON.stringify(data));
+    const cachedYtPlaylists = Array.isArray(sanitized.youtubePlaylists) ? sanitized.youtubePlaylists : null;
 
-    // Strip out bulky external API caches that must not be stored in Firestore documents
+    // Strip out bulky external API caches that must not be stored in main Firestore documents
     delete sanitized.youtubePlaylists;
 
     // Partition state into modular documents under /app_state/ so each document is well under 250 KB
@@ -180,6 +226,7 @@ export async function saveAppStateToFirestore(data: any): Promise<boolean> {
       setDoc(doc(db, 'app_state', 'tutors'), tutorsData),
       setDoc(doc(db, 'app_state', 'assignments'), assignmentsData),
       setDoc(doc(db, 'app_state', 'lessons'), lessonsData),
+      ...(cachedYtPlaylists ? [saveYouTubePlaylistsToFirestore(cachedYtPlaylists)] : []),
     ]).then(() => true);
 
     const result = await withTimeout(savePromises, 4000);
