@@ -4221,52 +4221,6 @@ app.get('/api/student-routines', (req, res) => {
       distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;
     }
-    if (!hasVoluntaryVideoAssignments || isAwaitingTopicSelection) {
-      targetKeys.forEach((k) => {
-        if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
-        db.studentAwaitingTopicSelection[k] = true;
-      });
-      // If routines map is empty, initialize to clean routines
-      if (!routines || typeof routines !== 'object' || Object.keys(routines).length === 0) {
-        routines = createCleanStudentRoutines();
-      } else {
-        // Only sanitize days that do NOT already have a selected video; NEVER wipe configured videos or words!
-        Object.keys(routines).forEach((d) => {
-          if (Array.isArray(routines[d])) {
-            routines[d] = routines[d].map((act: any) => {
-              const hasExistingVideo = Array.isArray(act.teacherVideos) && act.teacherVideos.length > 0 && Boolean(act.teacherVideos[0]?.videoId || act.teacherVideos[0]?.url);
-              if (hasExistingVideo) {
-                // Preserve the configured video and words!
-                return act;
-              }
-              const isVideo =
-                act.id?.endsWith('1') ||
-                act.activityName?.toLowerCase().includes('vídeo') ||
-                act.activityName?.toLowerCase().includes('video');
-              if (isVideo) {
-                return {
-                  ...act,
-                  activityName: 'Video of the Day',
-                  teacherVideos: [],
-                  playlistId: act.playlistId || '',
-                  playlistTitle: act.playlistTitle || '',
-                  completed: act.completed || false,
-                  completedToday: act.completedToday || false,
-                  isRepeatVideo: act.isRepeatVideo || false,
-                  learnedWords: act.learnedWords || [],
-                };
-              }
-              return act;
-            });
-          }
-        });
-      }
-      targetKeys.forEach((k) => {
-        if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
-        db.studentRoutinesMap[k] = routines;
-      });
-      dbChanged = true;
-    }
     if (spotifyAssigns.length < expectedDaysCount || hasRepeatingSpotifyBug || hasSpotifyLevelMismatch) {
       distributeWeeklySpotifyForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
       dbChanged = true;

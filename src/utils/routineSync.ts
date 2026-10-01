@@ -109,25 +109,15 @@ const lastSyncedSignatureMap = new Map<string, string>();
  * Prioritizes the authenticated Firebase Auth user UID when available.
  */
 export function normalizeStudentIdForPath(rawIdOrEmail: string): string {
-  if (!rawIdOrEmail) {
+  if (!rawIdOrEmail || rawIdOrEmail === 'undefined' || rawIdOrEmail === 'null') {
     return auth?.currentUser?.uid || '';
   }
   const trimmed = rawIdOrEmail.trim();
-  if (
-    trimmed !== '' &&
-    !trimmed.includes('@') &&
-    !trimmed.startsWith('usr-') &&
-    trimmed !== 'user-default' &&
-    trimmed !== 'anonymous_student' &&
-    trimmed !== 'undefined' &&
-    trimmed !== 'null'
-  ) {
-    return trimmed;
+  // Standardize email addresses to safe key tokens
+  if (trimmed.includes('@')) {
+    return trimmed.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_');
   }
-  if (auth?.currentUser?.uid) {
-    return auth.currentUser.uid;
-  }
-  return trimmed.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return trimmed;
 }
 
 /**

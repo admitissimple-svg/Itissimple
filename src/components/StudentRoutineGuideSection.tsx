@@ -707,8 +707,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   const hasPersistedOrAssignedVideo = Boolean(
     (userChosenTopicForDay && userChosenTopicForDay !== '') ||
+    (persistedVideo?.videoId && persistedVideo.videoId !== '') ||
+    (persistedVideo?.url && persistedVideo.url !== '') ||
     (persistedVideo?.playlistId && persistedVideo.playlistId !== '') ||
     (persistedVideo?.isRepeatVideo) ||
+    (rawAssignedVideo?.videoId && rawAssignedVideo.videoId !== '') ||
+    (rawAssignedVideo?.url && rawAssignedVideo.url !== '') ||
     ((rawAssignedVideo as any)?.playlistId && (rawAssignedVideo as any).playlistId !== '') ||
     ((rawAssignedVideo as any)?.isCustomSuggestion) ||
     ((rawAssignedVideo as any)?.isRepeatVideo) ||
@@ -1800,6 +1804,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   currentPlaylistId = persistedDay.playlistId;
                 } else if ((assignedVid as any)?.playlistId) {
                   currentPlaylistId = (assignedVid as any).playlistId;
+                } else if ((assignedVid as any)?.playlistTitle) {
+                  const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === (assignedVid as any).playlistTitle?.toLowerCase());
+                  if (matched) currentPlaylistId = matched.id;
+                } else if (act.activityName && act.activityName !== 'Video of the Day' && act.activityName !== 'Vídeo do Dia') {
+                  const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === act.activityName?.toLowerCase());
+                  if (matched) currentPlaylistId = matched.id;
                 } else {
                   // Strictly neutral initial "Choose Topic..." state ("" or null)
                   // The user must voluntarily pick a topic; never auto-match or inherit from previous day
