@@ -24,16 +24,16 @@ export const ACTIVE_APP_ID = ACTIVE_FIREBASE_APP_ID;
 export const ACTIVE_FIREBASE_DATABASE_ID = '(default)';
 export const ACTIVE_FIRESTORE_DATABASE_ID = ACTIVE_FIREBASE_DATABASE_ID;
 
-// Strict sanitization: completely block and override any legacy (e.g. 167755700011) or divergent project identifiers
+// Strict sanitization: completely block and override any legacy (e.g. 245342369537) or divergent project identifiers
 function sanitizeProjectId(raw?: string): string {
-  if (raw && raw !== '167755700011' && raw === ACTIVE_FIREBASE_PROJECT_ID) {
+  if (raw && raw !== '245342369537' && raw === ACTIVE_FIREBASE_PROJECT_ID) {
     return ACTIVE_FIREBASE_PROJECT_ID;
   }
   return ACTIVE_FIREBASE_PROJECT_ID;
 }
 
 function sanitizeAuthDomain(raw?: string): string {
-  if (raw && !raw.includes('167755700011') && raw === ACTIVE_FIREBASE_AUTH_DOMAIN) {
+  if (raw && !raw.includes('245342369537') && raw === ACTIVE_FIREBASE_AUTH_DOMAIN) {
     return ACTIVE_FIREBASE_AUTH_DOMAIN;
   }
   return ACTIVE_FIREBASE_AUTH_DOMAIN;
@@ -70,9 +70,9 @@ let _firestoreDb: Firestore | null = null;
 export function getDb(): Firestore {
   if (!_firestoreDb) {
     const dbId = effectiveFirebaseConfig.firestoreDatabaseId;
-    _firestoreDb = (dbId && dbId !== '(default)')
-      ? getFirestore(app, dbId)
-      : getFirestore(app);
+_firestoreDb = (dbId && dbId !== '(default)')
+  ? getFirestore(app, dbId)
+  : getFirestore(app);
   }
   return _firestoreDb;
 }
