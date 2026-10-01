@@ -1634,28 +1634,37 @@ export const TeacherMediaAssignmentPanel: React.FC<TeacherMediaAssignmentPanelPr
                           {targetActivity?.time || '09:00'}
                         </span>
                         <div className="relative inline-flex items-center min-w-0">
-                          <select
-                            value={currentDayPlId}
-                            onChange={(e) => handleDayPlaylistChange(day.id, e.target.value)}
-                            aria-label="Playlist Topic"
-                            className="text-xs font-bold py-1 pl-2.5 pr-7 bg-slate-50 hover:bg-white text-[#000035] border border-slate-300 hover:border-[#1C4C96] rounded-xl appearance-none cursor-pointer transition focus:outline-hidden max-w-[210px] truncate shadow-2xs"
-                            title="YouTube playlist topic unified with student routine"
-                          >
-                            <option value="" disabled>
-                              {isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...'}
-                            </option>
-                            <option value="custom_suggestion">
-                              💡 {isEn ? 'Your Suggestion (Student)' : 'Sua Sugestão (Aluno)'}
-                            </option>
-                            {sortedPlaylists.map((pl) => (
-                              <option key={pl.id} value={pl.id}>
-                                {pl.title}
-                              </option>
-                            ))}
-                            <option value="repeat_previous_video">
-                              🔁 {isEn ? `Repeat Previous (${prevDayLabel.slice(0, 3)})` : `Repetir Anterior (${prevDayLabel.slice(0, 3)})`}
-                            </option>
-                          </select>
+                          {(() => {
+                            const isKnownPl =
+                              currentDayPlId === 'custom_suggestion' ||
+                              currentDayPlId === 'repeat_previous_video' ||
+                              sortedPlaylists.some((pl) => pl.id === currentDayPlId);
+                            const safeDayPlId = isKnownPl ? currentDayPlId : '';
+                            return (
+                              <select
+                                value={safeDayPlId}
+                                onChange={(e) => handleDayPlaylistChange(day.id, e.target.value)}
+                                aria-label="Playlist Topic"
+                                className="text-xs font-bold py-1 pl-2.5 pr-7 bg-slate-50 hover:bg-white text-[#000035] border border-slate-300 hover:border-[#1C4C96] rounded-xl appearance-none cursor-pointer transition focus:outline-hidden max-w-[210px] truncate shadow-2xs"
+                                title="YouTube playlist topic unified with student routine"
+                              >
+                                <option value="" className="text-slate-500">
+                                  {isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...'}
+                                </option>
+                                <option value="custom_suggestion">
+                                  💡 {isEn ? 'Your Suggestion (Student)' : 'Sua Sugestão (Aluno)'}
+                                </option>
+                                {sortedPlaylists.map((pl) => (
+                                  <option key={pl.id} value={pl.id}>
+                                    {pl.title}
+                                  </option>
+                                ))}
+                                <option value="repeat_previous_video">
+                                  🔁 {isEn ? `Repeat Previous (${prevDayLabel.slice(0, 3)})` : `Repetir Anterior (${prevDayLabel.slice(0, 3)})`}
+                                </option>
+                              </select>
+                            );
+                          })()}
                           <ChevronDown className="w-3.5 h-3.5 pointer-events-none absolute right-2 text-[#1C4C96]" />
                         </div>
                         {isCustomSuggestion && (

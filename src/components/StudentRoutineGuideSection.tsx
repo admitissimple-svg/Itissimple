@@ -649,10 +649,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     userChosenTopicForDay === 'repeat_previous_video';
 
   const hasPersistedOrAssignedVideo = Boolean(
-    (persistedVideo?.videoId && persistedVideo.videoId !== '') ||
-    (rawAssignedVideo?.videoId && rawAssignedVideo.videoId !== '') ||
-    (rawAssignedVideo?.url && rawAssignedVideo.url !== '') ||
-    (rawAssignedVideo as any)?.playlistId
+    (userChosenTopicForDay && userChosenTopicForDay !== '') ||
+    (persistedVideo?.playlistId && persistedVideo.playlistId !== '') ||
+    (persistedVideo?.isRepeatVideo) ||
+    ((rawAssignedVideo as any)?.playlistId && (rawAssignedVideo as any).playlistId !== '') ||
+    ((rawAssignedVideo as any)?.isCustomSuggestion) ||
+    ((rawAssignedVideo as any)?.isRepeatVideo) ||
+    ((rawAssignedVideo as any)?.assignedByTeacher)
   );
 
   const isTopicVoluntarilyChosen =
@@ -1226,10 +1229,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
     const resetVideo: TeacherAssignedVideo = {
       id: `vid-${selectedDay}-reset-${Date.now()}`,
-      url: defaultDailyVid.url,
-      videoId: defaultDailyVid.videoId,
-      title: defaultDailyVid.title,
-      duration: defaultDailyVid.duration || '5-10 min',
+      url: '',
+      videoId: '',
+      title: isEn ? 'Video of the Day' : 'Vídeo do Dia',
+      duration: '5-10 min',
       instructions: isEn ? 'Daily English video practice.' : 'Prática diária de vídeo em inglês.',
       addedAt: new Date().toISOString(),
       playlistId: '',
@@ -1746,6 +1749,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   currentPlaylistId = '';
                 }
 
+                // Verify that currentPlaylistId exists in known options, otherwise default to empty string ("Choose Topic...")
+                const isKnownPlaylist =
+                  currentPlaylistId === 'custom_suggestion' ||
+                  currentPlaylistId === 'repeat_previous_video' ||
+                  sortedPlaylists.some((pl) => pl.id === currentPlaylistId);
+                const safePlaylistValue = isKnownPlaylist ? currentPlaylistId : '';
+
                 return (
                   <div
                     key={act.id}
@@ -1860,7 +1870,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                             onClick={(e) => e.stopPropagation()}
                           >
                             <select
-                              value={isRepeatVideo ? '' : (currentPlaylistId || '')}
+                              value={isRepeatVideo ? '' : safePlaylistValue}
                               onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
                               disabled={isRepeatVideo || loadingPlaylistAssignId === act.id}
                               aria-label={isEn ? 'Playlist Topic / Routine name' : 'Tópico da Playlist / Nome da Rotina'}
@@ -1883,7 +1893,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                                       : 'Tópico: Escolha a playlist para unificar o nome da rotina e injetar o vídeo exclusivo')
                               }
                             >
-                              <option value="" disabled>
+                              <option value="" className="text-slate-600 bg-white font-medium">
                                 {loadingPlaylistAssignId === act.id
                                   ? (isEn ? '⏳ Assigning Topic...' : '⏳ Injetando Tópico...')
                                   : isRepeatVideo

@@ -926,11 +926,25 @@ app.post('/api/auth/login', async (req, res) => {
     if (!db.userProfiles) db.userProfiles = {};
     db.userProfiles[cleanEmail] = studentProfile;
 
-    // Distribute Spotify and YouTube media if not yet assigned for this student
+    // Distribute Spotify media if not yet assigned for this student
     const normLevel = normalizeStudentLevel(studentProfile.level).key;
-    if (!db.studentSpotifyAssignments?.[cleanEmail] || !db.studentVideoAssignments?.[cleanEmail]) {
+    if (!db.studentSpotifyAssignments?.[cleanEmail] || db.studentSpotifyAssignments[cleanEmail].length === 0) {
       distributeWeeklySpotifyForStudent(db, cleanEmail, account.uid, normLevel, undefined, undefined, studyDays);
-      distributeWeeklyYouTubeForStudent(db, cleanEmail, account.uid, normLevel, undefined, undefined, studyDays);
+    }
+    // Note: YouTube video topics are chosen voluntarily by the student ("Choose Topic...") or assigned by teacher.
+    if (!db.studentVideoAssignments?.[cleanEmail] || db.studentVideoAssignments[cleanEmail].length === 0) {
+      if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
+      db.studentAwaitingTopicSelection[cleanEmail] = true;
+      if (account.uid) db.studentAwaitingTopicSelection[account.uid] = true;
+      if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+      db.studentVideoAssignments[cleanEmail] = [];
+      if (account.uid) db.studentVideoAssignments[account.uid] = [];
+      if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+      if (!db.studentRoutinesMap[cleanEmail]) {
+        const cleanInitial = createCleanStudentRoutines(studentProfile.routineVideoTime);
+        db.studentRoutinesMap[cleanEmail] = cleanInitial;
+        if (account.uid) db.studentRoutinesMap[account.uid] = cleanInitial;
+      }
     }
 
     account.picture = studentProfile.picture || studentProfile.avatar || studentObj?.picture || studentObj?.avatar || '';
@@ -3653,12 +3667,12 @@ function distributeWeeklySpotifyForStudent(
     null;
 
   if (!studentRoutines || typeof studentRoutines !== 'object' || Object.keys(studentRoutines).length === 0) {
-    studentRoutines = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+    studentRoutines = createCleanStudentRoutines();
   } else {
     // Ensure all 7 days exist
     DAYS_SEQUENCE.forEach((d) => {
       if (!studentRoutines[d] || !Array.isArray(studentRoutines[d]) || studentRoutines[d].length === 0) {
-        studentRoutines[d] = JSON.parse(JSON.stringify(db.routinesByDay?.[d] || defaultRoutinesByDay[d] || []));
+        studentRoutines[d] = JSON.parse(JSON.stringify(createCleanStudentRoutines()[d] || []));
       }
     });
   }
@@ -4137,9 +4151,11 @@ app.get('/api/student-routines', (req, res) => {
         : DAYS_SEQUENCE;
     const expectedDaysCount = Math.max(1, studentPlanDays.length);
 
+    const hasVoluntaryVideoAssignments = videoAssigns.length > 0;
     const isAwaitingTopicSelection = Boolean(
       (resolved.email && db.studentAwaitingTopicSelection?.[resolved.email]) ||
-      (resolved.uid && db.studentAwaitingTopicSelection?.[resolved.uid])
+      (resolved.uid && db.studentAwaitingTopicSelection?.[resolved.uid]) ||
+      !hasVoluntaryVideoAssignments
     );
 
     const hasSpotifyLevelMismatch = spotifyAssigns.length > 0 && spotifyAssigns.some((a) => {
@@ -4147,8 +4163,48 @@ app.get('/api/student-routines', (req, res) => {
       return aNorm !== studentLevel || (a.playlistId && a.playlistId !== SPOTIFY_LEVEL_PLAYLISTS[studentLevel].playlistId);
     });
 
-    if ((videoAssigns.length < expectedDaysCount || hasRepeatingVideoBug) && !isAwaitingTopicSelection) {
+    if (hasRepeatingVideoBug && !isAwaitingTopicSelection) {
       distributeWeeklyYouTubeForStudent(db, resolved.email, resolved.uid, studentLevel, undefined, undefined, studentPlanDays);
+      dbChanged = true;
+    }
+    if (!hasVoluntaryVideoAssignments || isAwaitingTopicSelection) {
+      targetKeys.forEach((k) => {
+        if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
+        db.studentAwaitingTopicSelection[k] = true;
+      });
+      // If routines map is empty or has leftover video data, sanitize to clean routines
+      if (!routines || typeof routines !== 'object' || Object.keys(routines).length === 0) {
+        routines = createCleanStudentRoutines();
+      } else {
+        // Sanitize video activities so they strictly start in "Choose Topic..."
+        Object.keys(routines).forEach((d) => {
+          if (Array.isArray(routines[d])) {
+            routines[d] = routines[d].map((act: any) => {
+              const isVideo =
+                act.id?.endsWith('1') ||
+                act.activityName?.toLowerCase().includes('vídeo') ||
+                act.activityName?.toLowerCase().includes('video');
+              if (isVideo) {
+                return {
+                  ...act,
+                  activityName: 'Video of the Day',
+                  teacherVideos: [],
+                  playlistId: '',
+                  playlistTitle: '',
+                  completed: false,
+                  completedToday: false,
+                  isRepeatVideo: false,
+                };
+              }
+              return act;
+            });
+          }
+        });
+      }
+      targetKeys.forEach((k) => {
+        if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+        db.studentRoutinesMap[k] = routines;
+      });
       dbChanged = true;
     }
     if (spotifyAssigns.length < expectedDaysCount || hasRepeatingSpotifyBug || hasSpotifyLevelMismatch) {
@@ -4162,11 +4218,11 @@ app.get('/api/student-routines', (req, res) => {
   }
 
   if (routines && typeof routines === 'object' && Object.keys(routines).length > 0) {
-    const base = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+    const base = createCleanStudentRoutines();
     const merged = { ...base, ...routines };
     return res.json(merged);
   }
-  res.json(db.routinesByDay || defaultRoutinesByDay);
+  res.json(createCleanStudentRoutines());
 });
 
 /**
