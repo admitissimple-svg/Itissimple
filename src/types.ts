@@ -242,6 +242,8 @@ export interface UserProfile {
   teacherEmail?: string;
   teacherName?: string;
   teacherUid?: string;
+  teacherMeetUrl?: string;
+  teacherMeetLink?: string;
   assignedNativeFriendUID?: string;
   nativeFriendUID?: string;
   routineVideoTime?: string;

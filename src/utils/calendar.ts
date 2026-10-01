@@ -116,7 +116,7 @@ export async function createLiveLessonCalendarEvent(
   return {
     id: `event-${Date.now()}`,
     htmlLink: details.customMeetLink,
-    meetLink: details.customMeetLink || 'https://meet.google.com/gmt-kxnw-zpq',
+    meetLink: details.customMeetLink || 'https://meet.google.com/new',
   };
 }
 
@@ -298,11 +298,12 @@ export function generateGoogleCalendarWebLink(details: {
     .toISOString()
     .replace(/-|:|\.\d+/g, '');
 
+  const effectiveMeet = details.meetLink || 'https://meet.google.com/new';
   const text = encodeURIComponent(details.title);
   const desc = encodeURIComponent(
-    `${details.description || ''}\n\nGoogle Meet: ${details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'}\nStudent: ${details.studentName || ''} (${details.studentEmail || ''})\nTeacher / Native Friend: ${details.teacherName || ''} (${details.teacherEmail || ''})`
+    `${details.description || ''}\n\nGoogle Meet: ${effectiveMeet}\nStudent: ${details.studentName || ''} (${details.studentEmail || ''})\nTeacher / Native Friend: ${details.teacherName || ''} (${details.teacherEmail || ''})`
   );
-  const location = encodeURIComponent(details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq');
+  const location = encodeURIComponent(effectiveMeet);
 
   const attendees: string[] = [];
   if (details.teacherEmail && details.teacherEmail.includes('@')) {
@@ -357,7 +358,7 @@ DTSTART:${start}
 DTEND:${end}
 SUMMARY:${details.title}
 DESCRIPTION:${(details.description || '').replace(/\n/g, '\\n')}
-LOCATION:${details.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'}
+LOCATION:${details.meetLink || 'https://meet.google.com/new'}
 ${attendeesLines.join('\n')}
 STATUS:CONFIRMED
 END:VEVENT

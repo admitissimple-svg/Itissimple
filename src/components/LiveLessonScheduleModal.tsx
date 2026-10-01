@@ -16,7 +16,7 @@ import {
   AlertTriangle,
   Globe,
 } from 'lucide-react';
-import { GoogleAccount, TeacherMeetSettings, DayOfWeek, Language, UserProfile, LiveLesson } from '../types';
+import { GoogleAccount, TeacherMeetSettings, DayOfWeek, Language, UserProfile, LiveLesson, NativeFriendTutor } from '../types';
 import { Translations } from '../utils/i18n';
 import { generateGoogleCalendarWebLink } from '../utils/calendar';
 import {
@@ -36,6 +36,7 @@ interface LiveLessonScheduleModalProps {
   onClose: () => void;
   currentAccount: GoogleAccount | null;
   teachers: GoogleAccount[];
+  tutors?: NativeFriendTutor[];
   students: GoogleAccount[];
   lessons?: LiveLesson[];
   initialTeacherEmail?: string;
@@ -67,6 +68,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   onClose,
   currentAccount,
   teachers,
+  tutors = [],
   students,
   lessons = [],
   initialTeacherEmail,
@@ -211,22 +213,74 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     return name.replace(/\s*\(Amigo Nativo\)/gi, '').replace(/\s*\(Amiga Nativa\)/gi, '').replace(/\s*\(Native Friend\)/gi, '').trim();
   };
 
-  const activeTeacherSettings: TeacherMeetSettings = teacherMeetSettings[selectedTeacherEmail] || {
-    teacherEmail: selectedTeacherEmail,
-    meetLink: 'https://meet.google.com/gmt-kxnw-zpq',
-    workingHoursStart: '08:00',
-    workingHoursEnd: '18:00',
-    slotDurationMinutes: 30,
-    availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-    timezone: 'America/Sao_Paulo',
-  };
-
   const selectedTeacherObj = availableTeachers.find((t) => (t.email || '').toLowerCase() === selectedTeacherEmail.toLowerCase())
     || teachers.find((t) => (t.email || '').toLowerCase() === selectedTeacherEmail.toLowerCase())
     || {
       name: userProfile?.teacherName || 'It is Simple Teacher',
       email: selectedTeacherEmail,
     };
+
+  // Find matching tutor profile from tutors list (or availableTeachers/teachers)
+  const matchedTutor = useMemo(() => {
+    const clean = (selectedTeacherEmail || '').toLowerCase().trim();
+    if (!clean) return null;
+    return (
+      tutors?.find((tut) => (tut.email || '').toLowerCase().trim() === clean) ||
+      tutors?.find((tut) => (tut.id || '').toLowerCase().trim() === (selectedTeacherObj as any)?.id?.toLowerCase().trim()) ||
+      null
+    );
+  }, [tutors, selectedTeacherEmail, selectedTeacherObj]);
+
+  // Compute effective Google Meet link strictly honoring the Native Friend's registered profile!
+  const effectiveMeetLink = useMemo(() => {
+    // 1. Direct from registered Tutor profile
+    const tutorMeet = (matchedTutor?.meetUrl || matchedTutor?.meetLink || '').trim();
+    if (tutorMeet) return tutorMeet;
+
+    // 2. From selectedTeacherObj (populated from teachersList which merges tutor fields)
+    const objMeet = ((selectedTeacherObj as any)?.meetUrl || (selectedTeacherObj as any)?.meetLink || '').trim();
+    if (objMeet) return objMeet;
+
+    // 3. From teacherMeetSettings (case-insensitive email matching)
+    const cleanEmail = (selectedTeacherEmail || '').toLowerCase().trim();
+    const settings =
+      teacherMeetSettings[cleanEmail] ||
+      teacherMeetSettings[selectedTeacherEmail] ||
+      Object.entries(teacherMeetSettings).find(([k]) => k.toLowerCase().trim() === cleanEmail)?.[1];
+
+    if (settings?.meetLink && settings.meetLink.trim() && settings.meetLink !== 'https://meet.google.com/gmt-kxnw-zpq') {
+      return settings.meetLink.trim();
+    }
+
+    // 4. From student profile's saved teacher meet url
+    if (userProfile?.teacherEmail?.toLowerCase().trim() === cleanEmail) {
+      const studentTeacherMeet = ((userProfile as any)?.teacherMeetUrl || (userProfile as any)?.teacherMeetLink || '').trim();
+      if (studentTeacherMeet) return studentTeacherMeet;
+    }
+
+    // 5. If settings has custom meetLink
+    if (settings?.meetLink && settings.meetLink.trim()) {
+      return settings.meetLink.trim();
+    }
+
+    // Fallback only if no tutor has set any link
+    return 'https://meet.google.com/new';
+  }, [matchedTutor, selectedTeacherObj, teacherMeetSettings, selectedTeacherEmail, userProfile]);
+
+  const rawTeacherSettings: TeacherMeetSettings | undefined =
+    teacherMeetSettings[selectedTeacherEmail] ||
+    teacherMeetSettings[selectedTeacherEmail.toLowerCase().trim()] ||
+    Object.entries(teacherMeetSettings).find(([k]) => k.toLowerCase().trim() === selectedTeacherEmail.toLowerCase().trim())?.[1];
+
+  const activeTeacherSettings: TeacherMeetSettings = {
+    teacherEmail: selectedTeacherEmail,
+    meetLink: effectiveMeetLink,
+    workingHoursStart: rawTeacherSettings?.workingHoursStart || '08:00',
+    workingHoursEnd: rawTeacherSettings?.workingHoursEnd || '18:00',
+    slotDurationMinutes: rawTeacherSettings?.slotDurationMinutes || 30,
+    availableDays: rawTeacherSettings?.availableDays || matchedTutor?.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+    timezone: rawTeacherSettings?.timezone || matchedTutor?.timezone || 'America/Sao_Paulo',
+  };
 
   const effectiveTeacherUid = useMemo(() => {
     if ((selectedTeacherObj as any)?.uid) return (selectedTeacherObj as any).uid;
@@ -537,7 +591,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
         teacherEmail: selectedTeacherObj.email,
         teacherName: selectedTeacherObj.name,
         teacherUid: effectiveTeacherUid,
-        meetLink: activeTeacherSettings.meetLink || 'https://meet.google.com/dhe-erqu-dvb',
+        meetLink: activeTeacherSettings.meetLink || effectiveMeetLink,
       });
 
       setScheduleSuccess(true);
@@ -561,7 +615,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
     studentName: selectedStudentObj.name,
     teacherEmail: selectedTeacherObj.email,
     teacherName: selectedTeacherObj.name,
-    meetLink: activeTeacherSettings.meetLink || 'https://meet.google.com/gmt-kxnw-zpq',
+    meetLink: activeTeacherSettings.meetLink || effectiveMeetLink,
   });
 
   if (!isOpen) return null;
@@ -801,13 +855,25 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
           {/* Meet Link Preview */}
           <div className="p-3 bg-[#9AB4FF]/10 rounded-2xl border border-[#607EC9]/30 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <Video className="w-4 h-4 text-[#1C4C96]" />
-              <span className="font-bold text-[#000035]">Google Meet:</span>
-              <span className="font-mono text-[11px] text-[#062863] truncate max-w-xs">
-                {activeTeacherSettings.meetLink || 'https://meet.google.com/gmt-kxnw-zpq'}
-              </span>
+            <div className="flex items-center gap-2 min-w-0">
+              <Video className="w-4 h-4 text-[#1C4C96] shrink-0" />
+              <span className="font-bold text-[#000035] shrink-0">Google Meet:</span>
+              <a
+                href={effectiveMeetLink}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-[11px] text-[#1C4C96] hover:underline truncate max-w-xs flex items-center gap-1 font-semibold"
+                title={effectiveMeetLink}
+              >
+                <span className="truncate">{effectiveMeetLink}</span>
+                <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+              </a>
             </div>
+            {matchedTutor?.name && (
+              <span className="text-[10px] text-slate-500 font-medium shrink-0 hidden sm:inline">
+                ({cleanTeacherName(matchedTutor.name)})
+              </span>
+            )}
           </div>
 
           {/* Footer Buttons */}

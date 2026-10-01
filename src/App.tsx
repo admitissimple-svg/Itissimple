@@ -493,6 +493,27 @@ export default function App() {
           const data = await tutorsRes.json();
           if (Array.isArray(data) && data.length > 0) {
             setTutors(data);
+            setTeacherMeetSettings((prev) => {
+              const updated = { ...prev };
+              data.forEach((tut: any) => {
+                const email = (tut.email || '').toLowerCase().trim();
+                const mUrl = (tut.meetUrl || tut.meetLink || '').trim();
+                if (email && mUrl) {
+                  updated[email] = {
+                    ...(updated[email] || {
+                      workingHoursStart: '08:00',
+                      workingHoursEnd: '18:00',
+                      slotDurationMinutes: 30,
+                      availableDays: tut.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+                      timezone: tut.timezone || 'America/Sao_Paulo',
+                    }),
+                    teacherEmail: email,
+                    meetLink: mUrl,
+                  };
+                }
+              });
+              return updated;
+            });
           }
         }
       } catch (err) {
@@ -1606,6 +1627,7 @@ export default function App() {
         dailyPhraseTime: data.dailyPhraseTime,
         teacherEmail: data.selectedTutor?.email || userProfile.teacherEmail || '',
         teacherName: data.selectedTutor?.name || userProfile.teacherName || '',
+        teacherMeetUrl: data.selectedTutor?.meetUrl || (data.selectedTutor as any)?.meetLink || userProfile.teacherMeetUrl || '',
         enrollmentStatus: 'active',
         contractedLessons: Math.max(userProfile.contractedLessons || 0, 1),
         hasCompletedTrialLesson: false,
@@ -5313,6 +5335,7 @@ export default function App() {
         }}
         currentAccount={currentAccount}
         teachers={teachersList}
+        tutors={tutors}
         students={studentsList}
         initialTeacherEmail={teacherEmailForConfig || userProfile.teacherEmail}
         teacherMeetSettings={teacherMeetSettings}
