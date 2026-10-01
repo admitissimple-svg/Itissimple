@@ -180,10 +180,10 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
 
       const isLessonScheduledOrTrial =
         l.status === 'scheduled' ||
-        l.status === 'trial_lesson' ||
-        l.status === 'trial' ||
-        l.status === 'free_trial' ||
-        l.status === 'pending' ||
+        (l.status as string) === 'trial_lesson' ||
+        (l.status as string) === 'trial' ||
+        (l.status as string) === 'free_trial' ||
+        (l.status as string) === 'pending' ||
         (l as any).isTrial ||
         l.title?.toLowerCase().includes('trial');
 
@@ -487,9 +487,9 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
                   !isCancelled &&
                   !isCompleted &&
                   !isNotCompleted &&
-                  (lesson.status === 'trial_lesson' ||
-                    lesson.status === 'trial' ||
-                    lesson.status === 'free_trial' ||
+                  ((lesson.status as string) === 'trial_lesson' ||
+                    (lesson.status as string) === 'trial' ||
+                    (lesson.status as string) === 'free_trial' ||
                     (lesson as any).isTrial ||
                     lesson.title?.toLowerCase().includes('trial'));
                 const isScheduled =

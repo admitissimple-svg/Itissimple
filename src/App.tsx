@@ -39,6 +39,7 @@ import {
   addVideoToWatchedHistoryInFirestore,
   addTrackToListenedHistoryInFirestore,
   initializeCleanStudentRoutinesInFirestore,
+  fetchAllRoutineVideosFromFirestore,
 } from './hooks/useRoutine';
 import { recordConsumedVideo, recordConsumedTrack } from './hooks/useStudentHistory';
 import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
@@ -110,6 +111,7 @@ import {
   subscribeToStudentDailyJournal,
   subscribeToStudentDailyRoutines,
   deleteStudentVocabularyFromFirestore,
+  deleteStudentJournalEntryFromFirestore,
   recordActivityInStudentJournal,
   removeActivityFromStudentJournal,
   subscribeToStudentJournal,
@@ -971,6 +973,41 @@ export default function App() {
             }
           }
 
+          // Hydrate daily routines directly from Firestore first (source of truth per student UID)
+          fetchAllRoutineVideosFromFirestore(effectiveStudentUid)
+            .then((cloudVideos) => {
+              if (cloudVideos && Object.keys(cloudVideos).length > 0) {
+                setRoutinesByDay((prev) => {
+                  const merged = { ...prev };
+                  (Object.keys(cloudVideos) as DayOfWeek[]).forEach((day) => {
+                    const v = cloudVideos[day];
+                    if (v && (v.videoId || v.url)) {
+                      const dayList = merged[day] || defaultRoutinesByDay[day] || [];
+                      merged[day] = dayList.map((item, idx) => {
+                        if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
+                          return {
+                            ...item,
+                            teacherVideos: [{
+                              id: v.videoId,
+                              videoId: v.videoId,
+                              title: v.title || v.videoTitle || 'Daily Video Practice',
+                              url: v.url || `https://www.youtube.com/watch?v=${v.videoId}`,
+                              playlistId: v.playlistId || '',
+                              isRepeatVideo: Boolean(v.isRepeatVideo),
+                            }],
+                            completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
+                          };
+                        }
+                        return item;
+                      });
+                    }
+                  });
+                  return merged;
+                });
+              }
+            })
+            .catch(() => {});
+
           // Apply this specific student's registered routine times
           const vidTime = loadedProfile?.routineVideoTime;
           const audTime = loadedProfile?.routineAudioTime;
@@ -999,26 +1036,17 @@ export default function App() {
           fetchStudentWeeklyChecksFromFirestore(uid, email)
             .then((checksData) => {
               if (checksData && checksData.checks) {
-                setWeeklyChecks((prev) => ({ ...checksData.checks, ...prev }));
+                setWeeklyChecks((prev) => ({ ...prev, ...checksData.checks }));
               }
             })
             .catch((err) => {
               console.warn('Notice loading weekly checks from Firestore:', err);
             });
 
-          fetch(`/api/routines/weekly-checks?studentEmail=${encodeURIComponent(email)}`)
-            .then((res) => (res.ok ? res.json() : null))
-            .then((data) => {
-              if (data && data.checks) {
-                setWeeklyChecks((prev) => ({ ...data.checks, ...prev }));
-              }
-            })
-            .catch(() => {});
-
           // Fetch student personal dictionary directly from Firestore (Permanent Multi-device Sync)
           fetchStudentVocabularyFromFirestore(uid, email)
             .then((vocab) => {
-              if (Array.isArray(vocab) && vocab.length > 0) {
+              if (Array.isArray(vocab)) {
                 setStudentDictionaryEntries(vocab);
               }
             })
@@ -1372,7 +1400,7 @@ export default function App() {
     if (!uid && !email) return;
 
     const unsub = subscribeToStudentVocabulary(uid, email, (cloudEntries) => {
-      if (Array.isArray(cloudEntries) && cloudEntries.length > 0) {
+      if (Array.isArray(cloudEntries)) {
         // Direct authoritative reflection from Cloud Firestore guarantees deletion and addition instant sync across devices!
         setStudentDictionaryEntries(cloudEntries);
       }
@@ -2219,11 +2247,34 @@ export default function App() {
         if (!isAlreadyChecked && !isPastDay) {
           saveStudentWeeklyChecksToFirestore(
             uid,
-            { ...weeklyChecks, [checkKey]: true },
+            { [checkKey]: true },
             email,
             userProfile?.weeklyNativeLessonsTarget,
             userProfile?.weeklyStudyDaysTarget
           );
+
+          // Direct atomic write to Firestore users/{uid} and routines subcollection
+          const db = getDb();
+          if (db && uid) {
+            setDoc(
+              doc(db, 'users', uid),
+              {
+                weeklyChecks: { [checkKey]: true },
+                sPathChecks: { [checkKey]: true },
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            ).catch(() => {});
+            setDoc(
+              doc(db, 'users', uid, 'routines', targetDay),
+              {
+                completedToday: true,
+                completed: true,
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            ).catch(() => {});
+          }
         }
       }
 
@@ -2484,11 +2535,25 @@ export default function App() {
 
         saveStudentWeeklyChecksToFirestore(
           uid,
-          { ...weeklyChecks, [checkKey]: isCompleted },
+          { [checkKey]: isCompleted },
           email,
           userProfile?.weeklyNativeLessonsTarget,
           userProfile?.weeklyStudyDaysTarget
         );
+
+        // Direct atomic write to Firestore users/{uid}
+        const db = getDb();
+        if (db && uid) {
+          setDoc(
+            doc(db, 'users', uid),
+            {
+              weeklyChecks: { [checkKey]: isCompleted },
+              sPathChecks: { [checkKey]: isCompleted },
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
       }
 
       // Feedback toast/notification for student
@@ -2589,6 +2654,20 @@ export default function App() {
     }
     if (isAudioActivity) {
       handleUpdateSPathCheck('audio_day', selectedDay, nowCompleted);
+    }
+
+    // Direct atomic write to Firestore routines subcollection
+    const db = getDb();
+    if (db && studentUid) {
+      setDoc(
+        doc(db, 'users', studentUid, 'routines', selectedDay),
+        {
+          completedToday: nowCompleted,
+          completed: nowCompleted,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
     }
 
     try {
@@ -3546,6 +3625,23 @@ export default function App() {
     }
   };
 
+  // Handler: Delete entry from Personal Dictionary with atomic Cloud Firestore update
+  const handleDeleteCustomDictionaryEntry = async (word: string) => {
+    const cleanWord = (word || '').trim().toLowerCase();
+    if (!cleanWord) return;
+
+    setStudentDictionaryEntries((prev) =>
+      prev.filter((e) => (e.word || '').trim().toLowerCase() !== cleanWord)
+    );
+
+    const targetUid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+    const targetEmail = currentAccount?.email || auth.currentUser?.email || userProfile?.email || '';
+
+    if (targetUid || targetEmail) {
+      await deleteStudentVocabularyFromFirestore(targetUid, word, targetEmail);
+    }
+  };
+
   // Handler: Add words from Live Session to Student's Weekly Activity Routine
   const handleAddWordsToWeeklyActivity = async (newWords: string[], studentEmail?: string) => {
     if (!newWords || newWords.length === 0) return;
@@ -4193,6 +4289,12 @@ export default function App() {
       ...prev,
       dailyJournalEntries: (prev.dailyJournalEntries || []).filter((e) => e.id !== entryId),
     }));
+
+    const studentUid = currentAccount?.uid || userProfile?.id || '';
+    const studentEmail = (currentAccount?.email || userProfile?.email || '').toLowerCase().trim();
+    if (studentUid || studentEmail) {
+      deleteStudentJournalEntryFromFirestore(studentUid, entryId, studentEmail).catch(() => {});
+    }
   };
 
   // Comprehensive Teachers list for scheduling dropdowns, matching, and controls
@@ -5491,6 +5593,7 @@ export default function App() {
         wordsFromRoutines={wordsFromRoutines}
         customSavedEntries={studentDictionaryEntries}
         onSaveCustomEntry={handleSaveCustomDictionaryEntry}
+        onDeleteEntry={handleDeleteCustomDictionaryEntry}
         onOpenJournalModal={() => setIsJournalModalOpen(true)}
         currentLanguage={currentLanguage}
       />

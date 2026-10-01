@@ -10,6 +10,7 @@ import {
   Loader2,
   AlertCircle,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import { StudentDictionaryEntry, Language, DayOfWeek } from '../types';
 import { speakText } from '../utils/audio';
@@ -22,6 +23,7 @@ interface PersonalDictionaryModalProps {
   wordsFromRoutines?: Array<{ word: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
   customSavedEntries?: StudentDictionaryEntry[];
   onSaveCustomEntry?: (entry: StudentDictionaryEntry) => void;
+  onDeleteEntry?: (word: string) => void;
   onOpenJournalModal?: () => void;
 }
 
@@ -32,6 +34,7 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
   wordsFromRoutines = [],
   customSavedEntries = [],
   onSaveCustomEntry,
+  onDeleteEntry,
   onOpenJournalModal,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -538,16 +541,28 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
                       )}
                     </td>
 
-                    {/* 4. Audio Pronunciation Button */}
+                    {/* 4. Audio Pronunciation & Delete Buttons */}
                     <td className="py-3.5 px-3 align-top text-right">
-                      <button
-                        type="button"
-                        onClick={() => speakText(entry.word)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-[#1C4C96] hover:bg-blue-50 transition cursor-pointer"
-                        title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
-                      >
-                        <Volume2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => speakText(entry.word)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-[#1C4C96] hover:bg-blue-50 transition cursor-pointer"
+                          title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                        {onDeleteEntry && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteEntry(entry.word)}
+                            className="p-1.5 rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                            title={isEn ? 'Remove word' : 'Remover palavra'}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

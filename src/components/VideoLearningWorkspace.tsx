@@ -258,7 +258,7 @@ export const VideoLearningWorkspace: React.FC<VideoLearningWorkspaceProps> = ({
     if (activity.teacherSpotify) {
       setTeacherSpotifyUrl(activity.teacherSpotify.url || '');
       setTeacherSpotifyTitle(activity.teacherSpotify.title || '');
-      setTeacherSpotifyType(activity.teacherSpotify.type || 'podcast');
+      setTeacherSpotifyType(activity.teacherSpotify.type === 'music' ? 'music' : 'podcast');
       setTeacherSpotifyArtist(activity.teacherSpotify.artistOrHost || '');
       setTeacherSpotifyInstructions(activity.teacherSpotify.instructions || '');
     } else {

@@ -6,7 +6,7 @@
  */
 
 export const GOOGLE_DRIVE_SESSION_FOLDER = "It's Simple - Session Notes";
-export const ACTIVE_GOOGLE_PROJECT_ID = 'gen-lang-client-0507076122';
+export const ACTIVE_GOOGLE_PROJECT_ID = 'itissimple-8663d';
 
 export interface DriveFolderResult {
   id: string;

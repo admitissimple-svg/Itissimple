@@ -184,7 +184,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [playlistFeedback, setPlaylistFeedback] = useState<{
     activityId: string;
     message: string;
-    type: 'success' | 'warning' | 'error';
+    type: 'success' | 'warning' | 'error' | 'info';
   } | null>(null);
 
   // Custom YouTube video suggestion states

@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { doc, setDoc, getDoc, getDocs, collection, deleteDoc } from 'firebase/firestore';
 import {
   fetchAppStateFromFirestore,
   saveAppStateToFirestore,
@@ -63,7 +64,7 @@ import { analyzeSentenceGrammarDeterministic } from './src/utils/writingChecker'
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
 const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
-const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
+const ACTIVE_FIREBASE_PROJECT_ID = 'itissimple-8663d';
 const GEMINI_PROJECT_ID = ACTIVE_FIREBASE_PROJECT_ID;
 
 const app = express();
@@ -100,9 +101,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 
-// In-memory / persistent mock database file
-const DB_FILE = path.join(process.cwd(), 'app-data.json');
-
+// In-memory runtime state hydrated exclusively from Cloud Firestore
 interface AppDb {
   teachers: Array<{ email: string; name: string; role: string; registeredByAdmin?: boolean; avatar?: string; picture?: string; approvalStatus?: string; country?: string; accent?: string; timezone?: string; availableDays?: any; videoIntroUrl?: string; [key: string]: any }>;
   tutorsList: Array<any>;
@@ -218,7 +217,7 @@ const DEFAULT_DB: AppDb = {
   },
 };
 
-// Cached memory state backed by both app-data.json and Firebase Firestore cloud
+// In-memory runtime state hydrated exclusively from Cloud Firestore
 let inMemoryDb: AppDb = DEFAULT_DB;
 
 /**
@@ -386,16 +385,6 @@ function mergeDbWithDefaults(parsed: any): AppDb {
 }
 
 function readDb(): AppDb {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, 'utf-8');
-      const parsed = JSON.parse(data);
-      inMemoryDb = mergeDbWithDefaults(parsed);
-      return inMemoryDb;
-    }
-  } catch (err) {
-    console.warn('Error reading local db file:', err);
-  }
   return inMemoryDb;
 }
 
@@ -403,11 +392,6 @@ let syncTimeout: any = null;
 
 function writeDb(db: AppDb) {
   inMemoryDb = db;
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Error writing db file:', err);
-  }
 
   // Cloud Firestore asynchronous sync
   if (syncTimeout) clearTimeout(syncTimeout);
@@ -418,14 +402,9 @@ function writeDb(db: AppDb) {
   }, 300);
 }
 
-// Immediate synchronous disk write + background Cloud Firestore sync
+// Immediate synchronous memory update + background Cloud Firestore sync
 async function writeDbSync(db: AppDb): Promise<void> {
   inMemoryDb = db;
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('Error writing db file:', err);
-  }
   // Run Firestore sync in background without blocking the HTTP response
   saveAppStateToFirestore(db).catch((err) => {
     console.warn('Background Firestore sync error:', err);
@@ -435,10 +414,7 @@ async function writeDbSync(db: AppDb): Promise<void> {
 // Initial hydration from Firestore on server startup
 async function initCloudPersistence() {
   try {
-    // 1. Read local file first
-    readDb();
-
-    // 2. Fetch latest state from Cloud Firestore
+    // Fetch latest state directly from Cloud Firestore
     const cloudState = await fetchAppStateFromFirestore();
     if (cloudState && typeof cloudState === 'object') {
       console.log('Successfully hydrated database from Firebase Firestore cloud');
@@ -591,7 +567,6 @@ async function initCloudPersistence() {
         studentListenedTracks: mergedListenedTracks,
         studentDictionaryMap: mergedStudentDictionary,
       });
-      fs.writeFileSync(DB_FILE, JSON.stringify(inMemoryDb, null, 2), 'utf-8');
       await saveAppStateToFirestore(inMemoryDb);
     } else {
       console.log('No existing Firestore state found, bootstrapping initial state to cloud');
@@ -5495,6 +5470,25 @@ app.post('/api/session-notes/progress', async (req, res) => {
     updatedAt: new Date().toISOString(),
   };
   writeDb(db);
+
+  // Direct atomic write to Cloud Firestore
+  const firestore = getFirestoreDb();
+  if (firestore) {
+    const cyclePayload = {
+      studentUid: studentUid || '',
+      studentEmail: (studentEmail || '').toLowerCase().trim(),
+      lastSessionKey: lastSessionKey || '',
+      stepIndex: typeof stepIndex === 'number' ? stepIndex : 0,
+      lastReviewedTab: lastReviewedTab || '',
+      updatedAt: new Date().toISOString(),
+    };
+    setDoc(doc(firestore, 'users', key, 'session_notes', 'review_cycle'), cyclePayload, { merge: true }).catch(() => {});
+    setDoc(doc(firestore, 'users', key), {
+      nativeNotesReview: cyclePayload,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true }).catch(() => {});
+  }
+
   return res.json({ success: true, progress: db.sessionNotesProgressMap[key] });
 });
 
@@ -6254,6 +6248,22 @@ app.post('/api/student-journal', async (req, res) => {
   if (cleanEmail) db.studentJournalMap[cleanEmail] = updated;
   if (studentUid) db.studentJournalMap[studentUid] = updated;
 
+  // Direct atomic write to Cloud Firestore by UID
+  const firestore = getFirestoreDb();
+  if (firestore) {
+    const docId = cleanUid || cleanEmail;
+    if (docId) {
+      setDoc(
+        doc(firestore, 'users', docId),
+        {
+          studentJournal: updated,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  }
+
   await writeDbSync(db);
   res.json({ success: true, journal: updated });
 });
@@ -6312,6 +6322,22 @@ app.post('/api/student-journal/activity', async (req, res) => {
     db.userProfiles[cleanUid].studentJournal = updated;
   }
 
+  // Direct atomic write to Cloud Firestore by UID
+  const firestore = getFirestoreDb();
+  if (firestore) {
+    const docId = cleanUid || cleanEmail;
+    if (docId) {
+      setDoc(
+        doc(firestore, 'users', docId),
+        {
+          studentJournal: updated,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
+  }
+
   await writeDbSync(db);
   res.json({ success: true, entries: updated });
 });
@@ -6334,6 +6360,22 @@ app.delete('/api/student-journal/activity', async (req, res) => {
   }
   if (cleanUid && db.userProfiles?.[cleanUid]) {
     db.userProfiles[cleanUid].studentJournal = updated;
+  }
+
+  // Direct atomic write to Cloud Firestore by UID
+  const firestoreDel = getFirestoreDb();
+  if (firestoreDel) {
+    const docId = cleanUid || cleanEmail;
+    if (docId) {
+      setDoc(
+        doc(firestoreDel, 'users', docId),
+        {
+          studentJournal: updated,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    }
   }
 
   await writeDbSync(db);
@@ -8057,28 +8099,33 @@ app.get('/api/routines/weekly-checks', (req, res) => {
 
 app.post('/api/routines/weekly-checks', (req, res) => {
   const db = readDb();
-  const { studentEmail, checks, weeklyNativeLessonsTarget, weeklyStudyDaysTarget, weeklyStudyDays } = req.body;
+  const { studentEmail, studentUid, uid, checks, weeklyNativeLessonsTarget, weeklyStudyDaysTarget, weeklyStudyDays } = req.body;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
-  if (cleanEmail) {
+  const cleanUid = (studentUid || uid || '').trim();
+  const key = cleanUid || cleanEmail;
+  if (key) {
     if (checks && typeof checks === 'object') {
       if (!db.studentWeeklyChecks) {
         db.studentWeeklyChecks = {};
       }
-      if (req.body.merge && db.studentWeeklyChecks[cleanEmail]) {
-        db.studentWeeklyChecks[cleanEmail] = {
-          ...db.studentWeeklyChecks[cleanEmail],
+      if (req.body.merge && db.studentWeeklyChecks[key]) {
+        db.studentWeeklyChecks[key] = {
+          ...db.studentWeeklyChecks[key],
           ...checks,
         };
       } else {
-        db.studentWeeklyChecks[cleanEmail] = checks;
+        db.studentWeeklyChecks[key] = checks;
+      }
+      if (cleanEmail && cleanEmail !== key) {
+        db.studentWeeklyChecks[cleanEmail] = db.studentWeeklyChecks[key];
       }
     }
     if (typeof weeklyNativeLessonsTarget === 'number' && weeklyNativeLessonsTarget > 0) {
       if (!db.weeklyNativeTargets) {
         db.weeklyNativeTargets = {};
       }
-      db.weeklyNativeTargets[cleanEmail] = weeklyNativeLessonsTarget;
-      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      db.weeklyNativeTargets[key] = weeklyNativeLessonsTarget;
+      if (cleanEmail && db.userProfiles && db.userProfiles[cleanEmail]) {
         db.userProfiles[cleanEmail].weeklyNativeLessonsTarget = weeklyNativeLessonsTarget;
       }
     }
@@ -8086,8 +8133,8 @@ app.post('/api/routines/weekly-checks', (req, res) => {
       if (!db.weeklyStudyDaysTargets) {
         db.weeklyStudyDaysTargets = {};
       }
-      db.weeklyStudyDaysTargets[cleanEmail] = weeklyStudyDaysTarget;
-      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      db.weeklyStudyDaysTargets[key] = weeklyStudyDaysTarget;
+      if (cleanEmail && db.userProfiles && db.userProfiles[cleanEmail]) {
         db.userProfiles[cleanEmail].weeklyStudyDaysTarget = weeklyStudyDaysTarget;
       }
     }
@@ -8095,24 +8142,47 @@ app.post('/api/routines/weekly-checks', (req, res) => {
       if (!db.weeklyStudyDays) {
         db.weeklyStudyDays = {};
       }
-      db.weeklyStudyDays[cleanEmail] = weeklyStudyDays;
-      if (db.userProfiles && db.userProfiles[cleanEmail]) {
+      db.weeklyStudyDays[key] = weeklyStudyDays;
+      if (cleanEmail && db.userProfiles && db.userProfiles[cleanEmail]) {
         db.userProfiles[cleanEmail].weeklyStudyDays = weeklyStudyDays;
       }
     }
     writeDb(db);
+
+    // Direct atomic write to Cloud Firestore by UID
+    const firestore = getFirestoreDb();
+    if (firestore) {
+      const docId = cleanUid || cleanEmail;
+      const fsPayload: Record<string, any> = {
+        updatedAt: new Date().toISOString(),
+      };
+      if (checks && typeof checks === 'object') {
+        fsPayload.weeklyChecks = checks;
+        fsPayload.sPathChecks = checks;
+      }
+      if (typeof weeklyNativeLessonsTarget === 'number') {
+        fsPayload.weeklyNativeLessonsTarget = weeklyNativeLessonsTarget;
+      }
+      if (typeof weeklyStudyDaysTarget === 'number') {
+        fsPayload.weeklyStudyDaysTarget = weeklyStudyDaysTarget;
+      }
+      if (Array.isArray(weeklyStudyDays)) {
+        fsPayload.weeklyStudyDays = weeklyStudyDays;
+      }
+      setDoc(doc(firestore, 'users', docId), fsPayload, { merge: true }).catch(() => {});
+    }
   }
-  const savedChecks = (db.studentWeeklyChecks && db.studentWeeklyChecks[cleanEmail]) || {};
+  const savedChecks = (db.studentWeeklyChecks && (db.studentWeeklyChecks[key] || db.studentWeeklyChecks[cleanEmail])) || {};
   const savedTarget =
-    (db.weeklyNativeTargets && db.weeklyNativeTargets[cleanEmail]) ||
+    (db.weeklyNativeTargets && (db.weeklyNativeTargets[key] || db.weeklyNativeTargets[cleanEmail])) ||
     (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyNativeLessonsTarget) ||
     1;
   const savedStudyTarget =
-    (db.weeklyStudyDaysTargets && db.weeklyStudyDaysTargets[cleanEmail]) ||
+    (db.weeklyStudyDaysTargets && (db.weeklyStudyDaysTargets[key] || db.weeklyStudyDaysTargets[cleanEmail])) ||
     (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyStudyDaysTarget) ||
     7;
   const savedStudyDays =
-    (db.weeklyStudyDays && db.weeklyStudyDays[cleanEmail]) ||
+    (db.weeklyStudyDays && (db.weeklyStudyDays[key] || db.weeklyStudyDays[cleanEmail])) ||
     (db.userProfiles && db.userProfiles[cleanEmail]?.weeklyStudyDays) ||
     [];
   res.json({
@@ -8151,6 +8221,26 @@ app.post(['/api/homework', '/api/homework/submit'], (req, res) => {
     }
     db.weeklyHomework = weeklyHomework;
     writeDb(db);
+
+    // Direct atomic write to Cloud Firestore by UID
+    const firestore = getFirestoreDb();
+    if (firestore && (uid || studentEmail)) {
+      const docId = uid || studentEmail;
+      setDoc(doc(firestore, 'users', docId), {
+        weeklyHomework,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }).catch(() => {});
+      setDoc(doc(firestore, 'users', docId, 'homework', 'current_week'), {
+        ...weeklyHomework,
+        studentUid: uid,
+        studentEmail,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }).catch(() => {});
+      setDoc(doc(firestore, 'student_homework', docId), {
+        ...weeklyHomework,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true }).catch(() => {});
+    }
   }
   res.json({ success: true, weeklyHomework: (key && db.studentHomeworkMap?.[key]) || db.weeklyHomework });
 });
@@ -8956,7 +9046,7 @@ app.post('/api/email-logs', (req, res) => {
   res.json({ success: true });
 });
 
-// 12a. Isolated, Token-Optimized AI Handler Strictly for "Sentence of the Day" (Project: gen-lang-client-0507076122)
+// 12a. Isolated, Token-Optimized AI Handler Strictly for "Sentence of the Day" (Project: itissimple-8663d)
 const dailySentenceEvaluationCache = new Map<string, { data: any; expiry: number }>();
 
 async function evaluateDailySentenceIsolated(

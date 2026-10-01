@@ -126,6 +126,9 @@ export interface GoogleAccount {
   studentName?: string;
   studentEmail?: string;
   registeredByAdmin?: boolean;
+  weeklyStudyDays?: DayOfWeek[];
+  weeklyStudyDaysTarget?: number;
+  weeklyCycle?: number;
 }
 
 export interface TeacherAssignedVideo {
@@ -182,6 +185,8 @@ export interface RoutineItem {
   teacherNotes?: string;
   learnedWords?: string[];
   completedToday?: boolean;
+  completed?: boolean;
+  isRepeatVideo?: boolean;
 }
 
 export interface DailyJournalEntry {
@@ -273,6 +278,7 @@ export interface UserProfile {
   autoRenew?: boolean;
   hasCompletedTrialLesson?: boolean;
   dailyJournalEntries?: DailyJournalEntry[];
+  dailyJournalSentence?: string;
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
   studentJournal?: StudentJournalEntry[];
 }
@@ -426,6 +432,7 @@ export interface LiveLesson {
   studentEmail: string;
   studentName: string;
   studentUid?: string;
+  studentAvatar?: string;
   title: string;
   description?: string;
   startDateTime: string;

@@ -8,13 +8,15 @@ try {
 } catch {}
 
 // Active and exclusive project identifiers
-export const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
-export const ACTIVE_PROJECT_NUMBER = 'gen-lang-client-0507076122';
+export const ACTIVE_FIREBASE_PROJECT_ID = 'itissimple-8663d';
+export const ACTIVE_PROJECT_NUMBER = '245342369537';
 export const ACTIVE_FIREBASE_AUTH_DOMAIN = `${ACTIVE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
-export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.firebasestorage.app`;
-export const ACTIVE_OAUTH_CLIENT_ID = `${ACTIVE_FIREBASE_PROJECT_ID}.apps.googleusercontent.com`;
-export const ACTIVE_APP_ID = `1:${ACTIVE_FIREBASE_PROJECT_ID}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
-export const ACTIVE_FIRESTORE_DATABASE_ID = 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
+export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.appspot.com`;
+export const ACTIVE_OAUTH_CLIENT_ID = '';
+export const ACTIVE_FIREBASE_APP_ID = '1:245342369537:web:7c8551e8eeb3933ed68d00';
+export const ACTIVE_APP_ID = ACTIVE_FIREBASE_APP_ID;
+export const ACTIVE_FIREBASE_DATABASE_ID = '(default)';
+export const ACTIVE_FIRESTORE_DATABASE_ID = ACTIVE_FIREBASE_DATABASE_ID;
 
 let dbInstance: any = null;
 
@@ -25,10 +27,10 @@ export function getFirestoreDb() {
     const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      // Enforce active project configuration: gen-lang-client-0507076122 and dedicated firestore database ID
+      // Enforce active project configuration: itissimple-8663d and dedicated firestore database ID
       config.projectId = ACTIVE_FIREBASE_PROJECT_ID;
       config.appId = `1:${ACTIVE_PROJECT_NUMBER}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
-      config.apiKey = process.env.FIREBASE_API_KEY || config.apiKey || 'AIzaSyBVAXfOGPV11t7HIkgb6YH4GScws1mfTzk';
+      config.apiKey = process.env.FIREBASE_API_KEY || config.apiKey || 'AIzaSyBDgPCPMD36mSX0lkkyEcz6-rHJdBqk';
       config.authDomain = ACTIVE_FIREBASE_AUTH_DOMAIN;
       config.storageBucket = ACTIVE_FIREBASE_STORAGE_BUCKET;
       config.firestoreDatabaseId = ACTIVE_FIRESTORE_DATABASE_ID;

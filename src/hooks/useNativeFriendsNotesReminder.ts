@@ -7,7 +7,7 @@ import {
   PedagogicalLessonTransformation,
 } from '../utils/pedagogicalTransformer';
 import { getDb } from '../firebase';
-import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, onSnapshot } from 'firebase/firestore';
 
 export interface SessionNoteSummary {
   key: string;
@@ -249,7 +249,41 @@ export function useNativeFriendsNotesReminder({
   useEffect(() => {
     loadSessions();
     loadStoredProgress();
-  }, [loadSessions, loadStoredProgress]);
+
+    const firestore = getDb();
+    if (!firestore || !resolvedUid) return;
+
+    // Real-time synchronization of Native Friends Notes review cycle progress across mobile & desktop
+    const cycleDocRef = doc(firestore, 'users', resolvedUid, 'session_notes', 'review_cycle');
+    const unsubCycle = onSnapshot(
+      cycleDocRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data) {
+            if (data.lastSessionKey) setStoredSessionKey(data.lastSessionKey);
+            if (typeof data.stepIndex === 'number') setStepIndex(data.stepIndex);
+          }
+        }
+      },
+      (err) => console.warn('Real-time review_cycle snapshot notice:', err)
+    );
+
+    // Real-time listener for session notes subcollection
+    const userNotesCol = collection(firestore, 'users', resolvedUid, 'session_notes');
+    const unsubNotes = onSnapshot(
+      userNotesCol,
+      () => {
+        loadSessions();
+      },
+      (err) => console.warn('Real-time session_notes snapshot notice:', err)
+    );
+
+    return () => {
+      unsubCycle();
+      unsubNotes();
+    };
+  }, [resolvedUid, loadSessions, loadStoredProgress]);
 
   // 3. Transform latest session notes
   const latestSession = useMemo(() => sessions[0] || null, [sessions]);
@@ -288,21 +322,24 @@ export function useNativeFriendsNotesReminder({
       setStoredSessionKey(newSessionKey);
       setStepIndex(newStepIndex);
 
-      // Save to Firestore /users/{studentUid}/session_notes/review_cycle
+      // Save directly to Firestore /users/{studentUid}/session_notes/review_cycle and users/{studentUid}
       try {
         const firestore = getDb();
         if (firestore && resolvedUid) {
+          const cyclePayload = {
+            lastSessionKey: newSessionKey,
+            stepIndex: newStepIndex,
+            lastReviewedTab: lastTab || '',
+            updatedAt: new Date().toISOString(),
+          };
+
           const cycleDocRef = doc(firestore, 'users', resolvedUid, 'session_notes', 'review_cycle');
-          await setDoc(
-            cycleDocRef,
-            {
-              lastSessionKey: newSessionKey,
-              stepIndex: newStepIndex,
-              lastReviewedTab: lastTab || '',
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          );
+          const userDocRef = doc(firestore, 'users', resolvedUid);
+
+          await Promise.all([
+            setDoc(cycleDocRef, cyclePayload, { merge: true }),
+            setDoc(userDocRef, { nativeNotesReview: cyclePayload, updatedAt: new Date().toISOString() }, { merge: true }),
+          ]);
         }
       } catch (err) {
         console.warn('useNativeFriendsNotesReminder: Firestore progress save notice:', err);

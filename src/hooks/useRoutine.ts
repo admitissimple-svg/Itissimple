@@ -18,6 +18,8 @@ export interface SavedRoutineVideo {
   isRepeatVideo?: boolean;
   instructions?: string;
   duration?: string;
+  completed?: boolean;
+  completedToday?: boolean;
   updatedAt?: string;
   teacherOverrideTrack?: TeacherOverrideTrack | null;
 }
@@ -835,6 +837,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
         activityId?: string;
         isRepeatVideo?: boolean;
         instructions?: string;
+        duration?: string;
       }
     ) => {
       if (!effectiveUid || !day) return false;
