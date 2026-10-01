@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Save,
   Check,
+  Sparkles,
 } from 'lucide-react';
 import { getInstantOrCachedWord, DictionaryLookupResult } from '../utils/dictionaryService';
 
@@ -16,6 +17,7 @@ interface StudentKeyWordsCardProps {
   handleWordChange: (idx: number, val: string) => void;
   handleSaveWords: (e?: React.FormEvent) => void;
   speakText: (text: string) => void;
+  studentLevel?: string;
 }
 
 export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
@@ -26,6 +28,7 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
   handleWordChange,
   handleSaveWords,
   speakText,
+  studentLevel,
 }) => {
   return (
     <div className="bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-4 flex flex-col justify-between h-full">
@@ -33,12 +36,18 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2.5">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#000035] text-white flex items-center justify-center shrink-0">
+            <div className="w-7 h-7 rounded-lg bg-[#000035] text-white flex items-center justify-center shrink-0 shadow-2xs">
               <BookOpen className="w-4 h-4 text-[#9AB4FF]" />
             </div>
-            <h3 className="font-black text-xs text-[#000035] tracking-tight">
-              {isEn ? '5 Key Words for this Moment' : '5 Palavras-Chave para este Momento'}
-            </h3>
+            <div>
+              <h3 className="font-black text-xs text-[#000035] tracking-tight">
+                {isEn ? '5 Key Words for this Moment' : '5 Palavras-Chave para este Momento'}
+              </h3>
+              <span className="text-[10px] text-purple-700 font-semibold flex items-center gap-1">
+                <Sparkles className="w-2.5 h-2.5" />
+                <span>{isEn ? 'Native Friend Notes Standard' : 'Padrão Native Friend Notes'}</span>
+              </span>
+            </div>
           </div>
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#062863] border border-[#9AB4FF]/40">
             {words.filter((w) => w.trim().length > 0).length}/5 {isEn ? 'recorded' : 'anotadas'}
@@ -47,8 +56,8 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
 
         <p className="text-xs text-[#607EC9] mt-2 leading-relaxed">
           {isEn
-            ? 'Record 5 English words or phrases you heard in the video or will use during this everyday moment.'
-            : 'Anote 5 palavras ou expressões em inglês que você ouviu no vídeo ou usará durante este momento diário.'}
+            ? 'Record 5 English words or expressions for this moment. Definitions, CEFR levels, and authentic real examples follow the Native Friend Notes standard.'
+            : 'Anote 5 palavras ou expressões em inglês para este momento. Definições, nível CEFR, classe gramatical e exemplos reais seguem o padrão Native Friend Notes.'}
         </p>
 
         {/* 5 Input Fields */}
@@ -56,7 +65,7 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
           {words.map((w, idx) => {
             const cleanWord = w.trim();
             const def = cleanWord
-              ? wordDefinitions[idx] || getInstantOrCachedWord(cleanWord)
+              ? wordDefinitions[idx] || getInstantOrCachedWord(cleanWord, undefined, studentLevel)
               : null;
 
             return (
@@ -84,15 +93,15 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
                 {/* Divider */}
                 <div className="w-px h-4 bg-slate-300/80 shrink-0" />
 
-                {/* English Description from the Free Dictionary API */}
+                {/* English Description adhering to Native Friend Notes standard */}
                 {cleanWord && def ? (
                   <div
                     className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden"
                     title={
                       def.notFound
-                        ? (isEn ? 'Word not found in the official dictionary.' : 'Palavra não localizada no dicionário oficial.')
+                        ? (isEn ? 'Word not found in dictionary.' : 'Palavra não localizada no dicionário.')
                         : def.definitionEn
-                        ? `${def.partOfSpeech ? `[${def.partOfSpeech}] ` : ''}${def.definitionEn}${
+                        ? `${def.cefrLevel ? `[${def.cefrLevel}] ` : ''}${def.partOfSpeech ? `[${def.partOfSpeech}] ` : ''}${def.definitionEn}${
                             def.exampleSentenceEn ? ` — e.g. "${def.exampleSentenceEn}"` : ''
                           }`
                         : undefined
@@ -101,10 +110,17 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
                     {def.notFound ? (
                       <span className="text-xs text-amber-600 font-medium italic truncate flex items-center gap-1">
                         <span className="text-xs">⚠️</span>
-                        <span>{isEn ? 'Word not found in official dictionary.' : 'Palavra não localizada no dicionário oficial.'}</span>
+                        <span>{isEn ? 'Word not found in standard dictionary.' : 'Palavra não localizada no dicionário padrão.'}</span>
                       </span>
                     ) : def.definitionEn ? (
                       <>
+                        {/* CEFR Level Badge (Native Friend Notes Standard) */}
+                        {def.cefrLevel && (
+                          <span className="text-[9px] font-black text-white bg-[#000035] px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 select-none shadow-2xs">
+                            {def.cefrLevel}
+                          </span>
+                        )}
+                        {/* Grammatical Class (Part of Speech) Badge */}
                         {def.partOfSpeech && (
                           <span className="text-[9px] font-bold text-[#1C4C96] bg-[#9AB4FF]/20 border border-[#9AB4FF]/40 px-1 py-0.2 rounded uppercase tracking-wider shrink-0 select-none">
                             {def.partOfSpeech.split('/')[0].trim()}
@@ -120,15 +136,16 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
                         )}
                       </>
                     ) : (
-                      <span className="text-[11px] text-slate-400 italic truncate select-none">
-                        {isEn ? 'Consulting official dictionary...' : 'Consultando dicionário oficial...'}
+                      <span className="text-[11px] text-purple-700 italic truncate select-none flex items-center gap-1.5 animate-pulse">
+                        <Sparkles className="w-3 h-3 text-purple-600 shrink-0" />
+                        <span>{isEn ? 'AI personalizing definition & real examples...' : 'AI personalizando definição e exemplos reais...'}</span>
                       </span>
                     )}
                   </div>
                 ) : (
                   <div className="flex-1 min-w-0 flex items-center overflow-hidden">
                     <span className="text-[11px] text-slate-400 italic truncate select-none">
-                      {isEn ? 'English definition from official dictionary...' : 'Definição oficial em inglês...'}
+                      {isEn ? 'Native Friend Notes standard definition...' : 'Definição padrão Native Friend Notes...'}
                     </span>
                   </div>
                 )}

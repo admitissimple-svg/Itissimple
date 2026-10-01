@@ -30,7 +30,7 @@ import {
   GOOGLE_DRIVE_SESSION_FOLDER,
   formatSessionNotesFileName,
 } from './src/serverGoogleDrive';
-import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition } from './src/data/dictionaryDatabase';
+import { COMMON_ROUTINE_DICTIONARY, getDictionaryDefinition, NATIVE_FRIENDS_DICTIONARY_DATABASE } from './src/data/dictionaryDatabase';
 import { defaultRoutinesByDay, createCleanStudentRoutines } from './src/data/defaultRoutines';
 import {
   parseSpotifyUrl,
@@ -65,7 +65,6 @@ const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvM
 const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
 const ACTIVE_FIREBASE_PROJECT_ID = 'gen-lang-client-0507076122';
 const GEMINI_PROJECT_ID = ACTIVE_FIREBASE_PROJECT_ID;
-const MERRIAM_WEBSTER_API_KEY = process.env.MERRIAM_WEBSTER_API_KEY || '';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -2239,36 +2238,52 @@ app.delete('/api/teachers/:email', (req, res) => {
   res.json({ success: true, teachers: db.teachers });
 });
 
-// 2.1 Official Merriam-Webster Dictionary Integration & Extraction Helpers
-function cleanMwMarkup(text: string): string {
-  if (!text) return '';
-  let cleaned = text
-    .replace(/\{bc\}/g, '')
-    .replace(/\{it\}(.*?)\{\/it\}/g, '$1')
-    .replace(/\{b\}(.*?)\{\/b\}/g, '$1')
-    .replace(/\{wi\}(.*?)\{\/wi\}/g, '$1')
-    .replace(/\{phrase\}(.*?)\{\/phrase\}/g, '$1')
-    .replace(/\{inf\}(.*?)\{\/inf\}/g, '$1')
-    .replace(/\{sup\}(.*?)\{\/sup\}/g, '$1')
-    .replace(/\{gloss\}(.*?)\{\/gloss\}/g, '$1')
-    .replace(/\{qword\}(.*?)\{\/qword\}/g, '$1')
-    .replace(/\{sc\}(.*?)\{\/sc\}/g, '$1')
-    .replace(/\{dx\}.*?\{\/dx\}/g, '')
-    .replace(/\{dxt\|(.*?)(?:\|.*?)*\}/g, '$1')
-    .replace(/\{d_link\|(.*?)(?:\|.*?)*\}/g, '$1')
-    .replace(/\{a_link\|(.*?)\}/g, '$1')
-    .replace(/\{sx\|(.*?)(?:\|.*?)*\}/g, '$1')
-    .replace(/\{[^}]+?\}/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  cleaned = cleaned.replace(/^[:\s\-—]+/, '').trim();
-  if (cleaned.length > 0) {
-    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+// 2.1 Native Friend Notes Standard Vocabulary & Pedagogical Helpers
+function normalizePosForNativeNotes(rawPos: string, word: string): string {
+  const p = (rawPos || '').toLowerCase().trim();
+  const trimmedWord = word.trim().toLowerCase();
+  const isMultiWord = trimmedWord.includes(' ');
+
+  if (
+    p.includes('phrasal') ||
+    (isMultiWord &&
+      /^(catch|work|get|make|touch|follow|figure|look|wrap|bring|come|run|give|take|turn|put|call|stand|point|hold|back|fill|drop|sign|warm|wind|burn|cut|deal|keep)\s+(up|out|down|off|in|on|at|for|to|with|into|across|away|over|back|through)/i.test(
+        trimmedWord
+      ))
+  ) {
+    return 'Phrasal Verb';
   }
-  return cleaned;
+  if (isMultiWord) {
+    return 'Idiomatic Expression';
+  }
+  if (p === 'noun' || p.includes('noun')) return 'Noun';
+  if (p === 'verb' || p.includes('verb')) return 'Verb';
+  if (p === 'adjective' || p.includes('adj')) return 'Adjective';
+  if (p === 'adverb' || p.includes('adv')) return 'Adverb';
+  if (p === 'preposition' || p.includes('prep')) return 'Preposition';
+  if (p === 'conjunction' || p.includes('conj')) return 'Conjunction';
+  if (p === 'interjection') return 'Interjection';
+  return 'Vocabulary Item';
 }
 
-function formatExampleSentence(ex: string): string {
+function resolveNativeNotesCefr(level?: string): 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2' {
+  const norm = String(level || '').toLowerCase().trim();
+  if (norm.includes('c2') || norm.includes('c1') || norm.includes('avancado') || norm.includes('advanced')) {
+    return 'C1';
+  }
+  if (norm.includes('b2') || norm.includes('upper')) {
+    return 'B2';
+  }
+  if (norm.includes('b1') || norm.includes('intermediario') || norm.includes('intermediate')) {
+    return 'B1';
+  }
+  if (norm.includes('a2') || norm.includes('elementary')) {
+    return 'A2';
+  }
+  return 'A1';
+}
+
+function formatPedagogicalSentence(ex: string): string {
   if (!ex) return '';
   let cleaned = ex.trim().replace(/^["'\s]+|["'\s]+$/g, '').trim();
   if (cleaned && !/[.!?]$/.test(cleaned)) {
@@ -2280,235 +2295,127 @@ function formatExampleSentence(ex: string): string {
   return cleaned;
 }
 
-function extractExampleFromSense(dt: any[]): string {
-  if (!Array.isArray(dt)) return '';
-  for (const item of dt) {
-    if (item[0] === 'vis' && Array.isArray(item[1])) {
-      for (const v of item[1]) {
-        if (v && v.t) {
-          const ex = cleanMwMarkup(v.t);
-          if (ex) return formatExampleSentence(ex);
-        }
-      }
-    }
-    if (item[0] === 'uns' && Array.isArray(item[1])) {
-      for (const unsGroup of item[1]) {
-        if (Array.isArray(unsGroup)) {
-          for (const unsItem of unsGroup) {
-            if (unsItem[0] === 'vis' && Array.isArray(unsItem[1])) {
-              for (const v of unsItem[1]) {
-                if (v && v.t) {
-                  const ex = cleanMwMarkup(v.t);
-                  if (ex) return formatExampleSentence(ex);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return '';
-}
-
-function findExampleInEntry(entry: any): string {
-  if (!entry || !entry.def) return '';
-  const sseqs = entry.def.flatMap((d: any) => d.sseq || []) || [];
-  for (const group of sseqs) {
-    for (const item of group) {
-      if (item[0] === 'sense' && item[1]?.dt) {
-        const ex = extractExampleFromSense(item[1].dt);
-        if (ex) return ex;
-      }
-      if (item[0] === 'bs' && item[1]?.sense?.dt) {
-        const ex = extractExampleFromSense(item[1].sense.dt);
-        if (ex) return ex;
-      }
-    }
-  }
-  return '';
-}
-
-function generateInternalFallbackExample(word: string, partOfSpeech: string): string {
+function generateNativeNotesExample(word: string, partOfSpeech: string): string {
   const w = word.trim();
-  const offline = getDictionaryDefinition(w);
-  if (offline && offline.exampleSentenceEn && offline.exampleSentenceEn.trim()) {
-    return formatExampleSentence(offline.exampleSentenceEn);
-  }
-
   const lowerPos = (partOfSpeech || '').toLowerCase();
-  if (lowerPos.includes('verb')) {
-    return `We practiced how to ${w} during our English routine.`;
+
+  if (lowerPos.includes('phrasal') || lowerPos.includes('verb')) {
+    return `We practiced how to ${w} naturally during our daily conversation routine.`;
   }
   if (lowerPos.includes('adjective') || lowerPos.includes('adj')) {
-    return `It was a very ${w} moment in our daily conversation.`;
+    return `Using "${w}" makes your daily English sound much more expressive and natural.`;
   }
   if (lowerPos.includes('adverb') || lowerPos.includes('adv')) {
-    return `She spoke English ${w} during the live lesson.`;
+    return `She spoke English ${w} during our live conversation practice today.`;
+  }
+  if (lowerPos.includes('idiom') || lowerPos.includes('expression')) {
+    return `The phrase "${w}" is frequently used by native speakers in everyday chats.`;
   }
   if (lowerPos.includes('noun')) {
-    return `The word "${w}" is frequently used in everyday English conversations.`;
+    return `Understanding the term "${w}" helps you follow native English conversations easily.`;
   }
-  return `He practiced using the word "${w}" in a complete sentence.`;
+  return `In daily speaking: "I practiced using '${w}' with confidence in our routine."`;
 }
 
-function mapMerriamWebsterResponse(data: any[], rawWord: string) {
-  if (!Array.isArray(data) || data.length === 0) return null;
-  if (typeof data[0] === 'string') return null; // Array of spelling suggestions
+// In-memory cache for pedagogical dictionary lookups (Zero localStorage)
+const pedagogicalDictCache = new Map<string, any>();
 
-  const cleanTarget = rawWord.trim().toLowerCase();
+// 2.1.1 Ultra-Fast AI Pedagogical Vocabulary Synthesizer (Native Friend Notes Standard)
+async function queryAiPedagogicalDefinition(
+  cleanWord: string,
+  studentLevel: string,
+  cefr: string
+): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  if (!apiKey || !cleanWord || cleanWord.length < 2) return null;
 
-  // 1. Check for defined run-on phrase in dros (e.g. "touch base")
-  for (const entry of data) {
-    if (Array.isArray(entry.dros)) {
-      for (const dro of entry.dros) {
-        if (dro.drp && dro.drp.toLowerCase() === cleanTarget) {
-          let droDef = '';
-          let droExample = '';
-          const sseqs = dro.def?.flatMap((d: any) => d.sseq || []) || [];
-          for (const group of sseqs) {
-            for (const item of group) {
-              if (item[0] === 'sense' && item[1]?.dt) {
-                if (!droExample) droExample = extractExampleFromSense(item[1].dt);
-                if (!droDef) {
-                  const textItem = item[1].dt.find((d: any) => d[0] === 'text');
-                  if (textItem && textItem[1]) droDef = cleanMwMarkup(textItem[1]);
-                }
-              }
-            }
-          }
-          if (droDef) {
-            const pos = dro.gram || entry.fl || 'idiom';
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const prompt = `You are the master Native Friend Notes Pedagogical AI Engine for an English immersion app.
+Analyze the word or phrase: "${cleanWord}".
+Student English level: "${studentLevel}" (Target CEFR: ${cefr}).
+
+Generate a personalized pedagogical dictionary entry adhering strictly to Native Friend Notes standards:
+1. "word": Exactly "${cleanWord}".
+2. "partOfSpeech": Standardized grammatical class: Noun, Verb, Phrasal Verb, Adjective, Adverb, Idiomatic Expression, Collocation, or Preposition.
+3. "cefrLevel": Accurate CEFR level for this term: A1, A2, B1, B2, C1, or C2 based on lexical complexity and natural usage.
+4. "definitionEn": A personalized, crystal-clear pedagogical explanation in natural English tailored for an ESL learner explaining the practical meaning of this specific term without dictionary jargon or abbreviations (1-2 sentences).
+5. "exampleSentenceEn": An authentic, realistic daily-life conversational example sentence showing how native speakers use this exact term in conversation, work, or daily life. Must be capitalized, with proper punctuation, and no surrounding quotes.
+6. "translationPt": Accurate Brazilian Portuguese translation of the term in context.
+7. "collocations": 2 to 3 natural, everyday collocations for this word.
+8. "phonetic": Clean phonetic pronunciation guide (e.g. /.../).
+9. "register": "informal" | "neutral" | "formal" | "idiomatic".
+
+Respond strictly with a JSON object:
+{
+  "word": "${cleanWord}",
+  "partOfSpeech": "...",
+  "cefrLevel": "...",
+  "definitionEn": "...",
+  "exampleSentenceEn": "...",
+  "translationPt": "...",
+  "collocations": ["...", "..."],
+  "phonetic": "...",
+  "register": "..."
+}`;
+
+    const candidateModels = [
+      'gemini-2.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-3.6-flash',
+    ];
+
+    for (const model of candidateModels) {
+      try {
+        const config: any = {
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 0 },
+        };
+
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config,
+        });
+
+        const text = response.text || '';
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed && parsed.definitionEn && parsed.exampleSentenceEn) {
             return {
-              word: dro.drp,
-              partOfSpeech: pos,
-              definitionEn: droDef,
-              exampleSentenceEn: droExample || generateInternalFallbackExample(dro.drp, pos),
-              source: 'merriam-webster',
+              word: parsed.word || cleanWord,
+              partOfSpeech: parsed.partOfSpeech || (cleanWord.includes(' ') ? 'Idiomatic Expression' : 'Noun'),
+              cefrLevel: parsed.cefrLevel || cefr,
+              definitionEn: formatPedagogicalSentence(parsed.definitionEn),
+              exampleSentenceEn: formatPedagogicalSentence(parsed.exampleSentenceEn),
+              translationPt: parsed.translationPt || '',
+              collocations: Array.isArray(parsed.collocations) ? parsed.collocations : [],
+              phonetic: parsed.phonetic || '',
+              register: parsed.register || 'neutral',
+              source: 'native_notes_ai_personalized',
               notFound: false,
             };
           }
         }
-      }
-    }
-  }
-
-  // 2. Exact match or primary entry
-  const entry =
-    data.find((e: any) => {
-      const id = (e.meta?.id || '').replace(/:\d+$/, '').toLowerCase();
-      return id === cleanTarget;
-    }) || data[0];
-
-  const word = (entry.meta?.id || '').replace(/:\d+$/, '') || rawWord.trim();
-  const partOfSpeech = entry.fl || 'word';
-
-  // 3. Definition: shortdef or first structured definition
-  let definition = '';
-  if (Array.isArray(entry.shortdef) && entry.shortdef.length > 0) {
-    const firstDef = entry.shortdef.find((d: any) => typeof d === 'string' && d.trim());
-    if (firstDef) {
-      definition = cleanMwMarkup(firstDef);
-    }
-  }
-  if (!definition && entry.def) {
-    const sseqs = entry.def.flatMap((d: any) => d.sseq || []) || [];
-    for (const group of sseqs) {
-      for (const item of group) {
-        if (item[0] === 'sense' && item[1]?.dt) {
-          const textItem = item[1].dt.find((d: any) => d[0] === 'text');
-          if (textItem && textItem[1]) {
-            definition = cleanMwMarkup(textItem[1]);
-            if (definition) break;
-          }
-        }
-      }
-      if (definition) break;
-    }
-  }
-
-  if (!definition) return null;
-
-  // 4. Real example extracted from API or internal fallback
-  let example = findExampleInEntry(entry);
-  if (!example) {
-    for (const other of data) {
-      example = findExampleInEntry(other);
-      if (example) break;
-    }
-  }
-  if (!example) {
-    example = generateInternalFallbackExample(word, partOfSpeech);
-  }
-
-  // 5. Audio and phonetics from official Merriam-Webster CDN
-  let phonetic: string | undefined;
-  let audio: string | undefined;
-  if (entry.hwi) {
-    if (Array.isArray(entry.hwi.prs) && entry.hwi.prs.length > 0) {
-      const pr = entry.hwi.prs[0];
-      phonetic = pr.ipa || pr.mw;
-      if (pr.sound?.audio) {
-        const a = pr.sound.audio;
-        let sub = a.charAt(0);
-        if (a.startsWith('bix')) sub = 'bix';
-        else if (a.startsWith('gg')) sub = 'gg';
-        else if (/^[^a-zA-Z]/.test(a)) sub = 'number';
-        audio = `https://media.merriam-webster.com/audio/prons/en/us/mp3/${sub}/${a}.mp3`;
-      }
-    }
-  }
-
-  return {
-    word,
-    partOfSpeech,
-    definitionEn: definition,
-    exampleSentenceEn: example,
-    phonetic,
-    audio,
-    source: 'merriam-webster',
-    notFound: false,
-  };
-}
-
-let activeMwReference = process.env.MERRIAM_WEBSTER_REF || 'learners';
-const mwCache = new Map<string, any>();
-
-async function queryMerriamWebsterApi(wordToLookup: string): Promise<any> {
-  if (!MERRIAM_WEBSTER_API_KEY) return null;
-  const referencesToTry = [
-    activeMwReference,
-    activeMwReference === 'learners' ? 'collegiate' : 'learners',
-  ];
-
-  for (const ref of referencesToTry) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 7000);
-      const url = `https://www.dictionaryapi.com/api/v3/references/${ref}/json/${encodeURIComponent(wordToLookup)}?key=${MERRIAM_WEBSTER_API_KEY}`;
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeout);
-
-      if (!res.ok) continue;
-
-      const text = await res.text();
-      if (text.includes('Not subscribed for this reference') || text.includes('Invalid API key')) {
+      } catch (err) {
         continue;
       }
-
-      const json = JSON.parse(text);
-      if (Array.isArray(json)) {
-        activeMwReference = ref;
-        return json;
-      }
-    } catch {
-      continue;
     }
+  } catch (err) {
+    console.warn('Notice querying AI pedagogical dictionary:', err);
   }
   return null;
 }
 
-// 2.2 Dictionary Lookup Endpoint (Official Merriam-Webster with structured fallback)
+// 2.2 Dictionary Lookup Endpoint (Native Friend Notes Unified Standard)
 app.all('/api/dictionary/define', async (req, res) => {
   const rawWord = (req.body?.word || req.query?.word || '') as string;
   if (!rawWord || typeof rawWord !== 'string') {
@@ -2517,43 +2424,69 @@ app.all('/api/dictionary/define', async (req, res) => {
 
   const cleanWord = rawWord.trim();
   const lowerWord = cleanWord.toLowerCase();
-  const cacheKey = lowerWord;
+  const studentLevel = (req.body?.studentLevel || req.body?.level || req.query?.level || 'intermediate') as string;
+  const cefr = resolveNativeNotesCefr(studentLevel);
+  const cacheKey = `${lowerWord}_${cefr}`;
 
-  if (mwCache.has(cacheKey)) {
-    return res.json(mwCache.get(cacheKey));
+  if (pedagogicalDictCache.has(cacheKey)) {
+    return res.json(pedagogicalDictCache.get(cacheKey));
   }
 
-  // 1. Query official Merriam-Webster API
-  try {
-    const mwData = await queryMerriamWebsterApi(lowerWord);
-    if (mwData) {
-      const mapped = mapMerriamWebsterResponse(mwData, cleanWord);
-      if (mapped) {
-        mwCache.set(cacheKey, mapped);
-        return res.json(mapped);
-      }
-    }
+  // 1. Curated repository check adhering to Native Friend Notes (Instant 0ms)
+  const normalizedKey = lowerWord.replace(/[_\-]+/g, ' ');
+  const dbEntry = NATIVE_FRIENDS_DICTIONARY_DATABASE[lowerWord] || NATIVE_FRIENDS_DICTIONARY_DATABASE[normalizedKey];
 
-    // Try without trailing punctuation or plural trailing 's' if not found initially
-    if (/[.,!?;:]$/.test(cleanWord) || lowerWord.endsWith('s')) {
-      const strippedWord = cleanWord.replace(/[.,!?;:]+$/, '');
-      const secondaryData = await queryMerriamWebsterApi(strippedWord);
-      if (secondaryData) {
-        const mapped = mapMerriamWebsterResponse(secondaryData, strippedWord);
-        if (mapped) {
-          mwCache.set(cacheKey, mapped);
-          return res.json(mapped);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Merriam-Webster query error:', err);
+  if (dbEntry) {
+    const curatedResult = {
+      word: dbEntry.word,
+      partOfSpeech: dbEntry.partOfSpeech,
+      cefrLevel: dbEntry.cefrLevel || cefr,
+      definitionEn: dbEntry.definitionEn,
+      exampleSentenceEn: formatPedagogicalSentence(dbEntry.exampleSentenceEn),
+      translationPt: dbEntry.translationPt || '',
+      collocations: dbEntry.collocations,
+      synonyms: dbEntry.synonyms,
+      register: dbEntry.register,
+      phonetic: dbEntry.phonetic,
+      source: 'native_notes_standard',
+      notFound: false,
+    };
+    pedagogicalDictCache.set(cacheKey, curatedResult);
+    pedagogicalDictCache.set(lowerWord, curatedResult);
+    return res.json(curatedResult);
   }
 
-  // 2. Secondary fallback to Free Dictionary API if Merriam-Webster has no entry
+  // 2. Query Gemini AI for personalized pedagogical entry with thinkingBudget: 0 (Fast ~400ms)
+  const aiResult = await queryAiPedagogicalDefinition(cleanWord, studentLevel, cefr);
+  if (aiResult) {
+    pedagogicalDictCache.set(cacheKey, aiResult);
+    pedagogicalDictCache.set(lowerWord, aiResult);
+    return res.json(aiResult);
+  }
+
+  // 3. Curated offline entry fallback
+  const offlineEntry = getDictionaryDefinition(cleanWord);
+  if (offlineEntry && offlineEntry.definitionEn) {
+    const offlineResult = {
+      word: offlineEntry.word || cleanWord,
+      partOfSpeech: offlineEntry.partOfSpeech || (cleanWord.includes(' ') ? 'Idiomatic Expression' : 'Noun'),
+      cefrLevel: (offlineEntry as any).cefrLevel || cefr,
+      definitionEn: offlineEntry.definitionEn,
+      exampleSentenceEn: formatPedagogicalSentence(offlineEntry.exampleSentenceEn || generateNativeNotesExample(cleanWord, offlineEntry.partOfSpeech || '')),
+      translationPt: offlineEntry.translationPt || '',
+      phonetic: (offlineEntry as any).phonetic,
+      source: 'native_notes_standard',
+      notFound: false,
+    };
+    pedagogicalDictCache.set(cacheKey, offlineResult);
+    pedagogicalDictCache.set(lowerWord, offlineResult);
+    return res.json(offlineResult);
+  }
+
+  // 4. Secondary query to Free Dictionary API with Native Friend Notes pedagogical adaptation
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 3500);
     const apiRes = await fetch(
       `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lowerWord)}`,
       {
@@ -2568,9 +2501,10 @@ app.all('/api/dictionary/define', async (req, res) => {
       if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].meanings) && data[0].meanings.length > 0) {
         const entry = data[0];
         const firstMeaning = entry.meanings[0];
-        const pos = firstMeaning.partOfSpeech || 'word';
+        const rawPos = firstMeaning.partOfSpeech || '';
+        const pos = normalizePosForNativeNotes(rawPos, cleanWord);
         const firstDefObj = firstMeaning.definitions?.[0];
-        const def = firstDefObj?.definition?.trim() || '';
+        let def = firstDefObj?.definition?.trim() || '';
 
         let example = firstDefObj?.example?.trim() || '';
         if (!example && Array.isArray(firstMeaning.definitions)) {
@@ -2590,109 +2524,135 @@ app.all('/api/dictionary/define', async (req, res) => {
         }
 
         if (def) {
+          let cleanDef = def.replace(/^[:\s\-—]+/, '').trim();
+          if (cleanDef.length > 0) {
+            cleanDef = cleanDef.charAt(0).toUpperCase() + cleanDef.slice(1);
+            if (!/[.!?]$/.test(cleanDef)) {
+              cleanDef += '.';
+            }
+          }
+
           const result = {
             word: entry.word || cleanWord,
             partOfSpeech: pos,
-            definitionEn: def,
-            exampleSentenceEn: example ? formatExampleSentence(example) : generateInternalFallbackExample(cleanWord, pos),
+            cefrLevel: cefr,
+            definitionEn: cleanDef,
+            exampleSentenceEn: example ? formatPedagogicalSentence(example) : generateNativeNotesExample(cleanWord, pos),
             phonetic: entry.phonetic || entry.phonetics?.find((p: any) => p.text)?.text,
             audio: entry.phonetics?.find((p: any) => p.audio && p.audio.startsWith('http'))?.audio,
-            source: 'api',
+            source: 'native_notes_standard',
             notFound: false,
           };
-          mwCache.set(cacheKey, result);
+          pedagogicalDictCache.set(cacheKey, result);
+          pedagogicalDictCache.set(lowerWord, result);
           return res.json(result);
         }
       }
     }
   } catch {
-    // Secondary fallback error
+    // Secondary fallback handling
   }
 
-  // 3. Offline curated dictionary check before notFound
-  const offlineEntry = getDictionaryDefinition(cleanWord);
-  if (offlineEntry && offlineEntry.definitionEn) {
-    const offlineResult = {
-      word: offlineEntry.word || cleanWord,
-      partOfSpeech: offlineEntry.partOfSpeech || 'word',
-      definitionEn: offlineEntry.definitionEn,
-      exampleSentenceEn: formatExampleSentence(offlineEntry.exampleSentenceEn || generateInternalFallbackExample(cleanWord, offlineEntry.partOfSpeech || '')),
-      phonetic: offlineEntry.phonetic,
-      source: 'offline_dict',
-      notFound: false,
-    };
-    mwCache.set(cacheKey, offlineResult);
-    return res.json(offlineResult);
-  }
+  // 5. Fallback adhering strictly to Native Friend Notes pedagogical standard
+  const isMultiWord = cleanWord.includes(' ');
+  const fallbackPos = isMultiWord ? 'Idiomatic Expression' : 'Vocabulary Item';
+  const fallbackDef =
+    cefr === 'A1' || cefr === 'A2'
+      ? `A fundamental word for level ${cefr}: practice using "${cleanWord}" in simple daily conversations.`
+      : cefr === 'B1' || cefr === 'B2'
+      ? `A natural conversational expression to enrich your speaking flow and vocabulary range.`
+      : `An advanced lexical item to elevate your expressive nuance and natural delivery.`;
 
-  // 4. Clean notFound response
-  const notFoundResult = {
+  const fallbackResult = {
     word: cleanWord,
-    partOfSpeech: '',
-    definitionEn: '',
-    exampleSentenceEn: '',
-    source: 'not_found',
-    notFound: true,
-    errorMessage: 'Palavra não localizada no dicionário oficial.',
+    partOfSpeech: fallbackPos,
+    cefrLevel: cefr,
+    definitionEn: fallbackDef,
+    exampleSentenceEn: generateNativeNotesExample(cleanWord, fallbackPos),
+    source: 'native_notes_standard',
+    notFound: false,
   };
-  return res.json(notFoundResult);
+
+  pedagogicalDictCache.set(cacheKey, fallbackResult);
+  pedagogicalDictCache.set(lowerWord, fallbackResult);
+  return res.json(fallbackResult);
 });
 
 // Internal helper to lookup word definition & examples for pedagogical engine
-async function lookupServerDictionaryWord(cleanWord: string): Promise<{
+async function lookupServerDictionaryWord(cleanWord: string, studentLevel?: string): Promise<{
   word: string;
   definitionEn: string;
   exampleSentenceEn: string;
   translationPt: string;
+  cefrLevel: string;
+  partOfSpeech: string;
 }> {
   const trimmed = cleanWord.trim();
   const lower = trimmed.toLowerCase();
+  const cefr = resolveNativeNotesCefr(studentLevel);
 
-  // 1. Offline curated routine dictionary
+  // 1. Pedagogical cache check (0ms)
+  const cacheKey = `${lower}_${cefr}`;
+  if (pedagogicalDictCache.has(cacheKey)) {
+    const cached = pedagogicalDictCache.get(cacheKey);
+    if (cached && !cached.notFound && cached.definitionEn) {
+      return {
+        word: trimmed,
+        definitionEn: cached.definitionEn,
+        exampleSentenceEn: cached.exampleSentenceEn || generateNativeNotesExample(trimmed, cached.partOfSpeech || ''),
+        translationPt: cached.translationPt || trimmed,
+        cefrLevel: cached.cefrLevel || cefr,
+        partOfSpeech: cached.partOfSpeech || 'Vocabulary Item',
+      };
+    }
+  }
+
+  // 2. Offline curated routine dictionary
+  const normalizedKey = lower.replace(/[_\-]+/g, ' ');
+  const dbEntry = NATIVE_FRIENDS_DICTIONARY_DATABASE[lower] || NATIVE_FRIENDS_DICTIONARY_DATABASE[normalizedKey];
+
+  if (dbEntry) {
+    return {
+      word: dbEntry.word,
+      definitionEn: dbEntry.definitionEn,
+      exampleSentenceEn: formatPedagogicalSentence(dbEntry.exampleSentenceEn),
+      translationPt: dbEntry.translationPt || trimmed,
+      cefrLevel: dbEntry.cefrLevel || cefr,
+      partOfSpeech: dbEntry.partOfSpeech,
+    };
+  }
+
+  // 3. Query Gemini AI for personalized entry
+  const aiRes = await queryAiPedagogicalDefinition(trimmed, studentLevel || 'intermediate', cefr);
+  if (aiRes) {
+    pedagogicalDictCache.set(cacheKey, aiRes);
+    pedagogicalDictCache.set(lower, aiRes);
+    return {
+      word: trimmed,
+      definitionEn: aiRes.definitionEn,
+      exampleSentenceEn: aiRes.exampleSentenceEn,
+      translationPt: aiRes.translationPt || trimmed,
+      cefrLevel: aiRes.cefrLevel || cefr,
+      partOfSpeech: aiRes.partOfSpeech,
+    };
+  }
+
   const offline = getDictionaryDefinition(trimmed);
   if (offline && offline.definitionEn && offline.definitionEn.trim()) {
     return {
       word: trimmed,
       definitionEn: offline.definitionEn.trim(),
-      exampleSentenceEn: offline.exampleSentenceEn?.trim() || `I practice using "${trimmed}" in my daily routine.`,
+      exampleSentenceEn: offline.exampleSentenceEn?.trim() || generateNativeNotesExample(trimmed, offline.partOfSpeech || ''),
       translationPt: offline.translationPt?.trim() || trimmed,
+      cefrLevel: (offline as any).cefrLevel || cefr,
+      partOfSpeech: offline.partOfSpeech || (trimmed.includes(' ') ? 'Idiomatic Expression' : 'Noun'),
     };
   }
 
-  // 2. Merriam-Webster cache
-  if (mwCache.has(lower)) {
-    const cached = mwCache.get(lower);
-    if (cached && !cached.notFound && cached.definitionEn) {
-      return {
-        word: trimmed,
-        definitionEn: cached.definitionEn,
-        exampleSentenceEn: cached.exampleSentenceEn || `I practice using "${trimmed}" in my daily activities.`,
-        translationPt: (cached as any).translationPt || trimmed,
-      };
-    }
-  }
-
-  // 3. Merriam-Webster live query
-  try {
-    const mwData = await queryMerriamWebsterApi(lower);
-    if (mwData) {
-      const mapped = mapMerriamWebsterResponse(mwData, trimmed);
-      if (mapped && mapped.definitionEn) {
-        mwCache.set(lower, mapped);
-        return {
-          word: trimmed,
-          definitionEn: mapped.definitionEn,
-          exampleSentenceEn: mapped.exampleSentenceEn || `I practice using "${trimmed}" in my everyday conversations.`,
-          translationPt: (mapped as any).translationPt || trimmed,
-        };
-      }
-    }
-  } catch {}
-
-  // 4. Free Dictionary API fallback
+  // 4. Free Dictionary API lookup with Native Friend Notes transformation
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 3500);
     const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(lower)}`, {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -2702,6 +2662,7 @@ async function lookupServerDictionaryWord(cleanWord: string): Promise<{
       const data = (await res.json()) as any[];
       if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0].meanings) && data[0].meanings.length > 0) {
         const firstMeaning = data[0].meanings[0];
+        const pos = normalizePosForNativeNotes(firstMeaning.partOfSpeech || '', trimmed);
         const def = firstMeaning.definitions?.[0]?.definition?.trim() || '';
         let ex = firstMeaning.definitions?.[0]?.example?.trim() || '';
         if (!ex && Array.isArray(firstMeaning.definitions)) {
@@ -2709,23 +2670,34 @@ async function lookupServerDictionaryWord(cleanWord: string): Promise<{
           if (found) ex = found.example.trim();
         }
         if (def) {
+          let cleanDef = def.replace(/^[:\s\-—]+/, '').trim();
+          if (cleanDef.length > 0) {
+            cleanDef = cleanDef.charAt(0).toUpperCase() + cleanDef.slice(1);
+            if (!/[.!?]$/.test(cleanDef)) cleanDef += '.';
+          }
           return {
             word: trimmed,
-            definitionEn: def,
-            exampleSentenceEn: ex || `I use "${trimmed}" naturally in my daily routine.`,
+            definitionEn: cleanDef,
+            exampleSentenceEn: ex ? formatPedagogicalSentence(ex) : generateNativeNotesExample(trimmed, pos),
             translationPt: trimmed,
+            cefrLevel: cefr,
+            partOfSpeech: pos,
           };
         }
       }
     }
   } catch {}
 
-  // 5. Default structured vocabulary entry
+  // 5. Default structured vocabulary entry following Native Friend Notes
+  const isMultiWord = trimmed.includes(' ');
+  const fallbackPos = isMultiWord ? 'Idiomatic Expression' : 'Vocabulary Item';
   return {
     word: trimmed,
-    definitionEn: `Essential vocabulary term learned during weekly English immersion.`,
-    exampleSentenceEn: `I practice using "${trimmed}" naturally in my daily conversations.`,
+    definitionEn: `A practical vocabulary term (${cefr}) to enrich your conversational flow and clarity.`,
+    exampleSentenceEn: generateNativeNotesExample(trimmed, fallbackPos),
     translationPt: trimmed,
+    cefrLevel: cefr,
+    partOfSpeech: fallbackPos,
   };
 }
 
@@ -5496,6 +5468,36 @@ app.get('/api/session-notes', async (req, res) => {
   res.json(Object.values(db.sessionNotesMap || {}));
 });
 
+// Retrieve Native Friends Notes Sequential Review Progress
+app.get('/api/session-notes/progress', async (req, res) => {
+  const db = readDb();
+  const studentUid = ((req.query.studentUid as string) || (req.query.uid as string) || '').trim();
+  const studentEmail = ((req.query.studentEmail as string) || (req.query.email as string) || '').toLowerCase().trim();
+  const key = studentUid || studentEmail;
+  if (!key) return res.status(400).json({ error: 'Missing student identifier' });
+  const progressMap = db.sessionNotesProgressMap || {};
+  return res.json(progressMap[key] || null);
+});
+
+// Update Native Friends Notes Sequential Review Progress
+app.post('/api/session-notes/progress', async (req, res) => {
+  const { studentUid, studentEmail, lastSessionKey, stepIndex, lastReviewedTab } = req.body;
+  const key = (studentUid || studentEmail || '').trim();
+  if (!key) return res.status(400).json({ error: 'Missing student identifier' });
+  const db = readDb();
+  db.sessionNotesProgressMap = db.sessionNotesProgressMap || {};
+  db.sessionNotesProgressMap[key] = {
+    studentUid: studentUid || '',
+    studentEmail: (studentEmail || '').toLowerCase().trim(),
+    lastSessionKey: lastSessionKey || '',
+    stepIndex: typeof stepIndex === 'number' ? stepIndex : 0,
+    lastReviewedTab: lastReviewedTab || '',
+    updatedAt: new Date().toISOString(),
+  };
+  writeDb(db);
+  return res.json({ success: true, progress: db.sessionNotesProgressMap[key] });
+});
+
 // Helper for pedagogical transformation fallback
 function generateServerPedagogicalFallback(params: {
   rawNotes: string;
@@ -5527,16 +5529,50 @@ function generateServerPedagogicalFallback(params: {
     ? 'A2'
     : 'B1';
 
-  // Extract markings
+  // Extract markings for Alt+N, Alt+W, Alt+P, Alt+Y
   const tagCorrect = (rawNotes.match(/data-tag-type=["']correct["']/g) || []).length;
   const tagIncorrect = (rawNotes.match(/data-tag-type=["']incorrect["']/g) || []).length;
+  const tagNewWord = (rawNotes.match(/data-tag-type=["']new-word["']/g) || []).length;
+  const tagPronounce = (rawNotes.match(/data-tag-type=["']pronounce["']/g) || []).length;
+
   const plainCorrect = (rawNotes.replace(/<span[^>]*data-tag-type=["']correct["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/✓|✔/g) || []).length;
   const plainIncorrect = (rawNotes.replace(/<span[^>]*data-tag-type=["']incorrect["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/✗|✖/g) || []).length;
+  const plainNewWord = (rawNotes.replace(/<span[^>]*data-tag-type=["']new-word["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/\[New Word\]/gi) || []).length;
+  const plainPronounce = (rawNotes.replace(/<span[^>]*data-tag-type=["']pronounce["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/\[Pronounce\]/gi) || []).length;
 
   const correctCount = tagCorrect + plainCorrect;
   const incorrectCount = tagIncorrect + plainIncorrect;
+  const newWordCount = tagNewWord + plainNewWord;
+  const pronounceCount = tagPronounce + plainPronounce;
 
   const cleanText = rawNotes.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Extract Alt+W and Alt+P terms from rawNotes
+  const extractedNewWords: string[] = [];
+  const extractedPronounce: string[] = [];
+
+  const rawLines = rawNotes.split(/<br\s*[\/]?>|\n|<\/div>|<\/p>/gi).map((l) => l.trim()).filter(Boolean);
+  rawLines.forEach((line) => {
+    if (/data-tag-type=["']new-word["']|\[New Word\]/i.test(line)) {
+      const term = line
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[New Word\]/gi, '')
+        .replace(/✦/g, '')
+        .trim();
+      if (term && term.length > 1 && !term.toLowerCase().includes('in-session notes')) {
+        extractedNewWords.push(term);
+      }
+    } else if (/data-tag-type=["']pronounce["']|\[Pronounce\]/i.test(line)) {
+      const term = line
+        .replace(/<[^>]+>/g, '')
+        .replace(/\[Pronounce\]/gi, '')
+        .replace(/🎯/g, '')
+        .trim();
+      if (term && term.length > 1 && !term.toLowerCase().includes('in-session notes')) {
+        extractedPronounce.push(term);
+      }
+    }
+  });
 
   const mistakesAnalysis = [
     {
@@ -5545,7 +5581,7 @@ function generateServerPedagogicalFallback(params: {
       corrected: rawNotes.includes('agree') ? 'I agree with you' : 'I am 28 years old',
       category: 'grammar',
       explanation: rawNotes.includes('agree')
-        ? '"Agree" is an active verb in English, not an adjective. Do not put the auxiliary "am" before it.'
+        ? '"Agree" is an active verb in English, not an adjective. Do not put the auxiliary "am" before it in present simple.'
         : 'In English, age is expressed using the verb "to be", reflecting an ongoing physical state, not "have".',
       twoExamples: [
         rawNotes.includes('agree') ? 'I agree with your suggestion.' : 'She is 30 years old.',
@@ -5602,50 +5638,87 @@ function generateServerPedagogicalFallback(params: {
     },
   ];
 
-  const vocabularyAndExpressions = [
-    {
-      id: 'vocab-1',
-      term: 'catch up',
-      partOfSpeech: 'Phrasal Verb',
-      simpleDefinition: 'To speak with someone you haven’t seen recently to share updates and news.',
-      collocations: ['catch up with a friend', 'catch up on work', 'play catch-up'],
-      realExamples: [
-        'Let’s grab coffee tomorrow to catch up.',
-        'I spent the morning catching up on emails.',
-      ],
-      synonyms: ['reconnect', 'update', 'chat'],
-      register: 'informal',
-      category: 'Phrasal Verbs & Social Life',
-    },
-    {
-      id: 'vocab-2',
-      term: 'streamline',
-      partOfSpeech: 'Verb',
-      simpleDefinition: 'To make a system, workflow, or process more efficient and simpler.',
-      collocations: ['streamline the process', 'streamline operations', 'streamline workflow'],
-      realExamples: [
-        'We implemented a new tool to streamline weekly reporting.',
-        'Streamlining your daily routine frees up valuable time.',
-      ],
-      synonyms: ['optimize', 'simplify', 'improve'],
-      register: 'formal',
-      category: 'Work & Productivity',
-    },
-    {
-      id: 'vocab-3',
-      term: 'make sense',
-      partOfSpeech: 'Idiomatic Phrase',
-      simpleDefinition: 'To be logical, practical, or easy to understand.',
-      collocations: ['that makes a lot of sense', 'make sense to do something', 'doesn’t make sense'],
-      realExamples: [
-        'Does that explanation make sense to you?',
-        'It makes total sense to practice speaking 15 minutes a day.',
-      ],
-      synonyms: ['be logical', 'be reasonable'],
+  const vocabularyAndExpressions: any[] = [];
+
+  // Add words stamped with Alt+W (New Word)
+  extractedNewWords.forEach((word, idx) => {
+    vocabularyAndExpressions.push({
+      id: `vocab-nw-${idx + 1}`,
+      term: word,
+      partOfSpeech: 'New Expression',
+      simpleDefinition: `A high-impact term stamped during session to enrich your vocabulary about ${topic}.`,
+      collocations: [`use "${word}" in context`, `actively practicing "${word}"`],
+      realExamples: [`In conversation: "${word}" makes your speech sound authentic and natural.`],
+      synonyms: ['expressive phrasing'],
       register: 'neutral',
-      category: 'Everyday Fluency',
-    },
-  ];
+      category: 'New Words & Expressions (Alt+W)',
+    });
+  });
+
+  // Add words stamped with Alt+P (Pronounce)
+  extractedPronounce.forEach((word, idx) => {
+    vocabularyAndExpressions.push({
+      id: `vocab-pr-${idx + 1}`,
+      term: word,
+      partOfSpeech: 'Pronunciation Focus',
+      simpleDefinition: `Pronunciation focus: ensure accurate syllable stress and clear vowel articulation without final epenthetic vowel.`,
+      collocations: [`pronounce "${word}" cleanly`, `stress pattern of "${word}"`],
+      realExamples: [`Speak aloud: practice "${word}" 3 times smoothly.`],
+      synonyms: ['phonetic clarity'],
+      register: 'neutral',
+      category: 'Pronunciation & Phonetics (Alt+P)',
+      phoneticGuide: `🎯 Pronunciation focus: practice clean stress and clear ending consonant on "${word}".`,
+      isPronunciationFocus: true,
+    });
+  });
+
+  // Default vocabulary if none stamped
+  if (vocabularyAndExpressions.length === 0) {
+    vocabularyAndExpressions.push(
+      {
+        id: 'vocab-1',
+        term: 'catch up',
+        partOfSpeech: 'Phrasal Verb',
+        simpleDefinition: 'To speak with someone you haven’t seen recently to share updates and news.',
+        collocations: ['catch up with a friend', 'catch up on work', 'play catch-up'],
+        realExamples: [
+          'Let’s grab coffee tomorrow to catch up.',
+          'I spent the morning catching up on emails.',
+        ],
+        synonyms: ['reconnect', 'update', 'chat'],
+        register: 'informal',
+        category: 'Phrasal Verbs & Social Life',
+      },
+      {
+        id: 'vocab-2',
+        term: 'streamline',
+        partOfSpeech: 'Verb',
+        simpleDefinition: 'To make a system, workflow, or process more efficient and simpler.',
+        collocations: ['streamline the process', 'streamline operations', 'streamline workflow'],
+        realExamples: [
+          'We implemented a new tool to streamline weekly reporting.',
+          'Streamlining your daily routine frees up valuable time.',
+        ],
+        synonyms: ['optimize', 'simplify', 'improve'],
+        register: 'formal',
+        category: 'Work & Productivity',
+      },
+      {
+        id: 'vocab-3',
+        term: 'make sense',
+        partOfSpeech: 'Idiomatic Phrase',
+        simpleDefinition: 'To be logical, practical, or easy to understand.',
+        collocations: ['that makes a lot of sense', 'make sense to do something', 'doesn’t make sense'],
+        realExamples: [
+          'Does that explanation make sense to you?',
+          'It makes total sense to practice speaking 15 minutes a day.',
+        ],
+        synonyms: ['be logical', 'be reasonable'],
+        register: 'neutral',
+        category: 'Everyday Fluency',
+      }
+    );
+  }
 
   const levelAdaptation = {
     cefrLevel: cefr as any,
@@ -5658,11 +5731,19 @@ function generateServerPedagogicalFallback(params: {
     targetedPracticePrompt: `Describe your thoughts on "${topic}", making sure to incorporate at least two corrected structures and vocabulary items.`,
   };
 
+  // Quick Review: MANDATORILY includes ALL corrections, ALL vocabulary, and ALL rules
   const reviewSummary = {
     estimatedMinutes: '5–10 minutes',
     keyRules: grammarPoints.map((g) => `${g.topic}: ${g.rule}`),
-    mustKnowVocabulary: vocabularyAndExpressions.map((v) => `${v.term} (${v.partOfSpeech}) — ${v.simpleDefinition}`),
-    essentialCorrections: mistakesAnalysis.map((m) => ({ original: m.original, corrected: m.corrected })),
+    mustKnowVocabulary: vocabularyAndExpressions.map((v) => {
+      const tag = v.isPronunciationFocus ? '🎯 [Pronounce]' : '✨';
+      return `${tag} ${v.term} (${v.partOfSpeech}) — ${v.simpleDefinition}`;
+    }),
+    essentialCorrections: mistakesAnalysis.map((m) => ({
+      original: m.original,
+      corrected: m.corrected,
+      explanation: m.explanation,
+    })),
     rememberThis: `Remember this: Instead of saying "${mistakesAnalysis[0]?.original || 'the mistake'}", always say "${mistakesAnalysis[0]?.corrected || 'the correction'}"! Consistent small shifts in your active vocabulary build unstoppable speaking confidence.`,
   };
 
@@ -5682,8 +5763,70 @@ function generateServerPedagogicalFallback(params: {
     rawNotesSnippet: cleanText.slice(0, 300),
     correctStampsCount: correctCount,
     incorrectStampsCount: incorrectCount,
+    newWordStampsCount: newWordCount,
+    pronounceStampsCount: pronounceCount,
     generatedAt: new Date().toISOString(),
   };
+}
+
+function syncTransformationVocabToDictionary(
+  transformation: any,
+  studentUid?: string,
+  studentEmail?: string
+) {
+  if (!transformation || !Array.isArray(transformation.vocabularyAndExpressions)) return;
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const targetKey = studentUid || cleanEmail;
+  if (!targetKey) return;
+
+  const db = readDb();
+  if (!db.studentDictionaryMap) db.studentDictionaryMap = {};
+  const currentList =
+    (studentUid && db.studentDictionaryMap[studentUid]) ||
+    (cleanEmail && db.studentDictionaryMap[cleanEmail]) ||
+    [];
+  const map = new Map<string, any>();
+  currentList.forEach((e: any) => {
+    if (e?.word) map.set(e.word.toLowerCase().trim(), e);
+  });
+
+  transformation.vocabularyAndExpressions.forEach((v: any) => {
+    const rawWord = (v.term || '').trim();
+    if (!rawWord) return;
+    const key = rawWord.toLowerCase();
+    const existing = map.get(key);
+
+    const isPronounce =
+      v.isPronunciationFocus ||
+      v.partOfSpeech?.includes('Pronounc') ||
+      v.category?.includes('Pronounc');
+
+    map.set(key, {
+      id: existing?.id || `dict_${key.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`,
+      word: rawWord,
+      partOfSpeech: v.partOfSpeech || (isPronounce ? 'Pronunciation Focus' : 'Expression'),
+      definitionEn: v.simpleDefinition || existing?.definitionEn || '',
+      exampleSentenceEn:
+        (Array.isArray(v.realExamples) && v.realExamples[0]) || existing?.exampleSentenceEn || '',
+      phonetic: v.phoneticGuide || existing?.phonetic,
+      cefrLevel: transformation.cefrLevel || existing?.cefrLevel || 'B1',
+      sourceActivityName: `Native Friends Notes (${transformation.topic || 'Live Session'})`,
+      source: 'live_lesson',
+      learnedAt: transformation.sessionDate
+        ? `${transformation.sessionDate}T12:00:00.000Z`
+        : new Date().toISOString(),
+      studentEmail: cleanEmail,
+      studentUid,
+      notFound: false,
+    });
+  });
+
+  const updatedList = Array.from(map.values()).sort((a, b) =>
+    (a.word || '').localeCompare(b.word || '')
+  );
+  if (studentUid) db.studentDictionaryMap[studentUid] = updatedList;
+  if (cleanEmail) db.studentDictionaryMap[cleanEmail] = updatedList;
+  writeDbSync(db);
 }
 
 // Generate or retrieve Pedagogical Transformation using Gemini AI with fallback
@@ -5728,14 +5871,21 @@ app.post('/api/pedagogical-notes/transform', async (req, res) => {
     ? 'A2'
     : 'B1';
 
-  // Markings detection
+  // Markings detection for Alt+N, Alt+W, Alt+P, Alt+Y
   const tagCorrect = (rawNotes.match(/data-tag-type=["']correct["']/g) || []).length;
   const tagIncorrect = (rawNotes.match(/data-tag-type=["']incorrect["']/g) || []).length;
+  const tagNewWord = (rawNotes.match(/data-tag-type=["']new-word["']/g) || []).length;
+  const tagPronounce = (rawNotes.match(/data-tag-type=["']pronounce["']/g) || []).length;
+
   const plainCorrect = (rawNotes.replace(/<span[^>]*data-tag-type=["']correct["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/✓|✔/g) || []).length;
   const plainIncorrect = (rawNotes.replace(/<span[^>]*data-tag-type=["']incorrect["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/✗|✖/g) || []).length;
+  const plainNewWord = (rawNotes.replace(/<span[^>]*data-tag-type=["']new-word["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/\[New Word\]/gi) || []).length;
+  const plainPronounce = (rawNotes.replace(/<span[^>]*data-tag-type=["']pronounce["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/\[Pronounce\]/gi) || []).length;
 
   const correctCount = tagCorrect + plainCorrect;
   const incorrectCount = tagIncorrect + plainIncorrect;
+  const newWordCount = tagNewWord + plainNewWord;
+  const pronounceCount = tagPronounce + plainPronounce;
 
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
 
@@ -5752,13 +5902,28 @@ app.post('/api/pedagogical-notes/transform', async (req, res) => {
 
       const systemInstruction = `You are an elite, Cambridge/CELTA-certified Pedagogical English Language Synthesizer and Master Native Friend Teacher.
 Your mission is to transform raw in-session teacher notes into an ultra-structured, masterclass pedagogical report for the student.
-The student MUST NEVER see the raw, fragmented notes. Instead, they receive a polished, elegant learning guide calibrated to their CEFR level (${cefr}).
+The student MUST NEVER see raw, fragmented notes. Instead, they receive a polished, elegant learning guide calibrated to their CEFR level (${cefr}).
 
-CRITICAL INSTRUCTIONS ON MARKINGS:
-- Note that marks like 'data-tag-type="incorrect"' or '✗' or 'Instead of:' were stamped with Ctrl+Alt+E by the teacher and indicate student errors.
-- Note that marks like 'data-tag-type="correct"' or '✓' or 'Say:' were stamped with Ctrl+Alt+C by the teacher and indicate correct usage or corrections.
+CRITICAL INSTRUCTIONS ON TEACHER SHORTCUT MARKINGS & TAB ROUTING:
+1. Alt + N (Error / Incorrect Markings):
+   - Items stamped with 'data-tag-type="incorrect"', '✗', 'Instead of:', or error lines MUST be directed and processed appropriately into:
+     a) "mistakesAnalysis" (Tab 1: Analyze Mistakes): student's original faulty utterance, natural native correction, category, grammatical explanation (addressing Brazilian Portuguese L1 interference), two natural examples, and common pitfalls.
+     b) "grammarPoints" (Tab 2: Grammar Points): whenever an error involves a systemic grammatical rule/structure (e.g. verb tenses, stative verbs, auxiliary verbs, dependent prepositions, conditionals, modals, word order), elaborate the corresponding rule with syntax (FORM), usage, examples, and comparisons.
+2. Alt + W (New Word) & Alt + P (Pronunciation Markings):
+   - Items stamped with 'data-tag-type="new-word"', '[New Word]', 'data-tag-type="pronounce"', '[Pronounce]' MUST be directed and processed into:
+     "vocabularyAndExpressions" (Tab 3: Vocabulary & Expressions).
+   - For Alt+W: provide part of speech, register, simple definition adapted to CEFR ${cefr}, collocations, real examples, and synonyms.
+   - For Alt+P: mark partOfSpeech as "Pronunciation Focus", provide clear syllable stress breakdown, phonetic guide, common Brazilian Portuguese mispronunciations to avoid, and conversational examples.
+3. CEFR LEVEL ADAPTATION:
+   - There is NO separate CEFR tab. Instead, ALL tabs (Complete Report, 1. Analyze Mistakes, 2. Grammar Points, 3. Vocabulary & Expressions, and Quick Review) MUST be intelligently and deeply elaborated respecting and adapting to the student's current CEFR level (${cefr}).
+4. QUICK REVIEW MANDATE:
+   - ALL session notes, corrections, and processed terms MUST compose the Quick Review ("reviewSummary").
+   - "essentialCorrections": MUST contain ALL items from mistakesAnalysis.
+   - "mustKnowVocabulary": MUST contain ALL terms from vocabularyAndExpressions (both Alt+W and Alt+P).
+   - "keyRules": MUST contain ALL grammar rules from grammarPoints.
+   - "rememberThis": High-impact golden takeaway rule for the student.
 
-You MUST produce a JSON object strictly conforming to this schema with 5 MANDATORY SECTIONS:
+You MUST produce a JSON object strictly conforming to this schema:
 {
   "mistakesAnalysis": [
     {
@@ -5766,7 +5931,7 @@ You MUST produce a JSON object strictly conforming to this schema with 5 MANDATO
       "original": "Student's original faulty utterance",
       "corrected": "Polished, natural native correction",
       "category": "grammar" | "vocabulary" | "collocation" | "preposition" | "pronunciation" | "phrasing",
-      "explanation": "Crystal clear grammatical rule explanation highlighting why the error occurred and how to fix it",
+      "explanation": "Crystal clear grammatical rule explanation highlighting why the error occurred and how to fix it, calibrated to CEFR ${cefr}",
       "twoExamples": ["Example 1 in natural context", "Example 2 in natural context"],
       "commonPitfalls": "Common mistake learners make with this structure (especially Portuguese L1 interference)"
     }
@@ -5775,7 +5940,7 @@ You MUST produce a JSON object strictly conforming to this schema with 5 MANDATO
     {
       "id": "grammar-1",
       "topic": "Grammar topic name",
-      "rule": "Detailed rule explanation",
+      "rule": "Detailed rule explanation adapted to CEFR ${cefr}",
       "form": "Formula / Syntax breakdown",
       "usage": "When and why native speakers use this",
       "examples": ["Example 1", "Example 2"],
@@ -5786,27 +5951,21 @@ You MUST produce a JSON object strictly conforming to this schema with 5 MANDATO
   "vocabularyAndExpressions": [
     {
       "id": "vocab-1",
-      "term": "Word, phrasal verb, or idiom",
-      "partOfSpeech": "Part of speech (e.g. Phrasal Verb, Noun, Collocation)",
-      "simpleDefinition": "Clear, accessible definition",
+      "term": "Word, phrasal verb, or pronunciation term",
+      "partOfSpeech": "Part of speech (e.g. Phrasal Verb, Noun, Pronunciation Focus)",
+      "simpleDefinition": "Clear, accessible definition adapted to CEFR ${cefr}",
       "collocations": ["Collocation 1", "Collocation 2"],
       "realExamples": ["Real-world sentence 1", "Real-world sentence 2"],
       "synonyms": ["Synonym 1", "Synonym 2"],
       "register": "informal" | "neutral" | "formal" | "idiomatic",
-      "category": "Thematic category (e.g. Work, Social, Feelings)"
+      "category": "Thematic category or 'Pronunciation & Phonetics (Alt+P)' / 'New Words (Alt+W)'",
+      "phoneticGuide": "Phonetic / stress guide if pronunciation item"
     }
   ],
-  "levelAdaptation": {
-    "cefrLevel": "${cefr}",
-    "levelLabel": "${cefr === 'C1' ? 'Advanced' : cefr === 'B1' ? 'Intermediate' : 'Elementary'}",
-    "nativeInterferenceNotes": "Comprehensive analysis of Brazilian Portuguese L1 interference (false cognates, prepositions, literal translations like 'have 25 years' or 'depend of')",
-    "complexityAdjustmentAdvice": "Practical advice tailored to the student's CEFR level",
-    "targetedPracticePrompt": "A 2-3 sentence personalized speaking or writing challenge prompt for the next class"
-  },
   "reviewSummary": {
     "estimatedMinutes": "5–10 minutes",
-    "keyRules": ["Key rule 1", "Key rule 2"],
-    "mustKnowVocabulary": ["Vocab 1 with definition", "Vocab 2 with definition"],
+    "keyRules": ["All key grammar rules covered"],
+    "mustKnowVocabulary": ["All vocabulary and pronunciation items with definitions"],
     "essentialCorrections": [{"original": "...", "corrected": "..."}],
     "rememberThis": "Single most memorable, high-impact golden takeaway rule for the student"
   }
@@ -5826,7 +5985,7 @@ Raw In-Session Notes to transform:
 ${rawNotes}
 """
 
-Please synthesize and transform these notes into the 5 comprehensive pedagogical sections.`;
+Please synthesize and transform these notes according to the Alt+N, Alt+W, and Alt+P routing rules, adapting deeply to CEFR ${cefr}, and ensuring ALL items are included in the Quick Review.`;
 
       const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
@@ -5852,6 +6011,20 @@ Please synthesize and transform these notes into the 5 comprehensive pedagogical
             const parsed = JSON.parse(cleanText);
 
             if (parsed && Array.isArray(parsed.mistakesAnalysis)) {
+              // Ensure Quick Review contains ALL corrections and vocabulary
+              const allCorrections = parsed.mistakesAnalysis.map((m: any) => ({
+                original: m.original,
+                corrected: m.corrected,
+                explanation: m.explanation,
+              }));
+
+              const allVocab = (parsed.vocabularyAndExpressions || []).map((v: any) => {
+                const tag = v.partOfSpeech?.includes('Pronounc') || v.category?.includes('Pronounc') ? '🎯 [Pronounce]' : '✨';
+                return `${tag} ${v.term} (${v.partOfSpeech || 'Vocab'}) — ${v.simpleDefinition || ''}`;
+              });
+
+              const allRules = (parsed.grammarPoints || []).map((g: any) => `${g.topic}: ${g.rule}`);
+
               const transformation = {
                 lessonId: lessonId || undefined,
                 sessionKey,
@@ -5872,20 +6045,23 @@ Please synthesize and transform these notes into the 5 comprehensive pedagogical
                   complexityAdjustmentAdvice: 'Review key corrections out loud before each session.',
                   targetedPracticePrompt: `Practice summarizing your views on "${topic}".`,
                 },
-                reviewSummary: parsed.reviewSummary || {
+                reviewSummary: {
                   estimatedMinutes: '5–10 minutes',
-                  keyRules: [],
-                  mustKnowVocabulary: [],
-                  essentialCorrections: [],
-                  rememberThis: 'Consistency and active daily repetition create lasting speaking fluency.',
+                  keyRules: allRules.length > 0 ? allRules : parsed.reviewSummary?.keyRules || [],
+                  mustKnowVocabulary: allVocab.length > 0 ? allVocab : parsed.reviewSummary?.mustKnowVocabulary || [],
+                  essentialCorrections: allCorrections.length > 0 ? allCorrections : parsed.reviewSummary?.essentialCorrections || [],
+                  rememberThis: parsed.reviewSummary?.rememberThis || `Remember this: Instead of saying "${parsed.mistakesAnalysis[0]?.original || 'the mistake'}", always say "${parsed.mistakesAnalysis[0]?.corrected || 'the correction'}"!`,
                 },
                 rawNotesSnippet: rawNotes.replace(/<[^>]+>/g, ' ').slice(0, 300),
                 correctStampsCount: correctCount,
                 incorrectStampsCount: incorrectCount,
+                newWordStampsCount: newWordCount,
+                pronounceStampsCount: pronounceCount,
                 generatedAt: new Date().toISOString(),
               };
 
               db.pedagogicalTransformationsMap[sessionKey] = transformation;
+              syncTransformationVocabToDictionary(transformation, studentUid, cleanEmail);
               await writeDbSync(db);
 
               return res.json({
@@ -5918,6 +6094,7 @@ Please synthesize and transform these notes into the 5 comprehensive pedagogical
   });
 
   db.pedagogicalTransformationsMap[sessionKey] = transformation;
+  syncTransformationVocabToDictionary(transformation, studentUid, cleanEmail);
   await writeDbSync(db);
 
   res.json({

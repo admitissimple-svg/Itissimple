@@ -39,7 +39,9 @@ import {
   LiveLessonVocabNote,
   StudentDictionaryEntry,
   SessionNotesDocument,
+  EnglishLevel,
 } from '../types';
+import { syncSessionVocabularyToStudentDictionary } from '../utils/sessionVocabularySync';
 import { formatDateInTimeZone, formatTimeInTimeZone } from '../utils/timezone';
 import { doc, setDoc } from 'firebase/firestore';
 import { getDb } from '../firebase';
@@ -887,6 +889,26 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
               ...drivePayload,
             });
           }
+
+          // 4. Automatic Integration with Student's My Dictionary (Alt + W & Alt + P)
+          const targetStudentUid = activeStudent?.uid || activeStudent?.id || '';
+          if (targetStudentUid || cleanEmail) {
+            syncSessionVocabularyToStudentDictionary({
+              studentUid: targetStudentUid || cleanEmail,
+              studentEmail: cleanEmail,
+              rawNotes: contentToSync,
+              studentLevel: activeStudent?.level || EnglishLevel.INTERMEDIATE,
+              sessionDate: effDate,
+              topic: topicToSync,
+              teacherName: currentAccount?.name || 'Native Friend',
+            })
+              .then((syncedWords) => {
+                if (syncedWords && syncedWords.length > 0 && typeof onAddWordsToDictionary === 'function') {
+                  onAddWordsToDictionary(syncedWords, cleanEmail);
+                }
+              })
+              .catch((syncErr) => console.warn('Vocabulary sync notice:', syncErr));
+          }
         } else {
           setDriveSyncStatus('error');
           setDriveSyncError(res.error || 'Falha ao sincronizar com o Google Drive.');
@@ -910,6 +932,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       googleOAuthToken,
       connectGoogleDrive,
       onSaveLessonNotes,
+      onAddWordsToDictionary,
     ]
   );
 
@@ -1063,6 +1086,26 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
           });
         }
 
+        // 4. Automatic Integration with Student's My Dictionary (Alt + W for New Word & Alt + P for Pronounce)
+        const targetStudentUid = activeStudent?.uid || activeStudent?.id || '';
+        if (targetStudentUid || cleanEmail) {
+          syncSessionVocabularyToStudentDictionary({
+            studentUid: targetStudentUid || cleanEmail,
+            studentEmail: cleanEmail,
+            rawNotes: contentToSave,
+            studentLevel: activeStudent?.level || EnglishLevel.INTERMEDIATE,
+            sessionDate: effectiveDate,
+            topic: topicToSave,
+            teacherName: currentAccount?.name || 'Native Friend',
+          })
+            .then((syncedWords) => {
+              if (syncedWords && syncedWords.length > 0 && typeof onAddWordsToDictionary === 'function') {
+                onAddWordsToDictionary(syncedWords, cleanEmail);
+              }
+            })
+            .catch((syncErr) => console.warn('Vocabulary sync notice:', syncErr));
+        }
+
         setLastSavedTimestamp(nowIso);
 
         if (explicitSave) {
@@ -1087,6 +1130,7 @@ const TeacherLiveLessonNotesPanelComponent: React.FC<TeacherLiveLessonNotesPanel
       driveFileUrl,
       driveLastSyncedAt,
       onSaveLessonNotes,
+      onAddWordsToDictionary,
       resolveStudentName,
     ]
   );

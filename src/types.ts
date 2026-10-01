@@ -106,6 +106,7 @@ export interface StudentDictionaryEntry {
   learnedAt?: string;
   customNotes?: string;
   notFound?: boolean;
+  cefrLevel?: string;
 }
 
 export interface GoogleAccount {

@@ -18,6 +18,9 @@ import {
   Layers,
   GraduationCap,
   ArrowRight,
+  ArrowLeft,
+  CheckCheck,
+  Bookmark,
   Filter,
   ShieldCheck,
   FileText,
@@ -30,6 +33,7 @@ import {
   fetchPedagogicalTransformation,
   resolveCefrLevel,
 } from '../utils/pedagogicalTransformer';
+import { syncSessionVocabularyToStudentDictionary } from '../utils/sessionVocabularySync';
 import { getDb } from '../firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 
@@ -43,6 +47,11 @@ interface NativeFriendsNotesModalProps {
   lessons?: LiveLesson[];
   timeZone?: string;
   currentLanguage?: string;
+  initialTab?: 'all' | 'mistakes' | 'grammar' | 'vocab' | 'summary';
+  onAdvanceSequentialStep?: () => void;
+  currentSequentialTab?: 'mistakes' | 'grammar' | 'vocab' | 'summary';
+  currentStepNumber?: number;
+  isLessonToday?: boolean;
 }
 
 interface SessionOption {
@@ -65,6 +74,11 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
   lessons = [],
   timeZone = 'America/Sao_Paulo',
   currentLanguage = 'pt',
+  initialTab,
+  onAdvanceSequentialStep,
+  currentSequentialTab,
+  currentStepNumber,
+  isLessonToday = false,
 }) => {
   const isEn = currentLanguage === 'en';
 
@@ -108,8 +122,56 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
   // Transformation data state
   const [transformation, setTransformation] = useState<PedagogicalLessonTransformation | null>(null);
   const [isLoadingTransformation, setIsLoadingTransformation] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'all' | 'mistakes' | 'grammar' | 'vocab' | 'level' | 'summary'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'mistakes' | 'grammar' | 'vocab' | 'summary'>(
+    initialTab || 'mistakes'
+  );
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
+
+  // Sync activeTab when modal is reopened or initialTab changes
+  useEffect(() => {
+    if (isOpen) {
+      if (initialTab) {
+        setActiveTab(initialTab);
+      }
+    }
+  }, [isOpen, initialTab]);
+
+  const TABS_ORDER: Array<'mistakes' | 'grammar' | 'vocab' | 'summary'> = useMemo(
+    () => ['mistakes', 'grammar', 'vocab', 'summary'],
+    []
+  );
+
+  const handleNextTab = useCallback(() => {
+    if (activeTab === 'all') {
+      setActiveTab('mistakes');
+      return;
+    }
+    const idx = TABS_ORDER.indexOf(activeTab);
+    if (idx >= 0) {
+      const next = TABS_ORDER[(idx + 1) % TABS_ORDER.length];
+      setActiveTab(next);
+    }
+  }, [activeTab, TABS_ORDER]);
+
+  const handlePrevTab = useCallback(() => {
+    if (activeTab === 'all') {
+      setActiveTab('summary');
+      return;
+    }
+    const idx = TABS_ORDER.indexOf(activeTab);
+    if (idx >= 0) {
+      const prev = TABS_ORDER[(idx - 1 + TABS_ORDER.length) % TABS_ORDER.length];
+      setActiveTab(prev);
+    }
+  }, [activeTab, TABS_ORDER]);
+
+  const handleMarkAsRead = useCallback(() => {
+    if (onAdvanceSequentialStep) {
+      onAdvanceSequentialStep();
+    }
+    // Only close the panel without directing to the next activity (1 tab per day)
+    onClose();
+  }, [onAdvanceSequentialStep, onClose]);
 
   // Load and consolidate sessions for this isolated student (sorted strictly descending: newest first)
   const fetchStudentSessions = useCallback(async () => {
@@ -283,6 +345,20 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
         });
 
         setTransformation(result);
+
+        // Automatically sync session vocabulary (Alt + W and Alt + P) into the student's My Dictionary in Firestore
+        if (resolvedUid || resolvedEmail) {
+          syncSessionVocabularyToStudentDictionary({
+            studentUid: resolvedUid || resolvedEmail,
+            studentEmail: resolvedEmail,
+            rawNotes: activeSession.rawContent,
+            vocabularyAndExpressions: result.vocabularyAndExpressions,
+            studentLevel,
+            sessionDate: activeSession.dateStr,
+            topic: activeSession.topic,
+            teacherName: activeSession.teacherName,
+          }).catch((err) => console.warn('NativeFriendsNotes: vocabulary sync notice:', err));
+        }
       } catch (err) {
         console.warn('Failed to load pedagogical notes:', err);
       } finally {
@@ -302,18 +378,19 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
   const handleCopySummary = () => {
     if (!transformation) return;
     const summary = transformation.reviewSummary;
+    const levelLabel = transformation.levelAdaptation?.levelLabel || cefrMeta.labelEn;
     const text = [
       `📚 NATIVE FRIENDS NOTES — 5–10 MINUTE REVIEW SUMMARY`,
       `📅 Date: ${transformation.sessionDate} | Topic: ${transformation.topic}`,
-      `🎓 Level: ${transformation.cefrLevel} (${transformation.levelAdaptation.levelLabel})`,
-      `\n⚡ KEY GRAMMAR RULES:`,
-      ...summary.keyRules.map((r, i) => `${i + 1}. ${r}`),
-      `\n💬 ESSENTIAL CORRECTIONS:`,
-      ...summary.essentialCorrections.map((c) => `✗ ${c.original}  ➜  ✓ ${c.corrected}`),
-      `\n✨ MUST-KNOW VOCABULARY:`,
-      ...summary.mustKnowVocabulary.map((v) => `• ${v}`),
+      `🎓 Level: ${transformation.cefrLevel} (${levelLabel})`,
       `\n🎯 REMEMBER THIS:`,
       summary.rememberThis,
+      `\n💬 ALL ESSENTIAL CORRECTIONS (Alt + N):`,
+      ...summary.essentialCorrections.map((c) => `✗ ${c.original}  ➜  ✓ ${c.corrected}`),
+      `\n⚡ KEY GRAMMAR RULES (Alt + N):`,
+      ...summary.keyRules.map((r, i) => `${i + 1}. ${r}`),
+      `\n✨ MUST-KNOW VOCABULARY & PRONUNCIATION (Alt + W / Alt + P):`,
+      ...summary.mustKnowVocabulary.map((v) => `• ${v}`),
     ].join('\n');
 
     navigator.clipboard.writeText(text).then(() => {
@@ -353,9 +430,6 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
                 <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[11px] font-black border border-emerald-400/40">
                   {cefrMeta.cefr} • {cefrMeta.labelEn}
                 </span>
-                <span className="px-2 py-0.5 rounded-full bg-[#9AB4FF]/20 text-[#9AB4FF] text-[10px] font-bold border border-[#9AB4FF]/30">
-                  Isolated by Student UID
-                </span>
               </div>
               <p className="text-xs text-[#9AB4FF] mt-0.5">
                 {isEn
@@ -388,11 +462,11 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
         </div>
 
         {/* Lesson History Selector Bar (STRICTLY DESCENDING: NEWEST FIRST) */}
-        <div className="bg-[#f8faff] border-b border-[#9AB4FF]/30 px-5 sm:px-7 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0">
+        <div className="bg-[#f8faff] border-b border-[#9AB4FF]/30 px-5 sm:px-7 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2 flex-1">
             <Calendar className="w-4 h-4 text-[#1C4C96] shrink-0" />
-            <label htmlFor="session-date-selector" className="text-xs font-black uppercase tracking-wider text-[#062863] shrink-0">
-              {isEn ? 'Lesson Date (Newest first):' : 'Data da Aula (Mais recente primeiro):'}
+            <label htmlFor="session-date-selector" className="text-xs font-bold uppercase tracking-wider text-[#062863] shrink-0">
+              {isEn ? 'Lesson Date:' : 'Data da Aula:'}
             </label>
 
             {sessionOptions.length > 0 ? (
@@ -423,7 +497,7 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
             )}
           </div>
 
-          {/* Quick stats and refresh */}
+          {/* Refresh analysis */}
           {activeSession && (
             <div className="flex items-center gap-2 shrink-0">
               <button
@@ -436,121 +510,113 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTransformation ? 'animate-spin' : ''}`} />
                 <span>{isEn ? 'Refresh Analysis' : 'Atualizar Análise'}</span>
               </button>
-
-              <button
-                type="button"
-                onClick={handleCopySummary}
-                className="px-3 py-1.5 rounded-xl bg-[#062863] hover:bg-[#000035] text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-              >
-                {copiedSummary ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>{isEn ? 'Copied!' : 'Copiado!'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-[#9AB4FF]" />
-                    <span>{isEn ? 'Copy 5-Min Summary' : 'Copiar Resumo 5-Min'}</span>
-                  </>
-                )}
-              </button>
             </div>
           )}
         </div>
 
-        {/* Section Navigation Tabs (5 Pedagogical Sections) */}
-        <div className="bg-white border-b border-[#9AB4FF]/25 px-5 sm:px-7 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
-          <button
-            type="button"
-            onClick={() => setActiveTab('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer shrink-0 ${
-              activeTab === 'all'
-                ? 'bg-[#000035] text-white shadow-2xs'
-                : 'bg-slate-100 text-[#062863] hover:bg-slate-200'
-            }`}
-          >
-            {isEn ? 'Complete Report (All 5)' : 'Relatório Completo (Todos)'}
-          </button>
+        {/* Section Navigation Tabs (Pedagogical Sections) */}
+        <div className="bg-white border-b border-[#9AB4FF]/25 px-4 sm:px-7 py-2.5 flex items-center justify-between gap-2 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <button
+              type="button"
+              onClick={() => setActiveTab('all')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer shrink-0 ${
+                activeTab === 'all'
+                  ? 'bg-[#000035] text-white shadow-2xs'
+                  : 'bg-slate-100 text-[#062863] hover:bg-slate-200'
+              }`}
+            >
+              {isEn ? 'Complete Report' : 'Visão Geral'}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('mistakes')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'mistakes'
-                ? 'bg-[#b91c1c] text-white shadow-2xs'
-                : 'bg-red-50 text-red-800 hover:bg-red-100 border border-red-200'
-            }`}
-          >
-            <span>1. {isEn ? 'Analyze Mistakes' : 'Análise de Erros'}</span>
-            {transformation?.mistakesAnalysis && (
-              <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-black">
-                {transformation.mistakesAnalysis.length}
-              </span>
-            )}
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('mistakes')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 relative ${
+                activeTab === 'mistakes'
+                  ? 'bg-[#b91c1c] text-white shadow-2xs ring-2 ring-red-400'
+                  : 'bg-red-50 text-red-800 hover:bg-red-100 border border-red-200'
+              }`}
+            >
+              <span>1. {isEn ? 'Analyze Mistakes' : 'Analyze Mistakes'}</span>
+              {transformation?.mistakesAnalysis && (
+                <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-black">
+                  {transformation.mistakesAnalysis.length}
+                </span>
+              )}
+              {currentSequentialTab === 'mistakes' && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 absolute -top-0.5 -right-0.5 animate-pulse" title="Sua etapa de hoje" />
+              )}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('grammar')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'grammar'
-                ? 'bg-[#1C4C96] text-white shadow-2xs'
-                : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200'
-            }`}
-          >
-            <span>2. {isEn ? 'Grammar Points' : 'Pontos Gramaticais'}</span>
-            {transformation?.grammarPoints && (
-              <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-black">
-                {transformation.grammarPoints.length}
-              </span>
-            )}
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('grammar')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 relative ${
+                activeTab === 'grammar'
+                  ? 'bg-[#1C4C96] text-white shadow-2xs ring-2 ring-blue-400'
+                  : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200'
+              }`}
+            >
+              <span>2. {isEn ? 'Grammar Points' : 'Grammar Points'}</span>
+              {transformation?.grammarPoints && (
+                <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-black">
+                  {transformation.grammarPoints.length}
+                </span>
+              )}
+              {currentSequentialTab === 'grammar' && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 absolute -top-0.5 -right-0.5 animate-pulse" title="Sua etapa de hoje" />
+              )}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('vocab')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'vocab'
-                ? 'bg-purple-700 text-white shadow-2xs'
-                : 'bg-purple-50 text-purple-800 hover:bg-purple-100 border border-purple-200'
-            }`}
-          >
-            <span>3. {isEn ? 'Vocabulary & Expressions' : 'Vocabulário & Expressões'}</span>
-            {transformation?.vocabularyAndExpressions && (
-              <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-black">
-                {transformation.vocabularyAndExpressions.length}
-              </span>
-            )}
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('vocab')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 relative ${
+                activeTab === 'vocab'
+                  ? 'bg-purple-700 text-white shadow-2xs ring-2 ring-purple-400'
+                  : 'bg-purple-50 text-purple-800 hover:bg-purple-100 border border-purple-200'
+              }`}
+            >
+              <span>3. {isEn ? 'Vocabulary & Expressions' : 'Vocabulary & Expressions'}</span>
+              {transformation?.vocabularyAndExpressions && (
+                <span className="w-4 h-4 rounded-full bg-white/20 text-[10px] flex items-center justify-center font-black">
+                  {transformation.vocabularyAndExpressions.length}
+                </span>
+              )}
+              {currentSequentialTab === 'vocab' && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 absolute -top-0.5 -right-0.5 animate-pulse" title="Sua etapa de hoje" />
+              )}
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('level')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'level'
-                ? 'bg-amber-600 text-white shadow-2xs'
-                : 'bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-200'
-            }`}
-          >
-            <span>4. {isEn ? 'CEFR Level Adaptation' : 'Adaptação de Nível CEFR'}</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('summary')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 shrink-0 relative ${
+                activeTab === 'summary'
+                  ? 'bg-[#15803d] text-white shadow-md ring-2 ring-emerald-300'
+                  : 'bg-emerald-50 text-emerald-900 hover:bg-emerald-100 border border-emerald-300'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>4. {isEn ? '5–10 Min Quick Review' : '5–10 Min Quick Review'}</span>
+              {(isLessonToday || currentSequentialTab === 'summary') && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 absolute -top-0.5 -right-0.5 animate-pulse" title="Revisão prioritária" />
+              )}
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('summary')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'summary'
-                ? 'bg-[#15803d] text-white shadow-md ring-2 ring-emerald-300'
-                : 'bg-emerald-50 text-emerald-900 hover:bg-emerald-100 border border-emerald-300'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>5. {isEn ? '5–10 Min Quick Review' : 'Revisão Rápida 5–10 Min'}</span>
-          </button>
+          {/* Reading Activity & S-Path Notice Pill */}
+          <div className="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-[#062863] text-[11px] font-semibold shrink-0">
+            <BookOpen className="w-3.5 h-3.5 text-[#1C4C96]" />
+            <span>
+              {isEn ? 'Focused Reading Activity • No S-Path score impact' : 'Atividade de Leitura Focada • Não pontua no S-Path'}
+            </span>
+          </div>
         </div>
 
         {/* Modal Scrollable Body */}
-        <div className="flex-1 overflow-y-auto p-5 sm:p-7 space-y-6 bg-slate-50/50">
+        <div className="flex-1 overflow-y-auto p-5 sm:p-7 space-y-4 bg-slate-50/50">
           {isLoadingSessions || isLoadingTransformation ? (
             <div className="py-20 flex flex-col items-center justify-center text-center space-y-4">
               <div className="w-14 h-14 rounded-3xl bg-[#000035] text-[#9AB4FF] flex items-center justify-center animate-bounce shadow-lg">
@@ -564,8 +630,8 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
                 </h3>
                 <p className="text-xs text-[#607EC9] mt-1 max-w-md">
                   {isEn
-                    ? `Parsing Ctrl+Alt+C and Ctrl+Alt+E stamps and calibrating rules to CEFR ${cefrMeta.cefr}.`
-                    : `Processando marcações de acertos (Ctrl+Alt+C) e erros (Ctrl+Alt+E) e calibrando regras para CEFR ${cefrMeta.cefr}.`}
+                    ? `Parsing corrections and calibrating rules to CEFR ${cefrMeta.cefr}.`
+                    : `Processando correções calibradas para CEFR ${cefrMeta.cefr}.`}
                 </p>
               </div>
             </div>
@@ -585,150 +651,210 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
             </div>
           ) : (
             <>
-              {/* Session Overview Card */}
-              <div className="p-4.5 rounded-2xl bg-gradient-to-r from-blue-900/5 via-[#9AB4FF]/10 to-indigo-900/5 border border-[#9AB4FF]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-black uppercase text-[#062863] tracking-wider">
-                      {isEn ? 'Session Focus:' : 'Foco da Sessão:'}
+              {/* Minimalist Top Context Strip */}
+              {activeTab !== 'all' ? (
+                <div className="px-4 py-2 rounded-xl bg-white border border-slate-200/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-600">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">📖</span>
+                    <span className="font-semibold text-[#000035]">
+                      {isEn ? 'Focused Reading' : 'Leitura Focada'}
                     </span>
-                    <h3 className="font-black text-sm text-[#000035]">{transformation.topic}</h3>
-                    <span className="px-2 py-0.5 rounded-md bg-white text-[11px] font-bold text-slate-700 border border-slate-200">
-                      📅 {formatDateInTimeZone(transformation.sessionDate, timeZone, isEn ? 'en' : 'pt')}
+                    <span className="text-slate-300 hidden sm:inline">•</span>
+                    <span className="text-slate-500 hidden sm:inline">
+                      {isEn ? 'Does not score on S-Path' : 'Não pontua no S-Path'}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-600">
-                    {isEn ? 'Guided with Native Friend' : 'Conduzida com o Amigo Nativo'}:{' '}
-                    <strong>{transformation.teacherName || 'Native Friend'}</strong>
-                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] text-slate-600 font-medium">
+                      📅 {formatDateInTimeZone(transformation.sessionDate, timeZone, isEn ? 'en' : 'pt')} • {transformation.teacherName || 'Native Friend'}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold">
+                      CEFR {cefrMeta.cefr}
+                    </span>
+                  </div>
                 </div>
+              ) : (
+                /* Complete Report Overview Card */
+                <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold uppercase text-slate-500 tracking-wider">
+                        {isEn ? 'Session Focus:' : 'Foco da Sessão:'}
+                      </span>
+                      <h3 className="font-bold text-sm text-[#000035]">{transformation.topic}</h3>
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[11px] font-semibold text-slate-700">
+                        📅 {formatDateInTimeZone(transformation.sessionDate, timeZone, isEn ? 'en' : 'pt')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {isEn ? 'Guided with Native Friend' : 'Conduzida com o Amigo Nativo'}:{' '}
+                      <strong className="text-slate-700">{transformation.teacherName || 'Native Friend'}</strong>
+                    </p>
+                  </div>
 
-                <div className="flex items-center gap-2 self-start sm:self-auto">
-                  <div className="px-3 py-1.5 rounded-xl bg-white border border-[#9AB4FF]/40 text-center shadow-2xs">
-                    <div className="text-[10px] uppercase font-bold text-emerald-700">Ctrl+Alt+C ✓</div>
-                    <div className="text-xs font-black text-emerald-800">
-                      {transformation.correctStampsCount} {isEn ? 'Mastered' : 'Acertos'}
+                  <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap text-center">
+                    <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
+                      <div className="text-xs font-black text-red-600">{transformation.incorrectStampsCount}</div>
+                      <div className="text-[10px] text-slate-500">{isEn ? 'Corrections' : 'Ajustes'}</div>
                     </div>
-                  </div>
-                  <div className="px-3 py-1.5 rounded-xl bg-white border border-[#9AB4FF]/40 text-center shadow-2xs">
-                    <div className="text-[10px] uppercase font-bold text-red-700">Ctrl+Alt+E ✗</div>
-                    <div className="text-xs font-black text-red-800">
-                      {transformation.incorrectStampsCount} {isEn ? 'Mistakes' : 'Ajustes'}
+                    <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
+                      <div className="text-xs font-black text-blue-600">{transformation.newWordStampsCount ?? 0}</div>
+                      <div className="text-[10px] text-slate-500">{isEn ? 'Words' : 'Palavras'}</div>
+                    </div>
+                    <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
+                      <div className="text-xs font-black text-purple-600">{transformation.pronounceStampsCount ?? 0}</div>
+                      <div className="text-[10px] text-slate-500">{isEn ? 'Pronounce' : 'Pronúncia'}</div>
+                    </div>
+                    <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
+                      <div className="text-xs font-black text-emerald-600">{transformation.correctStampsCount}</div>
+                      <div className="text-[10px] text-slate-500">{isEn ? 'Mastered' : 'Acertos'}</div>
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* ========================================================
                   SECTION 1: ANALYZE THE STUDENT'S MISTAKES
                   ======================================================== */}
               {(activeTab === 'all' || activeTab === 'mistakes') && (
                 <section className="space-y-3" id="section-analyze-mistakes">
-                  <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-red-100 text-red-700 flex items-center justify-center font-black text-xs">
+                      <div className="w-6 h-6 rounded-lg bg-red-100 text-red-700 flex items-center justify-center font-bold text-xs">
                         1
                       </div>
-                      <h3 className="font-black text-sm text-[#000035] tracking-tight">
-                        {isEn ? 'Analyze the Student’s Mistakes' : 'Análise dos Erros do Aluno'}
+                      <h3 className="font-bold text-sm text-[#000035] tracking-tight">
+                        {isEn ? 'Analyze Mistakes' : 'Análise de Erros'}
                       </h3>
-                      <span className="text-xs text-slate-500">
-                        ({transformation.mistakesAnalysis.length} {isEn ? 'points analyzed' : 'pontos analisados'})
+                      <span className="text-xs text-slate-400">
+                        ({transformation.mistakesAnalysis.length})
                       </span>
                     </div>
-                    <span className="text-[11px] font-bold text-slate-500 uppercase">
-                      Original ✗ vs Corrected ✓
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                      {isEn ? 'Spoken vs Natural' : 'Falado vs Natural'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4">
+                  <div className="grid grid-cols-1 gap-3.5">
                     {transformation.mistakesAnalysis.map((item, idx) => (
                       <div
                         key={item.id || idx}
-                        className="p-4.5 rounded-2xl bg-white border border-slate-200 hover:border-[#9AB4FF] shadow-xs space-y-3 transition-all"
+                        className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-slate-300 transition-all space-y-3"
                       >
-                        {/* Header: Category Badge & Audio */}
+                        {/* Header: Category Tag & Audio */}
                         <div className="flex items-center justify-between gap-2">
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
-                            Category: {item.category}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-red-50 text-red-700 flex items-center justify-center font-bold text-[10px]">
+                              {idx + 1}
+                            </span>
+                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                              {item.category || 'Correction'}
+                            </span>
+                          </div>
                           <button
                             type="button"
                             onClick={() => speakEnglish(item.corrected)}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs flex items-center gap-1 font-bold cursor-pointer transition"
-                            title="Listen to native pronunciation"
+                            className="px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-[#1C4C96] text-xs flex items-center gap-1.5 font-bold cursor-pointer transition border border-slate-200"
+                            title={isEn ? 'Listen to natural pronunciation' : 'Ouvir pronúncia natural'}
                           >
                             <Volume2 className="w-3.5 h-3.5 text-[#1C4C96]" />
                             <span className="text-[11px]">{isEn ? 'Listen' : 'Ouvir'}</span>
                           </button>
                         </div>
 
-                        {/* Side by side: Original vs Corrected */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div className="p-3 rounded-xl bg-red-50/70 border border-red-200/80 space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs font-black text-red-800">
-                              <span className="w-4 h-4 rounded-full bg-red-600 text-white flex items-center justify-center text-[10px] font-black shrink-0">
-                                ✗
-                              </span>
-                              <span>{isEn ? 'Original Utterance' : 'Forma Original Falada'}</span>
-                            </div>
-                            <p className="text-xs text-red-950 font-semibold italic pl-5.5">
+                        {/* Comparison: Original vs Natural */}
+                        <div className="space-y-1.5 p-3 rounded-xl bg-slate-50/70 border border-slate-200/60">
+                          <div className="flex items-start gap-2 text-xs">
+                            <span className="text-red-500 font-bold shrink-0 mt-0.5">✗</span>
+                            <span className="text-slate-500 line-through italic">
                               "{item.original}"
-                            </p>
-                          </div>
-
-                          <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-1">
-                            <div className="flex items-center gap-1.5 text-xs font-black text-emerald-800">
-                              <span className="w-4 h-4 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] font-black shrink-0">
-                                ✓
-                              </span>
-                              <span>{isEn ? 'Natural Native Correction' : 'Forma Corrigida e Natural'}</span>
-                            </div>
-                            <p className="text-xs text-emerald-950 font-black pl-5.5">
-                              "{item.corrected}"
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Grammatical Explanation */}
-                        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1 text-xs">
-                          <div className="font-bold text-[#000035] flex items-center gap-1.5">
-                            <Lightbulb className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                            <span>{isEn ? 'Grammatical Rule & Pedagogical Breakdown:' : 'Explicação da Regra Gramatical:'}</span>
-                          </div>
-                          <p className="text-slate-700 leading-relaxed pl-5">
-                            {item.explanation}
-                          </p>
-                        </div>
-
-                        {/* 2 Natural Examples */}
-                        {Array.isArray(item.twoExamples) && item.twoExamples.length > 0 && (
-                          <div className="space-y-1 text-xs pl-2">
-                            <span className="font-bold text-[#062863]">
-                              {isEn ? '2 Natural Usage Examples:' : '2 Exemplos Naturais:'}
                             </span>
-                            <ul className="space-y-1 pl-4 list-disc text-slate-700">
-                              {item.twoExamples.map((ex, exIdx) => (
-                                <li key={exIdx} className="leading-snug">
-                                  <span>{ex}</span>
-                                </li>
-                              ))}
-                            </ul>
+                          </div>
+                          <div className="flex items-start gap-2 text-sm">
+                            <span className="text-emerald-600 font-bold shrink-0 mt-0.5">✓</span>
+                            <span className="text-slate-900 font-bold leading-snug">
+                              "{item.corrected}"
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Pedagogical Explanation */}
+                        {item.explanation && (
+                          <div className="text-xs text-slate-700 leading-relaxed pl-1 flex items-start gap-2">
+                            <Lightbulb className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                            <p className="flex-1">{item.explanation}</p>
                           </div>
                         )}
 
-                        {/* Common Pitfalls */}
-                        {item.commonPitfalls && (
-                          <div className="text-[11px] p-2 rounded-lg bg-amber-50/80 border border-amber-200 text-amber-900 flex items-start gap-1.5">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                            <span>
-                              <strong>{isEn ? 'Common Pitfall' : 'Erro Comum'}:</strong> {item.commonPitfalls}
+                        {/* Natural Examples (if any) */}
+                        {Array.isArray(item.twoExamples) && item.twoExamples.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100 pl-1 text-xs space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                              {isEn ? 'Natural examples:' : 'Exemplos no dia a dia:'}
                             </span>
+                            <div className="space-y-0.5 pl-2 text-slate-700 italic">
+                              {item.twoExamples.map((ex, exIdx) => (
+                                <div key={exIdx} className="flex items-center gap-1.5">
+                                  <span className="text-slate-300">•</span>
+                                  <span>{ex}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Common Pitfall (if any) */}
+                        {item.commonPitfalls && (
+                          <div className="text-[11px] text-amber-900 bg-amber-50/70 px-2.5 py-1.5 rounded-lg border border-amber-200/60 flex items-center gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span><strong>{isEn ? 'Watch out:' : 'Atenção:'}</strong> {item.commonPitfalls}</span>
                           </div>
                         )}
                       </div>
                     ))}
+
+                    {transformation.mistakesAnalysis.length === 0 && (
+                      <div className="p-8 rounded-2xl bg-white border border-slate-200 text-center space-y-2">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
+                        <h4 className="font-bold text-sm text-[#000035]">
+                          {isEn ? 'No Mistakes Recorded' : 'Nenhum Erro Registrado'}
+                        </h4>
+                        <p className="text-xs text-slate-500">
+                          {isEn
+                            ? 'Great job! Your spoken sentences were accurate and natural in this session.'
+                            : 'Excelente trabalho! Suas frases foram precisas e naturais nesta sessão.'}
+                        </p>
+                      </div>
+                    )}
                   </div>
+
+                  {/* Minimalist Bottom Tab Navigation */}
+                  {activeTab === 'mistakes' && (
+                    <div className="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
+                      <div className="text-xs text-slate-500">
+                        {isEn ? 'Review complete for mistakes.' : 'Leitura de erros concluída.'}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleMarkAsRead}
+                          className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                          title={isEn ? 'Mark as read and close (1 tab per day)' : 'Marcar como lida e fechar o painel (1 aba por dia)'}
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Mark as Read' : 'Marcar como Lida'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('grammar')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <span>{isEn ? 'Next: Tab 2' : 'Próxima: Aba 2'}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -737,93 +863,129 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
                   ======================================================== */}
               {(activeTab === 'all' || activeTab === 'grammar') && (
                 <section className="space-y-3" id="section-teach-grammar">
-                  <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-black text-xs">
+                      <div className="w-6 h-6 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs">
                         2
                       </div>
-                      <h3 className="font-black text-sm text-[#000035] tracking-tight">
-                        {isEn ? 'Teach the Grammar Points' : 'Ensinar os Pontos Gramaticais'}
+                      <h3 className="font-bold text-sm text-[#000035] tracking-tight">
+                        {isEn ? 'Grammar Points' : 'Pontos Gramaticais'}
                       </h3>
-                      <span className="text-xs text-slate-500">
-                        ({transformation.grammarPoints.length} {isEn ? 'topics' : 'tópicos'})
+                      <span className="text-xs text-slate-400">
+                        ({transformation.grammarPoints.length})
                       </span>
                     </div>
-                    <span className="text-[11px] font-bold text-slate-500 uppercase">
-                      Rule • Form • Usage • Comparisons
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                      {isEn ? 'Rules & Natural Usage' : 'Regras e Uso Prático'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4">
+                  <div className="grid grid-cols-1 gap-3.5">
                     {transformation.grammarPoints.map((gp, idx) => (
                       <div
                         key={gp.id || idx}
-                        className="p-5 rounded-2xl bg-white border border-[#607EC9]/30 shadow-xs space-y-3.5"
+                        className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-slate-300 transition-all space-y-3"
                       >
                         <div className="flex items-center justify-between flex-wrap gap-2">
-                          <h4 className="font-black text-sm text-[#000035] flex items-center gap-2">
-                            <GraduationCap className="w-4 h-4 text-[#1C4C96]" />
+                          <h4 className="font-bold text-sm text-[#000035] flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-[10px]">
+                              {idx + 1}
+                            </span>
                             <span>{gp.topic}</span>
                           </h4>
-                          <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-black uppercase">
-                            Grammar Focus
-                          </span>
-                        </div>
-
-                        {/* Rule & Form */}
-                        <div className="space-y-2 text-xs">
-                          <p className="text-slate-700 leading-relaxed">
-                            <strong>{isEn ? 'Rule:' : 'Regra:'}</strong> {gp.rule}
-                          </p>
-
                           {gp.form && (
-                            <div className="p-2.5 rounded-xl bg-slate-100 font-mono text-[11px] text-[#000035] border border-slate-200">
-                              <span className="text-[#1C4C96] font-bold mr-1">FORM:</span>
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 font-mono text-[11px] text-slate-700 border border-slate-200">
                               {gp.form}
-                            </div>
-                          )}
-
-                          {gp.usage && (
-                            <p className="text-slate-700">
-                              <strong>{isEn ? 'Communicative Usage:' : 'Uso Prático:'}</strong> {gp.usage}
-                            </p>
+                            </span>
                           )}
                         </div>
 
-                        {/* Real Examples */}
-                        {Array.isArray(gp.examples) && gp.examples.length > 0 && (
-                          <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-100 space-y-1 text-xs">
-                            <span className="font-black text-[#1C4C96]">
-                              {isEn ? 'Illustrative Natural Examples:' : 'Exemplos Ilustrativos:'}
-                            </span>
-                            <ul className="space-y-1 pl-4 list-disc text-slate-800">
-                              {gp.examples.map((ex, exI) => (
-                                <li key={exI} className="leading-snug">{ex}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
+                        {/* Rule */}
+                        <div className="text-xs text-slate-700 leading-relaxed pl-7">
+                          <p>{gp.rule}</p>
+                          {gp.usage && (
+                            <p className="mt-1 text-slate-500 italic">{gp.usage}</p>
+                          )}
+                        </div>
 
-                        {/* Comparison / Contrast */}
-                        {gp.comparisons && (
-                          <div className="p-2.5 rounded-xl bg-purple-50/70 border border-purple-200 text-xs text-purple-900 space-y-0.5">
-                            <span className="font-bold flex items-center gap-1 text-purple-950">
-                              <Layers className="w-3.5 h-3.5" />
-                              <span>{isEn ? 'Comparison & Contrast:' : 'Comparação & Contraste:'}</span>
+                        {/* Examples */}
+                        {Array.isArray(gp.examples) && gp.examples.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100 pl-7 text-xs space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                              {isEn ? 'Examples in conversation:' : 'Exemplos práticos:'}
                             </span>
-                            <p className="pl-4.5">{gp.comparisons}</p>
+                            <div className="space-y-0.5 text-slate-800 italic">
+                              {gp.examples.map((ex, exI) => (
+                                <div key={exI} className="flex items-center gap-1.5">
+                                  <span className="text-blue-400">•</span>
+                                  <span>{ex}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
 
                         {/* Common Mistakes */}
                         {gp.commonMistakes && (
-                          <div className="text-[11px] p-2 rounded-lg bg-red-50 text-red-900 border border-red-200">
-                            <strong>{isEn ? 'Common Mistakes to Avoid:' : 'Erros Comuns a Evitar:'}</strong> {gp.commonMistakes}
+                          <div className="ml-7 text-[11px] p-2 rounded-lg bg-red-50/70 text-red-900 border border-red-200/60">
+                            <strong>{isEn ? 'Watch out:' : 'Atenção:'}</strong> {gp.commonMistakes}
                           </div>
                         )}
                       </div>
                     ))}
+
+                    {transformation.grammarPoints.length === 0 && (
+                      <div className="p-8 rounded-2xl bg-white border border-slate-200 text-center space-y-2">
+                        <GraduationCap className="w-8 h-8 text-blue-500 mx-auto" />
+                        <h4 className="font-bold text-sm text-[#000035]">
+                          {isEn ? 'No Formal Grammar Points Recorded' : 'Nenhum Ponto Gramatical Formal'}
+                        </h4>
+                        <p className="text-xs text-slate-500">
+                          {isEn
+                            ? 'This session focused primarily on vocabulary and natural fluency.'
+                            : 'Esta sessão teve foco em vocabulário e conversação fluida.'}
+                        </p>
+                      </div>
+                    )}
                   </div>
+
+                  {/* Minimalist Bottom Tab Navigation */}
+                  {activeTab === 'grammar' && (
+                    <div className="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('mistakes')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Previous: Tab 1' : 'Anterior: Aba 1'}</span>
+                        </button>
+                        <span className="text-xs text-slate-500 hidden sm:inline">
+                          {isEn ? 'Grammar points reviewed.' : 'Gramática revisada.'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleMarkAsRead}
+                          className="px-3.5 py-2 rounded-xl bg-[#1C4C96] hover:bg-[#062863] text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                          title={isEn ? 'Mark as read and close (1 tab per day)' : 'Marcar como lida e fechar o painel (1 aba por dia)'}
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Mark as Read' : 'Marcar como Lida'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('vocab')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <span>{isEn ? 'Next: Tab 3' : 'Próxima: Aba 3'}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -832,259 +994,254 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
                   ======================================================== */}
               {(activeTab === 'all' || activeTab === 'vocab') && (
                 <section className="space-y-3" id="section-teach-vocabulary">
-                  <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center font-black text-xs">
+                      <div className="w-6 h-6 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center font-bold text-xs">
                         3
                       </div>
-                      <h3 className="font-black text-sm text-[#000035] tracking-tight">
-                        {isEn ? 'Teach the Vocabulary and Expressions' : 'Vocabulário, Expressões e Phrasal Verbs'}
+                      <h3 className="font-bold text-sm text-[#000035] tracking-tight">
+                        {isEn ? 'Vocabulary & Expressions' : 'Vocabulário & Expressões'}
                       </h3>
-                      <span className="text-xs text-slate-500">
-                        ({transformation.vocabularyAndExpressions.length} {isEn ? 'items' : 'itens'})
+                      <span className="text-xs text-slate-400">
+                        ({transformation.vocabularyAndExpressions.length})
                       </span>
                     </div>
-                    <span className="text-[11px] font-bold text-slate-500 uppercase">
-                      Category • Collocations • Examples
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                      {isEn ? 'Words • Expressions • Pronunciation' : 'Termos • Expressões • Pronúncia'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {transformation.vocabularyAndExpressions.map((v, idx) => (
-                      <div
-                        key={v.id || idx}
-                        className="p-4.5 rounded-2xl bg-white border border-slate-200 hover:border-purple-300 shadow-xs space-y-3 transition-all flex flex-col justify-between"
-                      >
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-900 text-[10px] font-black uppercase">
-                              {v.category || 'Vocabulary'}
-                            </span>
-                            <span className="text-[10px] font-bold text-slate-500 capitalize">
-                              {v.register} register
-                            </span>
-                          </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {transformation.vocabularyAndExpressions.map((v, idx) => {
+                      const isPronounce = v.isPronunciationFocus || v.partOfSpeech === 'Pronunciation Focus' || v.category?.toLowerCase().includes('pronounc');
+                      const isNewWord = v.category?.toLowerCase().includes('new word') || v.partOfSpeech?.toLowerCase().includes('new');
 
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-black text-base text-[#000035] tracking-tight">{v.term}</h4>
+                      return (
+                        <div
+                          key={v.id || idx}
+                          className="p-4.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-slate-300 transition-all space-y-2.5 flex flex-col justify-between"
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
+                                  isPronounce
+                                    ? 'bg-purple-50 text-purple-800 border border-purple-200/60'
+                                    : isNewWord
+                                    ? 'bg-blue-50 text-blue-800 border border-blue-200/60'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {isPronounce
+                                  ? (isEn ? 'Pronunciation' : 'Pronúncia')
+                                  : isNewWord
+                                  ? (isEn ? 'New Term' : 'Novo Termo')
+                                  : v.category || (isEn ? 'Vocabulary' : 'Vocabulário')}
+                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                {(v.cefrLevel || transformation.cefrLevel) && (
+                                  <span className="text-[10px] font-black text-white bg-[#000035] px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 select-none shadow-2xs">
+                                    {v.cefrLevel || transformation.cefrLevel}
+                                  </span>
+                                )}
+                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/80 font-semibold shadow-2xs">
+                                  <Check className="w-3 h-3 text-emerald-600" />
+                                  <span>{isEn ? 'In My Dictionary' : 'No Meu Dicionário'}</span>
+                                </span>
+                                <span className="text-[10px] font-bold text-[#1C4C96] bg-[#9AB4FF]/20 border border-[#9AB4FF]/40 px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 select-none">
+                                  {v.partOfSpeech}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-bold text-base text-[#000035] tracking-tight">{v.term}</h4>
                               <button
                                 type="button"
                                 onClick={() => speakEnglish(v.term)}
-                                className="w-6 h-6 rounded-md bg-purple-50 hover:bg-purple-100 text-purple-700 flex items-center justify-center cursor-pointer transition"
-                                title="Listen to pronunciation"
+                                className="w-7 h-7 rounded-lg bg-slate-50 hover:bg-slate-100 text-purple-700 flex items-center justify-center cursor-pointer transition border border-slate-200 shadow-2xs"
+                                title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
                               >
                                 <Volume2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
-                            <span className="text-[11px] font-bold text-slate-500 italic">
-                              {v.partOfSpeech}
-                            </span>
-                          </div>
 
-                          <p className="text-xs text-slate-700 leading-relaxed">
-                            {v.simpleDefinition}
-                          </p>
+                            {v.phoneticGuide && (
+                              <div className="text-xs text-purple-900 font-mono bg-purple-50/50 px-2 py-0.5 rounded border border-purple-100 inline-block">
+                                {v.phoneticGuide}
+                              </div>
+                            )}
 
-                          {/* Collocations */}
-                          {Array.isArray(v.collocations) && v.collocations.length > 0 && (
-                            <div className="space-y-1 text-xs">
-                              <span className="font-bold text-[#062863] text-[11px] uppercase tracking-wide">
-                                {isEn ? 'Natural Collocations:' : 'Colocações Naturais:'}
-                              </span>
-                              <div className="flex flex-wrap gap-1">
+                            <p className="text-xs text-slate-700 leading-relaxed">
+                              {v.simpleDefinition}
+                            </p>
+
+                            {/* Real Example */}
+                            {Array.isArray(v.realExamples) && v.realExamples.length > 0 && (
+                              <p className="text-xs text-slate-500 italic pl-2 border-l-2 border-slate-200">
+                                "{v.realExamples[0]}"
+                              </p>
+                            )}
+
+                            {/* Collocations */}
+                            {Array.isArray(v.collocations) && v.collocations.length > 0 && (
+                              <div className="flex flex-wrap gap-1 pt-1">
                                 {v.collocations.map((col, cI) => (
                                   <span
                                     key={cI}
-                                    className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-semibold border border-slate-200"
+                                    className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-medium"
                                   >
                                     {col}
                                   </span>
                                 ))}
                               </div>
-                            </div>
-                          )}
-
-                          {/* Real-life Examples */}
-                          {Array.isArray(v.realExamples) && v.realExamples.length > 0 && (
-                            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1 text-xs">
-                              <span className="font-bold text-[#1C4C96] text-[11px]">
-                                {isEn ? 'In real conversations:' : 'Em conversas reais:'}
-                              </span>
-                              <ul className="space-y-1 pl-4 list-disc text-slate-700 text-[11px]">
-                                {v.realExamples.map((ex, eI) => (
-                                  <li key={eI} className="italic">"{ex}"</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Synonyms */}
-                        {Array.isArray(v.synonyms) && v.synonyms.length > 0 && (
-                          <div className="text-[11px] text-slate-500 pt-2 border-t border-slate-100 flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold">{isEn ? 'Synonyms' : 'Sinônimos'}:</span>
-                            {v.synonyms.join(', ')}
+                            )}
                           </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {/* ========================================================
-                  SECTION 4: ADAPT EVERYTHING TO THE STUDENT'S LEVEL
-                  ======================================================== */}
-              {(activeTab === 'all' || activeTab === 'level') && (
-                <section className="space-y-3" id="section-adapt-level">
-                  <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-black text-xs">
-                        4
-                      </div>
-                      <h3 className="font-black text-sm text-[#000035] tracking-tight">
-                        {isEn ? 'Adapt Everything to the Student’s Level' : 'Adaptação ao Nível do Aluno (CEFR)'}
-                      </h3>
-                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 text-[10px] font-black">
-                        CEFR {transformation.levelAdaptation.cefrLevel}
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-bold text-slate-500 uppercase">
-                      L1 Portuguese Interference Analysis
-                    </span>
-                  </div>
-
-                  <div className="p-5 rounded-2xl bg-white border border-amber-200/80 shadow-xs space-y-4">
-                    {/* Visual Level Track */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs font-bold text-slate-600">
-                        <span>CEFR Progression</span>
-                        <span className="text-amber-700 font-black">
-                          {transformation.levelAdaptation.cefrLevel} • {transformation.levelAdaptation.levelLabel}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-6 gap-1.5">
-                        {['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].map((lvl) => {
-                          const isActive = lvl === transformation.levelAdaptation.cefrLevel;
-                          return (
-                            <div
-                              key={lvl}
-                              className={`py-1.5 rounded-lg text-center text-xs font-black transition ${
-                                isActive
-                                  ? 'bg-amber-500 text-white shadow-xs ring-2 ring-amber-300'
-                                  : 'bg-slate-100 text-slate-400'
-                              }`}
-                            >
-                              {lvl}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Portuguese L1 Interference Warnings */}
-                    <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 space-y-1 text-xs text-amber-950">
-                      <div className="font-black flex items-center gap-1.5 text-amber-900">
-                        <Compass className="w-4 h-4 text-amber-600" />
-                        <span>
-                          {isEn
-                            ? 'Native Language (Portuguese) Interference Guard:'
-                            : 'Análise de Interferência do Português (L1):'}
-                        </span>
-                      </div>
-                      <p className="pl-5 leading-relaxed">
-                        {transformation.levelAdaptation.nativeInterferenceNotes}
-                      </p>
-                    </div>
-
-                    {/* Complexity Adjustment Advice */}
-                    {transformation.levelAdaptation.complexityAdjustmentAdvice && (
-                      <div className="text-xs space-y-1 text-slate-700">
-                        <strong>{isEn ? 'How to practice at your level:' : 'Como praticar no seu nível atual:'}</strong>
-                        <p className="leading-relaxed">
-                          {transformation.levelAdaptation.complexityAdjustmentAdvice}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Targeted Practice Prompt */}
-                    {transformation.levelAdaptation.targetedPracticePrompt && (
-                      <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-xs text-[#000035] space-y-1.5">
-                        <div className="font-black text-[#1C4C96] flex items-center gap-1.5">
-                          <Sparkles className="w-4 h-4 text-[#1C4C96]" />
-                          <span>{isEn ? 'Targeted Speaking Challenge for Next Class:' : 'Desafio de Fala para a Próxima Aula:'}</span>
                         </div>
-                        <p className="italic pl-5 leading-relaxed">
-                          "{transformation.levelAdaptation.targetedPracticePrompt}"
+                      );
+                    })}
+
+                    {transformation.vocabularyAndExpressions.length === 0 && (
+                      <div className="p-8 rounded-2xl bg-white border border-slate-200 text-center space-y-2 col-span-full">
+                        <Sparkles className="w-8 h-8 text-purple-500 mx-auto" />
+                        <h4 className="font-bold text-sm text-[#000035]">
+                          {isEn ? 'No Vocabulary Recorded' : 'Nenhum Novo Termo Marcado'}
+                        </h4>
+                        <p className="text-xs text-slate-500">
+                          {isEn
+                            ? 'No new terms or pronunciation marks were recorded in this session.'
+                            : 'Nenhum novo termo ou marcação de pronúncia foi registrada nesta sessão.'}
                         </p>
                       </div>
                     )}
                   </div>
+
+                  {/* Minimalist Bottom Tab Navigation */}
+                  {activeTab === 'vocab' && (
+                    <div className="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('grammar')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Previous: Tab 2' : 'Anterior: Aba 2'}</span>
+                        </button>
+                        <span className="text-xs text-slate-500 hidden sm:inline">
+                          {isEn ? 'Vocabulary reviewed.' : 'Vocabulário revisado.'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleMarkAsRead}
+                          className="px-3.5 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                          title={isEn ? 'Mark as read and close (1 tab per day)' : 'Marcar como lida e fechar o painel (1 aba por dia)'}
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Mark as Read' : 'Marcar como Lida'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('summary')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <span>{isEn ? 'Next: Tab 4' : 'Próxima: Aba 4'}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
 
               {/* ========================================================
-                  SECTION 5: CREATE A 5–10 MINUTE REVIEW SUMMARY
+                  SECTION 4: CREATE A 5–10 MINUTE QUICK REVIEW SUMMARY
                   ======================================================== */}
               {(activeTab === 'all' || activeTab === 'summary') && (
                 <section className="space-y-3" id="section-review-summary">
-                  <div className="flex items-center justify-between border-b border-[#9AB4FF]/30 pb-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
                     <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-xs">
-                        5
+                      <div className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">
+                        4
                       </div>
-                      <h3 className="font-black text-sm text-[#000035] tracking-tight">
-                        {isEn ? '5–10 Minute Pre-Class Review Summary' : 'Resumo Executivo para Revisão em 5–10 Minutos'}
+                      <h3 className="font-bold text-sm text-[#000035] tracking-tight">
+                        {isEn ? '5–10 Min Quick Review' : 'Revisão Rápida 5–10 Min'}
                       </h3>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
+                        CEFR {transformation.cefrLevel}
+                      </span>
                     </div>
-                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[11px] font-black flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-emerald-700" />
-                      <span>{transformation.reviewSummary.estimatedMinutes || '5–10 minutes'}</span>
+                    <span className="text-[11px] font-semibold text-emerald-800 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>{transformation.reviewSummary.estimatedMinutes || '5–10 min'}</span>
                     </span>
                   </div>
 
-                  <div className="p-6 rounded-3xl bg-gradient-to-br from-emerald-900/5 via-white to-teal-900/5 border-2 border-emerald-500/30 shadow-md space-y-5">
+                  <div className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-4">
                     {/* Golden Remember This Callout */}
-                    <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-md space-y-1">
-                      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-amber-100">
-                        <Sparkles className="w-4 h-4 text-amber-200" />
-                        <span>REMEMBER THIS!</span>
+                    {transformation.reviewSummary.rememberThis && (
+                      <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 space-y-1">
+                        <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-800">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                          <span>{isEn ? 'Remember This' : 'Lembre-se disto'}</span>
+                        </div>
+                        <p className="text-xs sm:text-sm font-semibold leading-relaxed">
+                          {transformation.reviewSummary.rememberThis}
+                        </p>
                       </div>
-                      <p className="text-sm font-black leading-snug text-white">
-                        {transformation.reviewSummary.rememberThis}
-                      </p>
-                    </div>
+                    )}
 
-                    {/* Side by Side: Essential Corrections & Rules */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Essential Corrections */}
-                      <div className="p-4 rounded-2xl bg-white border border-emerald-200/80 shadow-2xs space-y-2.5">
-                        <h4 className="font-black text-xs uppercase tracking-wide text-emerald-900 flex items-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                          <span>{isEn ? 'Essential Corrections Table' : 'Tabela de Correções Essenciais'}</span>
-                        </h4>
-                        <div className="space-y-1.5 text-xs">
+                    {/* Side by Side: Essential Corrections & Key Rules */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                      {/* Essential Corrections Table */}
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{isEn ? 'Key Corrections' : 'Correções Principais'}</span>
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-semibold">
+                            {transformation.reviewSummary.essentialCorrections.length}
+                          </span>
+                        </div>
+                        <div className="space-y-1.5 text-xs max-h-72 overflow-y-auto pr-1">
                           {transformation.reviewSummary.essentialCorrections.map((c, i) => (
                             <div
                               key={i}
-                              className="p-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2"
+                              className="p-2 rounded-lg bg-white border border-slate-200 flex items-center justify-between gap-2"
                             >
-                              <span className="text-red-700 line-through font-medium">✗ {c.original}</span>
-                              <ArrowRight className="w-3 h-3 text-slate-400 shrink-0" />
-                              <span className="text-emerald-700 font-bold">✓ {c.corrected}</span>
+                              <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                                <span className="text-red-500 line-through truncate">✗ {c.original}</span>
+                                <ArrowRight className="w-3 h-3 text-slate-300 shrink-0" />
+                                <span className="text-emerald-700 font-bold truncate">✓ {c.corrected}</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => speakEnglish(c.corrected)}
+                                className="p-1 rounded bg-slate-50 hover:bg-slate-100 text-slate-600 cursor-pointer border border-slate-200 shrink-0 transition"
+                                title="Listen"
+                              >
+                                <Volume2 className="w-3 h-3" />
+                              </button>
                             </div>
                           ))}
                         </div>
                       </div>
 
                       {/* Key Rules at a Glance */}
-                      <div className="p-4 rounded-2xl bg-white border border-emerald-200/80 shadow-2xs space-y-2.5">
-                        <h4 className="font-black text-xs uppercase tracking-wide text-blue-900 flex items-center gap-1.5">
-                          <Lightbulb className="w-4 h-4 text-amber-500" />
-                          <span>{isEn ? 'Key Grammar Rules at a Glance' : 'Regras Principais em Resumo'}</span>
-                        </h4>
-                        <ul className="space-y-1.5 text-xs text-slate-700 pl-4 list-disc">
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-bold text-xs text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                            <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                            <span>{isEn ? 'Key Rules' : 'Regras Principais'}</span>
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-semibold">
+                            {transformation.reviewSummary.keyRules.length}
+                          </span>
+                        </div>
+                        <ul className="space-y-1 text-xs text-slate-700 pl-4 list-disc max-h-72 overflow-y-auto pr-1">
                           {transformation.reviewSummary.keyRules.map((r, i) => (
                             <li key={i} className="leading-snug">{r}</li>
                           ))}
@@ -1095,24 +1252,61 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
                     {/* Must-Know Vocabulary Checklist */}
                     {Array.isArray(transformation.reviewSummary.mustKnowVocabulary) &&
                       transformation.reviewSummary.mustKnowVocabulary.length > 0 && (
-                        <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2 text-xs">
-                          <h4 className="font-black text-xs uppercase tracking-wide text-[#000035]">
-                            {isEn ? 'High-Frequency Vocabulary Checklist:' : 'Vocabulário de Alta Frequência:'}
+                        <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                          <h4 className="font-bold text-xs text-slate-700 uppercase tracking-wide">
+                            {isEn ? 'Key Vocabulary:' : 'Vocabulário Essencial:'}
                           </h4>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="flex flex-wrap gap-1.5">
                             {transformation.reviewSummary.mustKnowVocabulary.map((v, i) => (
-                              <div
+                              <span
                                 key={i}
-                                className="p-2 rounded-xl bg-purple-50/50 border border-purple-200/70 text-purple-950 flex items-center gap-2"
+                                className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 text-xs font-medium border border-slate-200"
                               >
-                                <span className="w-2 h-2 rounded-full bg-purple-600 shrink-0" />
-                                <span className="font-medium text-[11px] leading-tight">{v}</span>
-                              </div>
+                                {v}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
                   </div>
+
+                  {/* Minimalist Bottom Tab Navigation */}
+                  {activeTab === 'summary' && (
+                    <div className="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('vocab')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Previous: Tab 3' : 'Anterior: Aba 3'}</span>
+                        </button>
+                        <span className="text-xs text-slate-500 hidden sm:inline">
+                          {isEn ? 'Quick Review complete.' : 'Resumo rápido concluído.'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleMarkAsRead}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+                          title={isEn ? 'Mark as read and close (1 tab per day)' : 'Marcar como lida e fechar o painel (1 aba por dia)'}
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>{isEn ? 'Mark as Read' : 'Marcar como Lida'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('mistakes')}
+                          className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <span>{isEn ? 'Tab 1: Mistakes' : 'Aba 1: Erros'}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </section>
               )}
             </>
@@ -1120,13 +1314,13 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
         </div>
 
         {/* Modal Footer */}
-        <div className="bg-white border-t border-[#9AB4FF]/30 px-5 sm:px-7 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+        <div className="bg-white border-t border-slate-200/80 px-5 sm:px-7 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2 text-xs text-slate-500">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            <BookOpen className="w-4 h-4 text-[#1C4C96] shrink-0" />
             <span>
               {isEn
-                ? 'Individualized by Student UID • Preserves all live schedule balance & teachers'
-                : 'Individualizado por UID do Aluno • Preserva agendamentos, créditos e professores'}
+                ? 'Focused reading for natural speech evolution • Does not score on S-Path'
+                : 'Leitura focada para evolução contínua da fala • Não pontua no S-Path'}
             </span>
           </div>
 
@@ -1134,18 +1328,18 @@ export const NativeFriendsNotesModal: React.FC<NativeFriendsNotesModalProps> = (
             <button
               type="button"
               onClick={handleCopySummary}
-              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#000035] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#000035] text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
             >
               {copiedSummary ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-[#1C4C96]" />}
-              <span>{copiedSummary ? (isEn ? 'Copied' : 'Copiado') : (isEn ? 'Copy 5-Min Summary' : 'Copiar Resumo')}</span>
+              <span>{copiedSummary ? (isEn ? 'Copied' : 'Copiado') : (isEn ? 'Copy Summary' : 'Copiar Resumo')}</span>
             </button>
 
             <button
               type="button"
               onClick={onClose}
-              className="px-5 py-2 rounded-xl bg-[#000035] hover:bg-[#062863] text-white text-xs font-bold transition cursor-pointer shadow-md"
+              className="px-5 py-2 rounded-xl bg-[#000035] hover:bg-[#062863] text-white text-xs font-bold transition cursor-pointer shadow-sm"
             >
-              {isEn ? 'Close Guide' : 'Fechar Guia'}
+              {isEn ? 'Close' : 'Fechar'}
             </button>
           </div>
         </div>

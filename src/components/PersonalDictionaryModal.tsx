@@ -70,6 +70,7 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
               partOfSpeech: res.partOfSpeech,
               phonetic: res.phonetic,
               source: res.source,
+              cefrLevel: res.cefrLevel,
               notFound: res.notFound,
             },
           }));
@@ -162,8 +163,8 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
       if (res.notFound || !res.definitionEn) {
         setLookupError(
           isEn
-            ? `The word "${term}" was not found in the official Free Dictionary API.`
-            : `A palavra "${term}" não foi encontrada na Free Dictionary API.`
+            ? `The word "${term}" was not found.`
+            : `A palavra "${term}" não foi localizada.`
         );
         setNewDefinition('');
         setNewExample('');
@@ -178,8 +179,8 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
     } catch {
       setLookupError(
         isEn
-          ? 'Error contacting the Free Dictionary API. Please try again.'
-          : 'Erro ao consultar a Free Dictionary API. Tente novamente.'
+          ? 'Error looking up word. Please try again.'
+          : 'Erro ao consultar a palavra. Tente novamente.'
       );
     } finally {
       setIsLookingUpApi(false);
@@ -482,14 +483,27 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
                           {entry.word}
                         </span>
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {entry.partOfSpeech && (
-                            <span className="text-[10px] font-semibold text-[#1C4C96] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                              {entry.partOfSpeech}
+                          {entry.cefrLevel && (
+                            <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                              {entry.cefrLevel}
                             </span>
                           )}
-                          {(entry as any).phonetic && (
+                          {entry.partOfSpeech && (
+                            <span
+                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+                                entry.partOfSpeech.toLowerCase().includes('pronounc')
+                                  ? 'text-purple-800 bg-purple-50 border-purple-200'
+                                  : 'text-[#1C4C96] bg-blue-50 border-blue-200'
+                              }`}
+                            >
+                              {entry.partOfSpeech.toLowerCase().includes('pronounc')
+                                ? '🎯 Pronounce'
+                                : entry.partOfSpeech}
+                            </span>
+                          )}
+                          {entry.phonetic && (
                             <span className="text-[10px] font-mono text-slate-400">
-                              {(entry as any).phonetic}
+                              {entry.phonetic}
                             </span>
                           )}
                         </div>

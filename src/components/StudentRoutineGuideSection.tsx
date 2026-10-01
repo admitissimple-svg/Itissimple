@@ -255,40 +255,45 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     setWordsSaveFeedback(false);
   }, [activeActivity?.id]);
 
-  // Keep English definitions synchronized from configured dictionary
+  // Keep English definitions synchronized using Native Friend Notes unified pedagogical standard
   useEffect(() => {
+    const studentLevel = userProfile?.level;
     const initialDefs: Record<number, DictionaryLookupResult> = {};
     words.forEach((w, idx) => {
       const clean = w.trim();
       if (clean) {
-        initialDefs[idx] = getInstantOrCachedWord(clean);
+        initialDefs[idx] = getInstantOrCachedWord(clean, undefined, studentLevel);
       }
     });
     setWordDefinitions(initialDefs);
 
+    // Reduced delay: 200ms debounce with selective lookup for terms needing AI enrichment
     const timer = setTimeout(() => {
-      words.forEach(async (w, idx) => {
-        const clean = w.trim();
-        if (clean.length >= 2) {
-          try {
-            const res = await lookupWord(clean);
-            if (res) {
-              setWordDefinitions((prev) => {
-                if (words[idx]?.trim().toLowerCase() === clean.toLowerCase()) {
-                  return { ...prev, [idx]: res };
-                }
-                return prev;
-              });
-            }
-          } catch {
-            // Error handling handled by lookupWord
+      const wordsToLookup = words
+        .map((w, idx) => ({ word: w.trim(), idx }))
+        .filter(({ word, idx }) => word.length >= 2 && (!initialDefs[idx] || !initialDefs[idx].definitionEn));
+
+      if (wordsToLookup.length === 0) return;
+
+      wordsToLookup.forEach(async ({ word, idx }) => {
+        try {
+          const res = await lookupWord(word, undefined, studentLevel);
+          if (res) {
+            setWordDefinitions((prev) => {
+              if (words[idx]?.trim().toLowerCase() === word.toLowerCase()) {
+                return { ...prev, [idx]: res };
+              }
+              return prev;
+            });
           }
+        } catch {
+          // Handled gracefully
         }
       });
-    }, 300);
+    }, 200);
 
     return () => clearTimeout(timer);
-  }, [words]);
+  }, [words, userProfile?.level]);
 
   // Spotify view toggle: App Player or Spotify Web, and Track vs Full Playlist view
   const [spotifyPlayerMode, setSpotifyPlayerMode] = useState<'app' | 'web'>('app');
@@ -2192,6 +2197,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
             handleWordChange={handleWordChange}
             handleSaveWords={handleSaveWords}
             speakText={speakText}
+            studentLevel={userProfile?.level}
           />
         </div>
       </div>

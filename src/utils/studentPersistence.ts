@@ -252,6 +252,7 @@ export async function saveStudentVocabularyToFirestore(
         exampleSentenceEn: entry.exampleSentenceEn || existing?.exampleSentenceEn || '',
         translationPt: entry.translationPt || existing?.translationPt || '',
         phonetic: entry.phonetic || existing?.phonetic || '',
+        cefrLevel: entry.cefrLevel || existing?.cefrLevel || '',
         sourceActivityName: entry.sourceActivityName || existing?.sourceActivityName || 'Personal Dictionary',
         sourceDay: entry.sourceDay || existing?.sourceDay,
         source: entry.source || existing?.source || 'api',

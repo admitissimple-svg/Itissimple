@@ -234,11 +234,17 @@
       "properties": {
         "id": { "type": "string", "description": "Entry ID" },
         "word": { "type": "string", "description": "The English word" },
+        "partOfSpeech": { "type": "string", "description": "Part of speech classification" },
+        "cefrLevel": { "type": "string", "description": "CEFR proficiency level (A1, A2, B1, B2, C1, C2)" },
         "phonetic": { "type": "string", "description": "Phonetic pronunciation" },
+        "translationPt": { "type": "string", "description": "Portuguese translation" },
         "translation": { "type": "string", "description": "Portuguese translation" },
-        "source": { "type": "string", "description": "Source of the word (video, audio, live lesson)" },
+        "definitionEn": { "type": "string", "description": "Standard English definition" },
+        "exampleSentenceEn": { "type": "string", "description": "Real authentic example sentence" },
+        "source": { "type": "string", "description": "Source of the word (video, audio, live lesson, native friend)" },
         "sourceContext": { "type": "string", "description": "Context sentence where word was heard" },
         "exampleSentence": { "type": "string", "description": "Example usage sentence" },
+        "learnedAt": { "type": "string", "format": "date-time", "description": "When word was saved" },
         "addedAt": { "type": "string", "format": "date-time", "description": "When word was saved" },
         "studentEmail": { "type": "string", "format": "email" },
         "studentUid": { "type": "string" }

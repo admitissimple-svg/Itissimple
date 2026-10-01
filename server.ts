@@ -5,7 +5,11 @@ import { fileURLToPath } from 'url';
 // Check if running within tsx or already bootstrapped
 const isTsx =
   process.execArgv.some((arg) => arg.includes('tsx')) ||
-  process.env.TSX_BOOTSTRAPPED === '1';
+  process.env.TSX_BOOTSTRAPPED === '1' ||
+  (process.argv[1] && process.argv[1].includes('tsx')) ||
+  (process.argv[0] && process.argv[0].includes('tsx')) ||
+  Boolean((process as any)[Symbol.for('tsx.jsx')]) ||
+  Boolean((process as any)[Symbol.for('tsx.version')]);
 
 if (!isTsx) {
   // Plain 'node server.ts' execution (e.g. Cloud Run production container).

@@ -1,4 +1,5 @@
 import { EnglishLevel, LiveLesson } from '../types';
+import { NATIVE_FRIENDS_DICTIONARY_DATABASE } from '../data/dictionaryDatabase';
 
 export interface PedagogicalMistakeAnalysis {
   id: string;
@@ -31,6 +32,9 @@ export interface PedagogicalVocabularyItem {
   synonyms: string[];
   register: 'informal' | 'neutral' | 'formal' | 'idiomatic';
   category: string;
+  phoneticGuide?: string;
+  isPronunciationFocus?: boolean;
+  cefrLevel?: string;
 }
 
 export interface PedagogicalLevelAdaptation {
@@ -45,7 +49,7 @@ export interface PedagogicalReviewSummary {
   estimatedMinutes: string;
   keyRules: string[];
   mustKnowVocabulary: string[];
-  essentialCorrections: { original: string; corrected: string }[];
+  essentialCorrections: { original: string; corrected: string; explanation?: string }[];
   rememberThis: string;
 }
 
@@ -60,15 +64,21 @@ export interface PedagogicalLessonTransformation {
   studentEmail?: string;
   studentLevel: string;
   cefrLevel: string;
-  // Rigorously specified 5 sections
+  // Rigorously specified sections:
+  // 1. Analyze Mistakes (mapped from Alt+N)
+  // 2. Grammar Points (systemic grammar rules from Alt+N & session topic)
+  // 3. Vocabulary & Expressions (mapped from Alt+W and Alt+P)
+  // 4. Quick Review (comprehensive summary of ALL session items)
   mistakesAnalysis: PedagogicalMistakeAnalysis[];
   grammarPoints: PedagogicalGrammarPoint[];
   vocabularyAndExpressions: PedagogicalVocabularyItem[];
-  levelAdaptation: PedagogicalLevelAdaptation;
+  levelAdaptation?: PedagogicalLevelAdaptation;
   reviewSummary: PedagogicalReviewSummary;
   rawNotesSnippet?: string;
   correctStampsCount: number;
   incorrectStampsCount: number;
+  newWordStampsCount?: number;
+  pronounceStampsCount?: number;
   generatedAt: string;
 }
 
@@ -98,30 +108,53 @@ export function resolveCefrLevel(level?: EnglishLevel | string): {
 
 /**
  * Extracts and categorizes markings from teacher notes:
- * - Recognizes Ctrl+Alt+C tags: <span data-tag-type="correct">✓</span> or ✓
- * - Recognizes Ctrl+Alt+E tags: <span data-tag-type="incorrect">✗</span> or ✗
- * - Recognizes text patterns like "Instead of: ... Say: ..."
+ * - Alt + N: Incorrect / Error (<span data-tag-type="incorrect">✗</span> or ✗ or "Instead of: ... Say: ...")
+ * - Alt + W: New Word (<span data-tag-type="new-word">✦ New Word</span> or [New Word])
+ * - Alt + P: Pronunciation (<span data-tag-type="pronounce">🎯 Pronounce</span> or [Pronounce])
+ * - Alt + Y: Correct (<span data-tag-type="correct">✓</span> or ✓ or "Say: ...")
  */
 export function extractNotesMarkings(rawContent: string): {
   errors: { original: string; corrected?: string; context?: string }[];
+  newWords: string[];
+  pronounceItems: string[];
   positives: string[];
   vocabItems: string[];
   cleanText: string;
   correctCount: number;
   incorrectCount: number;
+  newWordCount: number;
+  pronounceCount: number;
 } {
   if (!rawContent) {
-    return { errors: [], positives: [], vocabItems: [], cleanText: '', correctCount: 0, incorrectCount: 0 };
+    return {
+      errors: [],
+      newWords: [],
+      pronounceItems: [],
+      positives: [],
+      vocabItems: [],
+      cleanText: '',
+      correctCount: 0,
+      incorrectCount: 0,
+      newWordCount: 0,
+      pronounceCount: 0,
+    };
   }
 
   // Count tags
   const tagCorrect = (rawContent.match(/data-tag-type=["']correct["']/g) || []).length;
   const tagIncorrect = (rawContent.match(/data-tag-type=["']incorrect["']/g) || []).length;
+  const tagNewWord = (rawContent.match(/data-tag-type=["']new-word["']/g) || []).length;
+  const tagPronounce = (rawContent.match(/data-tag-type=["']pronounce["']/g) || []).length;
+
   const plainCorrect = (rawContent.replace(/<span[^>]*data-tag-type=["']correct["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/✓|✔/g) || []).length;
   const plainIncorrect = (rawContent.replace(/<span[^>]*data-tag-type=["']incorrect["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/✗|✖/g) || []).length;
+  const plainNewWord = (rawContent.replace(/<span[^>]*data-tag-type=["']new-word["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/\[New Word\]/gi) || []).length;
+  const plainPronounce = (rawContent.replace(/<span[^>]*data-tag-type=["']pronounce["'][^>]*>[\s\S]*?<\/span>/gi, '').match(/\[Pronounce\]/gi) || []).length;
 
   const correctCount = tagCorrect + plainCorrect;
   const incorrectCount = tagIncorrect + plainIncorrect;
+  const newWordCount = tagNewWord + plainNewWord;
+  const pronounceCount = tagPronounce + plainPronounce;
 
   // Convert HTML breaks to newlines
   const textWithBreaks = rawContent
@@ -138,13 +171,43 @@ export function extractNotesMarkings(rawContent: string): {
   const lines = textWithBreaks.split('\n').map((l) => l.trim()).filter(Boolean);
 
   const errors: { original: string; corrected?: string; context?: string }[] = [];
+  const newWords: string[] = [];
+  const pronounceItems: string[] = [];
   const positives: string[] = [];
   const vocabItems: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Pattern 1: Inline HTML tag or symbol with both incorrect and correct in same line
+    // Check for Alt + W (New Word tag)
+    const hasNewWord = /data-tag-type=["']new-word["']|\[New Word\]/i.test(line);
+    if (hasNewWord) {
+      const cleanTerm = cleanLineTags(
+        line
+          .replace(/<span[^>]*data-tag-type=["']new-word["'][^>]*>[\s\S]*?<\/span>/gi, '')
+          .replace(/\[New Word\]/gi, '')
+      ).trim();
+      if (cleanTerm && cleanTerm.length > 1) {
+        newWords.push(cleanTerm);
+      }
+      continue;
+    }
+
+    // Check for Alt + P (Pronounce tag)
+    const hasPronounce = /data-tag-type=["']pronounce["']|\[Pronounce\]/i.test(line);
+    if (hasPronounce) {
+      const cleanTerm = cleanLineTags(
+        line
+          .replace(/<span[^>]*data-tag-type=["']pronounce["'][^>]*>[\s\S]*?<\/span>/gi, '')
+          .replace(/\[Pronounce\]/gi, '')
+      ).trim();
+      if (cleanTerm && cleanTerm.length > 1) {
+        pronounceItems.push(cleanTerm);
+      }
+      continue;
+    }
+
+    // Pattern 1: Inline HTML tag or symbol with both incorrect (Alt+N) and correct in same line
     // e.g. <span data-tag-type="incorrect">✗</span> I'm agree <span data-tag-type="correct">✓</span> I agree
     const hasIncorrect = /data-tag-type=["']incorrect["']|✗|✖/.test(line);
     const hasCorrect = /data-tag-type=["']correct["']|✓|✔/.test(line);
@@ -165,7 +228,7 @@ export function extractNotesMarkings(rawContent: string): {
       }
     }
 
-    // Pattern 2: Dedicated Incorrect tag line
+    // Pattern 2: Dedicated Incorrect tag line (Alt+N)
     if (hasIncorrect) {
       const cleaned = cleanLineTags(line);
       // Lookahead: Next line might be the correction!
@@ -175,7 +238,7 @@ export function extractNotesMarkings(rawContent: string): {
         i++; // skip next line
       }
 
-      // Check if line contains "->" or "=>"
+      // Check if line contains "->" or "=>" or "Instead of"
       if (cleaned.includes('->') || cleaned.includes('=>') || cleaned.includes('Instead of') || cleaned.includes('Say:')) {
         const arrowParts = cleaned.split(/->|=>|Say:/i);
         errors.push({
@@ -200,7 +263,7 @@ export function extractNotesMarkings(rawContent: string): {
       continue;
     }
 
-    // Pattern 4: Text-based "Instead of: ... Say: ..."
+    // Pattern 4: Text-based "Instead of: ... Say: ..." (Alt+N mapping)
     if (/instead of/i.test(line) && /say/i.test(line)) {
       const match = line.match(/instead of:?\s*(.*?)(?:say:?\s*(.*)|$)/i);
       if (match) {
@@ -216,7 +279,7 @@ export function extractNotesMarkings(rawContent: string): {
     // Pattern 5: Vocabulary items or bullets
     if (line.startsWith('•') || line.startsWith('-') || line.startsWith('*')) {
       const item = cleanLineTags(line.replace(/^[•\-\*]\s*/, ''));
-      if (item && !item.toLowerCase().includes('in-session notes') && !item.toLowerCase().includes('date:')) {
+      if (item && !item.toLowerCase().includes('in-session notes') && !item.toLowerCase().includes('date:') && !item.toLowerCase().includes('student:') && !item.toLowerCase().includes('topic:')) {
         vocabItems.push(item);
       }
     }
@@ -227,11 +290,15 @@ export function extractNotesMarkings(rawContent: string): {
 
   return {
     errors,
+    newWords,
+    pronounceItems,
     positives,
     vocabItems,
     cleanText,
     correctCount,
     incorrectCount,
+    newWordCount,
+    pronounceCount,
   };
 }
 
@@ -487,101 +554,89 @@ export function generateLocalPedagogicalTransformation(params: {
     });
   }
 
-  // 3. Build Section 3: Teach Vocabulary and Expressions
+  // 3. Build Section 3: Teach Vocabulary and Expressions (Mapped from Alt+W and Alt+P + bullets)
   const vocabularyAndExpressions: PedagogicalVocabularyItem[] = [];
 
-  // Parse any vocabulary noted by teacher or extracted from markings
-  const candidateVocab = [...markings.vocabItems];
+  // Combine Alt+W (New Word), Alt+P (Pronounce), and general vocab markings
+  const candidateVocab = [...markings.newWords, ...markings.pronounceItems, ...markings.vocabItems];
   if (candidateVocab.length === 0) {
     candidateVocab.push('catch up', 'workload', 'streamline', 'make sense', 'get the hang of');
   }
 
   const VOCAB_DATABASE: Record<string, Omit<PedagogicalVocabularyItem, 'id' | 'term'>> = {
-    'catch up': {
-      partOfSpeech: 'Phrasal Verb',
-      simpleDefinition: 'To talk with someone you haven’t seen in a while to exchange latest life or work news.',
-      collocations: ['catch up with a friend', 'catch up on work', 'play catch-up'],
-      realExamples: [
-        'Let’s grab a quick coffee this afternoon to catch up.',
-        'I spent Saturday morning catching up on my favorite podcasts.',
-      ],
-      synonyms: ['reconnect', 'update each other', 'get up to date'],
-      register: 'informal',
-      category: 'Phrasal Verbs & Social Life',
-    },
-    workload: {
-      partOfSpeech: 'Noun (Uncountable)',
-      simpleDefinition: 'The amount of work that someone has to do within a given period.',
-      collocations: ['heavy workload', 'manageable workload', 'reduce workload'],
-      realExamples: [
-        'Her workload has been intense since the new project launched.',
-        'We need to delegate tasks to keep the team workload balanced.',
-      ],
-      synonyms: ['volume of work', 'duties', 'commitments'],
-      register: 'neutral',
-      category: 'Work & Productivity',
-    },
-    streamline: {
-      partOfSpeech: 'Verb',
-      simpleDefinition: 'To make an organization, process, or system more efficient and simpler.',
-      collocations: ['streamline the process', 'streamline operations', 'streamline workflow'],
-      realExamples: [
-        'The team introduced new software to streamline weekly reporting.',
-        'Streamlining our morning routine saves at least thirty minutes.',
-      ],
-      synonyms: ['simplify', 'optimize', 'make efficient'],
-      register: 'formal',
-      category: 'Professional & Business',
-    },
-    'make sense': {
-      partOfSpeech: 'Idiomatic Phrase',
-      simpleDefinition: 'To be intelligible, reasonable, or wise to do.',
-      collocations: ['that makes a lot of sense', 'make sense to do something', 'doesn’t make sense'],
-      realExamples: [
-        'Does the new schedule make sense to everyone?',
-        'It makes sense to practice speaking for 10 minutes every single day.',
-      ],
-      synonyms: ['be logical', 'be understandable', 'be justifiable'],
-      register: 'neutral',
-      category: 'Everyday Fluency Expressions',
-    },
-    'get the hang of': {
-      partOfSpeech: 'Idiomatic Expression',
-      simpleDefinition: 'To learn how to do or use something that is not easy at first.',
-      collocations: ['get the hang of it', 'finally get the hang of', 'take time to get the hang of'],
-      realExamples: [
-        'At first pronunciation was tricky, but I am getting the hang of it.',
-        'Once you get the hang of the past continuous, storytelling becomes natural.',
-      ],
-      synonyms: ['master', 'become proficient in', 'figure out'],
-      register: 'informal',
-      category: 'Idioms & Fluency Boosters',
-    },
+    ...Object.fromEntries(
+      Object.entries(NATIVE_FRIENDS_DICTIONARY_DATABASE).map(([key, item]) => [
+        key,
+        {
+          partOfSpeech: item.partOfSpeech,
+          simpleDefinition: item.definitionEn,
+          collocations: item.collocations || [`use "${item.word}" naturally`],
+          realExamples: item.realExamples || [item.exampleSentenceEn],
+          synonyms: item.synonyms || ['target phrase'],
+          register: item.register || ('neutral' as const),
+          category: item.category || 'Core Session Vocabulary',
+        },
+      ])
+    ),
   };
 
-  candidateVocab.slice(0, 5).forEach((item, index) => {
-    const cleanWord = item.toLowerCase().replace(/[^a-z\s-]/g, '').trim();
-    const entry = VOCAB_DATABASE[cleanWord] || {
-      partOfSpeech: 'Expression / Vocabulary',
-      simpleDefinition: `A useful, high-impact lexical unit for speaking with clarity and natural rhythm about ${topic}.`,
-      collocations: [`use ${item} naturally`, `frequently heard with ${item}`],
+  const seenVocabTerms = new Set<string>();
+
+  candidateVocab.forEach((item) => {
+    const rawTrimmed = item.trim();
+    const cleanWord = rawTrimmed.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim();
+    if (!cleanWord || seenVocabTerms.has(cleanWord)) return;
+    seenVocabTerms.add(cleanWord);
+
+    const isPronounce = markings.pronounceItems.some(
+      (p) => p.toLowerCase().trim() === cleanWord || cleanWord.includes(p.toLowerCase().trim())
+    );
+
+    const isNewWord = markings.newWords.some(
+      (w) => w.toLowerCase().trim() === cleanWord || cleanWord.includes(w.toLowerCase().trim())
+    );
+
+    const normalizedKey = cleanWord.replace(/[_\-]+/g, ' ');
+    const dbMatch = NATIVE_FRIENDS_DICTIONARY_DATABASE[cleanWord] || NATIVE_FRIENDS_DICTIONARY_DATABASE[normalizedKey];
+
+    const entry = VOCAB_DATABASE[cleanWord] || (dbMatch ? {
+      partOfSpeech: dbMatch.partOfSpeech,
+      simpleDefinition: dbMatch.definitionEn,
+      collocations: dbMatch.collocations || [`use "${rawTrimmed}" naturally`],
+      realExamples: dbMatch.realExamples || [dbMatch.exampleSentenceEn],
+      synonyms: dbMatch.synonyms || ['target phrase'],
+      register: dbMatch.register || ('neutral' as const),
+      category: isPronounce ? 'Pronunciation & Phonetics (Alt+P)' : isNewWord ? 'New Words & Expressions (Alt+W)' : 'Core Session Vocabulary',
+    } : {
+      partOfSpeech: isPronounce
+        ? 'Pronunciation Focus'
+        : cleanWord.includes(' ')
+        ? 'Idiomatic Expression'
+        : 'Vocabulary Item',
+      simpleDefinition: isPronounce
+        ? `Pronunciation focus: Pay careful attention to the syllable stress, vowel reduction, and clear consonant articulation of "${rawTrimmed}".`
+        : `Key communicative expression (${cefrMeta.cefr}): used in conversation to communicate "${rawTrimmed}" clearly and naturally.`,
+      collocations: [`use "${rawTrimmed}" naturally`, `frequently heard with "${rawTrimmed}"`],
       realExamples: [
-        `In daily speaking: "${item} is very useful in conversation."`,
-        `During the session, using "${item}" enhanced expressive nuance.`,
+        `In daily speaking: "I practiced using '${rawTrimmed}' naturally in our conversation today."`,
+        `Practice sentence: "Understanding how native speakers say '${rawTrimmed}' makes your speech flow smoothly."`,
       ],
-      synonyms: ['natural expression', 'idiomatic phrase'],
+      synonyms: ['natural expression', 'target phrase'],
       register: 'neutral' as const,
-      category: 'Core Lesson Vocabulary',
-    };
+      category: isPronounce ? 'Pronunciation & Phonetics (Alt+P)' : isNewWord ? 'New Words & Expressions (Alt+W)' : 'Core Session Vocabulary',
+    });
 
     vocabularyAndExpressions.push({
-      id: `vocab-${index + 1}`,
-      term: item,
+      id: `vocab-${vocabularyAndExpressions.length + 1}`,
+      term: rawTrimmed,
+      cefrLevel: dbMatch?.cefrLevel || cefrMeta.cefr,
       ...entry,
+      phoneticGuide: isPronounce ? `🎯 Pronunciation focus: practice clean syllable stress on "${rawTrimmed}" without adding Portuguese final vowels.` : (dbMatch?.phonetic || undefined),
+      isPronunciationFocus: isPronounce,
     });
   });
 
-  // 4. Build Section 4: Adapt Everything to the Student's Level
+  // CEFR Level Adaptation metadata (dynamically applied across all remaining tabs)
   const levelAdaptation: PedagogicalLevelAdaptation = {
     cefrLevel: cefrMeta.cefr,
     levelLabel: cefrMeta.labelEn,
@@ -598,14 +653,22 @@ export function generateLocalPedagogicalTransformation(params: {
     targetedPracticePrompt: `Describe your typical routine or recent experiences regarding "${topic}", making sure to incorporate at least two of the corrected phrases and vocabulary items.`,
   };
 
-  // 5. Build Section 5: Create a 5-10 Minute Review Summary
+  // 4. Build Section 4: Create a 5-10 Minute Quick Review Summary
+  // MANDATORY: ALL session notes, corrections, and processed terms MUST compose the Quick Review
   const reviewSummary: PedagogicalReviewSummary = {
     estimatedMinutes: '5–10 minutes',
-    keyRules: grammarPoints.map((gp) => `${gp.topic}: ${gp.rule.slice(0, 110)}...`),
-    mustKnowVocabulary: vocabularyAndExpressions.map((v) => `${v.term} (${v.partOfSpeech}) — ${v.simpleDefinition.slice(0, 80)}`),
-    essentialCorrections: mistakesAnalysis.slice(0, 4).map((m) => ({
+    // ALL grammar rules from session
+    keyRules: grammarPoints.map((gp) => `${gp.topic}: ${gp.rule}`),
+    // ALL must-know vocabulary & pronunciation items from session
+    mustKnowVocabulary: vocabularyAndExpressions.map((v) => {
+      const tag = v.isPronunciationFocus ? '🎯 [Pronounce]' : '✨';
+      return `${tag} ${v.term} (${v.partOfSpeech}) — ${v.simpleDefinition}`;
+    }),
+    // ALL essential corrections from session (NO slicing)
+    essentialCorrections: mistakesAnalysis.map((m) => ({
       original: m.original,
       corrected: m.corrected,
+      explanation: m.explanation,
     })),
     rememberThis:
       mistakesAnalysis.length > 0
@@ -636,6 +699,8 @@ export function generateLocalPedagogicalTransformation(params: {
     rawNotesSnippet: markings.cleanText.slice(0, 300),
     correctStampsCount: markings.correctCount,
     incorrectStampsCount: markings.incorrectCount,
+    newWordStampsCount: markings.newWordCount,
+    pronounceStampsCount: markings.pronounceCount,
     generatedAt: new Date().toISOString(),
   };
 }

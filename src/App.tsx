@@ -2082,7 +2082,7 @@ export default function App() {
       .filter((w) => Boolean(w && w.trim()))
       .map((w) => {
         const cleanW = w.trim();
-        const cached = getInstantOrCachedWord(cleanW, actName);
+        const cached = getInstantOrCachedWord(cleanW, actName, userProfile?.level);
         return {
           id: `routine_${cleanW.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`,
           word: cleanW,
@@ -2090,8 +2090,9 @@ export default function App() {
           exampleSentenceEn: cached.exampleSentenceEn || '',
           partOfSpeech: cached.partOfSpeech || '',
           translationPt: cached.translationPt || '',
+          cefrLevel: cached.cefrLevel || 'B1',
           learnedAt: new Date().toISOString(),
-          source: 'api',
+          source: 'native_notes_standard',
           sourceActivityName: `${actName} (${selectedDay})`,
           sourceDay: selectedDay,
         };
