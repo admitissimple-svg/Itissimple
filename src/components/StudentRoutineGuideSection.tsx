@@ -288,7 +288,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const [wordsSaveFeedback, setWordsSaveFeedback] = useState<boolean>(false);
   const [wordDefinitions, setWordDefinitions] = useState<Record<number, DictionaryLookupResult>>({});
 
-  // Synchronize 5 words when active activity changes
+  // Synchronize 5 words when active activity changes or learnedWords are loaded
   useEffect(() => {
     if (activeActivity && activeActivity.learnedWords && activeActivity.learnedWords.length > 0) {
       const padded = [...activeActivity.learnedWords];
@@ -298,7 +298,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
       setWords(['', '', '', '', '']);
     }
     setWordsSaveFeedback(false);
-  }, [activeActivity?.id]);
+  }, [activeActivity?.id, activeActivity?.learnedWords?.join(',')]);
 
   // Keep English definitions synchronized using Native Friend Notes unified pedagogical standard
   useEffect(() => {
@@ -490,15 +490,27 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     Boolean(w && (sentenceInput || '').toLowerCase().includes(w.toLowerCase()))
   );
 
-  // Handlers for 5 Words
+  // Handlers for 5 Words with automatic debounced background save
+  const wordsDebounceRef = useRef<any>(null);
   const handleWordChange = (index: number, val: string) => {
     const updated = [...words];
     updated[index] = val;
     setWords(updated);
+
+    if (activeActivity) {
+      if (wordsDebounceRef.current) clearTimeout(wordsDebounceRef.current);
+      wordsDebounceRef.current = setTimeout(() => {
+        const cleanWords = updated.map((w) => w.trim()).filter((w) => w.length > 0);
+        if (cleanWords.length > 0) {
+          onSaveLearnedWords(activeActivity.id, cleanWords);
+        }
+      }, 700);
+    }
   };
 
   const handleSaveWords = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (wordsDebounceRef.current) clearTimeout(wordsDebounceRef.current);
     if (!activeActivity) return;
     const cleanWords = words.map((w) => w.trim()).filter((w) => w.length > 0);
     onSaveLearnedWords(activeActivity.id, cleanWords);

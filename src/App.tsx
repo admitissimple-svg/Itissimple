@@ -2152,11 +2152,20 @@ export default function App() {
       handleAddWordsToDictionary(dictEntries);
     }
 
+    const activeEmail = currentAccount?.email || userProfile?.email;
+    const effectiveStudentUid = userProfile?.id || (userProfile as any)?.uid || currentAccount?.uid;
+
     try {
       await fetch('/api/routines/words', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ day: selectedDay, activityId, words }),
+        body: JSON.stringify({
+          day: selectedDay,
+          activityId,
+          words,
+          studentEmail: activeEmail,
+          studentUid: effectiveStudentUid,
+        }),
       });
     } catch {
       // local fallback

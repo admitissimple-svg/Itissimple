@@ -4109,13 +4109,36 @@ app.get('/api/student-routines', (req, res) => {
   const uid = ((req.query.uid as string) || (req.query.studentUid as string) || '').trim();
   const resolved = resolveStudentIdentifiers(db, studentEmail, uid);
 
-  let routines =
-    (resolved.uid && db.studentRoutinesMap?.[resolved.uid]) ||
-    (resolved.email && db.studentRoutinesMap?.[resolved.email]) ||
-    (studentEmail && db.studentRoutinesMap?.[studentEmail]) ||
-    null;
+  const emailRoutines = (resolved.email && db.studentRoutinesMap?.[resolved.email]) || (studentEmail && db.studentRoutinesMap?.[studentEmail]);
+  const uidRoutines = resolved.uid && db.studentRoutinesMap?.[resolved.uid];
 
-  const targetKeys = [resolved.uid, resolved.email, studentEmail].filter(Boolean) as string[];
+  const countContent = (r: any) => {
+    if (!r || typeof r !== 'object') return 0;
+    let score = 0;
+    Object.values(r).forEach((dayList: any) => {
+      if (Array.isArray(dayList)) {
+        dayList.forEach((act: any) => {
+          if (act.teacherVideos && act.teacherVideos.length > 0) score += 10;
+          if (act.learnedWords && act.learnedWords.length > 0) score += act.learnedWords.length;
+        });
+      }
+    });
+    return score;
+  };
+
+  const emailScore = countContent(emailRoutines);
+  const uidScore = countContent(uidRoutines);
+  let routines = uidScore >= emailScore && uidScore > 0 ? uidRoutines : (emailScore > 0 ? emailRoutines : (uidRoutines || emailRoutines));
+
+  const targetKeys = Array.from(new Set([resolved.uid, resolved.email, studentEmail].filter(Boolean) as string[]));
+
+  // Sync back to both keys so they never diverge
+  if (routines) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    targetKeys.forEach((k) => {
+      db.studentRoutinesMap[k] = routines;
+    });
+  }
 
   // Auto-distribute if video or spotify assignments are missing or have repeating duplicates
   let videoAssigns: any[] = [];
@@ -4125,6 +4148,29 @@ app.get('/api/student-routines', (req, res) => {
     if (db.studentVideoAssignments?.[k] && Array.isArray(db.studentVideoAssignments[k])) {
       videoAssigns = db.studentVideoAssignments[k];
       if (videoAssigns.length > 0) break;
+    }
+  }
+
+  // If video assignments were missing but routines already has teacherVideos configured, extract them!
+  if (videoAssigns.length === 0 && routines) {
+    Object.keys(routines).forEach((d) => {
+      const dayList = routines[d];
+      if (Array.isArray(dayList)) {
+        dayList.forEach((act: any) => {
+          if (Array.isArray(act.teacherVideos) && act.teacherVideos.length > 0) {
+            const v = act.teacherVideos[0];
+            if (v && (v.videoId || v.url)) {
+              videoAssigns.push({ ...v, day: d, dayOfWeek: d });
+            }
+          }
+        });
+      }
+    });
+    if (videoAssigns.length > 0) {
+      if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+      targetKeys.forEach((k) => {
+        db.studentVideoAssignments[k] = videoAssigns;
+      });
     }
   }
   for (const k of targetKeys) {
@@ -4180,14 +4226,19 @@ app.get('/api/student-routines', (req, res) => {
         if (!db.studentAwaitingTopicSelection) db.studentAwaitingTopicSelection = {};
         db.studentAwaitingTopicSelection[k] = true;
       });
-      // If routines map is empty or has leftover video data, sanitize to clean routines
+      // If routines map is empty, initialize to clean routines
       if (!routines || typeof routines !== 'object' || Object.keys(routines).length === 0) {
         routines = createCleanStudentRoutines();
       } else {
-        // Sanitize video activities so they strictly start in "Choose Topic..."
+        // Only sanitize days that do NOT already have a selected video; NEVER wipe configured videos or words!
         Object.keys(routines).forEach((d) => {
           if (Array.isArray(routines[d])) {
             routines[d] = routines[d].map((act: any) => {
+              const hasExistingVideo = Array.isArray(act.teacherVideos) && act.teacherVideos.length > 0 && Boolean(act.teacherVideos[0]?.videoId || act.teacherVideos[0]?.url);
+              if (hasExistingVideo) {
+                // Preserve the configured video and words!
+                return act;
+              }
               const isVideo =
                 act.id?.endsWith('1') ||
                 act.activityName?.toLowerCase().includes('vídeo') ||
@@ -4197,11 +4248,12 @@ app.get('/api/student-routines', (req, res) => {
                   ...act,
                   activityName: 'Video of the Day',
                   teacherVideos: [],
-                  playlistId: '',
-                  playlistTitle: '',
-                  completed: false,
-                  completedToday: false,
-                  isRepeatVideo: false,
+                  playlistId: act.playlistId || '',
+                  playlistTitle: act.playlistTitle || '',
+                  completed: act.completed || false,
+                  completedToday: act.completedToday || false,
+                  isRepeatVideo: act.isRepeatVideo || false,
+                  learnedWords: act.learnedWords || [],
                 };
               }
               return act;
@@ -6579,14 +6631,32 @@ app.post('/api/routines', (req, res) => {
 
 app.post('/api/routines/words', (req, res) => {
   const db = readDb();
-  const { day, activityId, words } = req.body;
+  const { day, activityId, words, studentEmail, studentUid } = req.body;
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const targetKeys = Array.from(new Set([email, uid, studentEmail, studentUid].filter(Boolean) as string[]));
+
   if (db.routinesByDay && db.routinesByDay[day]) {
-    db.routinesByDay[day] = db.routinesByDay[day].map((item: any) =>
-      item.id === activityId ? { ...item, learnedWords: words } : item
+    db.routinesByDay[day] = db.routinesByDay[day].map((item: any, idx: number) =>
+      item.id === activityId || (!activityId && idx === 0) ? { ...item, learnedWords: words } : item
     );
-    writeDb(db);
   }
-  res.json({ success: true });
+
+  if (targetKeys.length > 0) {
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    targetKeys.forEach((k) => {
+      if (!db.studentRoutinesMap[k]) {
+        db.studentRoutinesMap[k] = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+      }
+      if (db.studentRoutinesMap[k][day]) {
+        db.studentRoutinesMap[k][day] = db.studentRoutinesMap[k][day].map((item: any, idx: number) =>
+          item.id === activityId || (!activityId && idx === 0) ? { ...item, learnedWords: words } : item
+        );
+      }
+    });
+  }
+
+  writeDb(db);
+  res.json({ success: true, learnedWords: words });
 });
 
 app.post('/api/routines/toggle', (req, res) => {
@@ -8296,27 +8366,77 @@ app.post('/api/student-video-assignments/watch', (req, res) => {
 });
 
 app.post('/api/routines/daily-video', (req, res) => {
-  const { studentUid, day, dayOfWeek, videoId, title, videoTitle, url, playlistId, playlistTitle, isRepeatVideo } = req.body;
+  const db = readDb();
+  const { studentUid, studentEmail, day, dayOfWeek, videoId, title, videoTitle, url, playlistId, playlistTitle, isRepeatVideo } = req.body;
   const targetDay = dayOfWeek || day;
-  if (!studentUid || !targetDay) {
-    return res.status(400).json({ error: 'studentUid and day are required' });
+  if ((!studentUid && !studentEmail) || !targetDay) {
+    return res.status(400).json({ error: 'studentUid/studentEmail and day are required' });
   }
 
+  const { email, uid } = resolveStudentIdentifiers(db, studentEmail, studentUid);
+  const targetKeys = Array.from(new Set([email, uid, studentUid, studentEmail].filter(Boolean) as string[]));
+
   const cleanVidId = extractServerYouTubeId(videoId || url);
-  saveRoutineVideoSubcollection(studentUid, targetDay, {
+  const cleanTitle = title || videoTitle || 'Daily Video Practice';
+  const cleanUrl = url || (cleanVidId ? `https://www.youtube.com/watch?v=${cleanVidId}` : '');
+
+  const videoObj = {
+    id: cleanVidId || videoId,
     videoId: cleanVidId || videoId,
-    title: title || videoTitle || 'Daily Video Practice',
-    videoTitle: videoTitle || title || 'Daily Video Practice',
-    url: url || (cleanVidId ? `https://www.youtube.com/watch?v=${cleanVidId}` : ''),
+    title: cleanTitle,
+    videoTitle: cleanTitle,
+    url: cleanUrl,
     playlistId: playlistId || '',
     playlistTitle: playlistTitle || '',
     dayOfWeek: targetDay,
     isRepeatVideo: Boolean(isRepeatVideo),
     updatedAt: new Date().toISOString(),
-  }).catch(() => {});
+  };
 
-  if (cleanVidId && !isRepeatVideo) {
-    addWatchedVideoToUserDoc(studentUid, cleanVidId).catch(() => {});
+  targetKeys.forEach((k) => {
+    // 1. Update studentVideoAssignments
+    if (!db.studentVideoAssignments) db.studentVideoAssignments = {};
+    if (!Array.isArray(db.studentVideoAssignments[k])) db.studentVideoAssignments[k] = [];
+    const existingIdx = db.studentVideoAssignments[k].findIndex((v: any) => (v.day || v.dayOfWeek) === targetDay);
+    if (existingIdx >= 0) {
+      db.studentVideoAssignments[k][existingIdx] = { ...db.studentVideoAssignments[k][existingIdx], ...videoObj, day: targetDay };
+    } else {
+      db.studentVideoAssignments[k].push({ ...videoObj, day: targetDay });
+    }
+
+    // 2. Clear awaiting topic selection
+    if (db.studentAwaitingTopicSelection) {
+      db.studentAwaitingTopicSelection[k] = false;
+    }
+
+    // 3. Update studentRoutinesMap
+    if (!db.studentRoutinesMap) db.studentRoutinesMap = {};
+    if (!db.studentRoutinesMap[k]) {
+      db.studentRoutinesMap[k] = JSON.parse(JSON.stringify(db.routinesByDay || defaultRoutinesByDay));
+    }
+    if (db.studentRoutinesMap[k][targetDay]) {
+      db.studentRoutinesMap[k][targetDay] = db.studentRoutinesMap[k][targetDay].map((item: any, idx: number) => {
+        if (idx === 0 || item.id?.endsWith('1') || item.activityName?.toLowerCase().includes('vídeo') || item.activityName?.toLowerCase().includes('video')) {
+          return {
+            ...item,
+            teacherVideos: [videoObj],
+            playlistId: playlistId || '',
+            playlistTitle: playlistTitle || '',
+            isRepeatVideo: Boolean(isRepeatVideo),
+          };
+        }
+        return item;
+      });
+    }
+  });
+
+  writeDb(db);
+
+  if (cleanVidId && uid) {
+    saveRoutineVideoSubcollection(uid, targetDay, videoObj).catch(() => {});
+    if (!isRepeatVideo) {
+      addWatchedVideoToUserDoc(uid, cleanVidId).catch(() => {});
+    }
   }
 
   res.json({ success: true });
