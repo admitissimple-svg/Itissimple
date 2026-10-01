@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   BookOpen,
   Volume2,
@@ -30,6 +30,8 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
   speakText,
   studentLevel,
 }) => {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
   return (
     <div className="bg-white rounded-3xl p-5 border border-[#607EC9]/30 shadow-xs space-y-4 flex flex-col justify-between h-full">
       <div>
@@ -68,10 +70,14 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
               ? wordDefinitions[idx] || getInstantOrCachedWord(cleanWord, undefined, studentLevel)
               : null;
 
+            const isHovered = hoveredIdx === idx && Boolean(cleanWord && def && def.definitionEn);
+
             return (
               <div
                 key={idx}
-                className="flex items-center gap-2 p-1.5 rounded-2xl bg-slate-50 border border-slate-200 focus-within:border-[#1C4C96] focus-within:ring-1 focus-within:ring-[#1C4C96] transition"
+                className={`flex items-center gap-2 p-1.5 rounded-2xl bg-slate-50 border border-slate-200 focus-within:border-[#1C4C96] focus-within:ring-1 focus-within:ring-[#1C4C96] transition relative ${
+                  isHovered ? 'z-30 ring-1 ring-[#1C4C96]/30 bg-slate-100/80' : 'z-10'
+                }`}
               >
                 <span className="w-6 h-6 rounded-lg bg-[#000035] text-[#9AB4FF] text-[10px] font-black flex items-center justify-center shrink-0">
                   {idx + 1}
@@ -93,53 +99,125 @@ export const StudentKeyWordsCard: React.FC<StudentKeyWordsCardProps> = ({
                 {/* Divider */}
                 <div className="w-px h-4 bg-slate-300/80 shrink-0" />
 
-                {/* English Description adhering to Native Friend Notes standard */}
+                {/* English Description adhering to Native Friend Notes standard with Temporary Hover Expansion */}
                 {cleanWord && def ? (
                   <div
-                    className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden"
-                    title={
-                      def.notFound
-                        ? (isEn ? 'Word not found in dictionary.' : 'Palavra não localizada no dicionário.')
-                        : def.definitionEn
-                        ? `${def.cefrLevel ? `[${def.cefrLevel}] ` : ''}${def.partOfSpeech ? `[${def.partOfSpeech}] ` : ''}${def.definitionEn}${
-                            def.exampleSentenceEn ? ` — e.g. "${def.exampleSentenceEn}"` : ''
-                          }`
-                        : undefined
-                    }
+                    className="relative flex-1 min-w-0"
+                    onMouseEnter={() => setHoveredIdx(idx)}
+                    onMouseLeave={() => setHoveredIdx((prev) => (prev === idx ? null : prev))}
                   >
-                    {def.notFound ? (
-                      <span className="text-xs text-amber-600 font-medium italic truncate flex items-center gap-1">
-                        <span className="text-xs">⚠️</span>
-                        <span>{isEn ? 'Word not found in standard dictionary.' : 'Palavra não localizada no dicionário padrão.'}</span>
-                      </span>
-                    ) : def.definitionEn ? (
-                      <>
-                        {/* CEFR Level Badge (Native Friend Notes Standard) */}
-                        {def.cefrLevel && (
-                          <span className="text-[9px] font-black text-white bg-[#000035] px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 select-none shadow-2xs">
-                            {def.cefrLevel}
-                          </span>
-                        )}
-                        {/* Grammatical Class (Part of Speech) Badge */}
-                        {def.partOfSpeech && (
-                          <span className="text-[9px] font-bold text-[#1C4C96] bg-[#9AB4FF]/20 border border-[#9AB4FF]/40 px-1 py-0.2 rounded uppercase tracking-wider shrink-0 select-none">
-                            {def.partOfSpeech.split('/')[0].trim()}
-                          </span>
-                        )}
-                        <span className="text-xs text-slate-700 truncate font-normal leading-tight">
-                          {def.definitionEn}
+                    {/* Collapsed view (clean single-line with hover affordance) */}
+                    <div
+                      className={`flex items-center gap-1.5 overflow-hidden rounded-xl px-1.5 py-0.5 transition-colors cursor-pointer select-none ${
+                        isHovered ? 'bg-[#9AB4FF]/20' : 'hover:bg-[#9AB4FF]/10'
+                      }`}
+                      onClick={() => setHoveredIdx((prev) => (prev === idx ? null : idx))}
+                      title={
+                        isEn
+                          ? 'Hover or click to view full definition and example'
+                          : 'Passe o mouse ou clique para ver definição completa e exemplos'
+                      }
+                    >
+                      {def.notFound ? (
+                        <span className="text-xs text-amber-600 font-medium italic truncate flex items-center gap-1">
+                          <span className="text-xs">⚠️</span>
+                          <span>{isEn ? 'Word not found in standard dictionary.' : 'Palavra não localizada no dicionário padrão.'}</span>
                         </span>
-                        {def.exampleSentenceEn && (
-                          <span className="text-[11px] text-slate-500 italic truncate font-normal hidden md:inline">
-                            — "{def.exampleSentenceEn}"
+                      ) : def.definitionEn ? (
+                        <>
+                          {/* CEFR Level Badge (Native Friend Notes Standard) */}
+                          {def.cefrLevel && (
+                            <span className="text-[9px] font-black text-white bg-[#000035] px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 select-none shadow-2xs">
+                              {def.cefrLevel}
+                            </span>
+                          )}
+                          {/* Grammatical Class (Part of Speech) Badge */}
+                          {def.partOfSpeech && (
+                            <span className="text-[9px] font-bold text-[#1C4C96] bg-[#9AB4FF]/20 border border-[#9AB4FF]/40 px-1 py-0.2 rounded uppercase tracking-wider shrink-0 select-none">
+                              {def.partOfSpeech.split('/')[0].trim()}
+                            </span>
+                          )}
+                          <span className="text-xs text-slate-700 truncate font-normal leading-tight">
+                            {def.definitionEn}
                           </span>
+                          {def.exampleSentenceEn && (
+                            <span className="text-[11px] text-slate-500 italic truncate font-normal hidden md:inline">
+                              — "{def.exampleSentenceEn}"
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[11px] text-purple-700 italic truncate select-none flex items-center gap-1.5 animate-pulse">
+                          <Sparkles className="w-3 h-3 text-purple-600 shrink-0" />
+                          <span>{isEn ? 'AI personalizing definition & real examples...' : 'AI personalizando definição e exemplos reais...'}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Temporarily Expanded Box on Hover (Padrão Native Friend Notes) */}
+                    {isHovered && def.definitionEn && (
+                      <div
+                        className={`absolute left-0 z-50 w-full min-w-[280px] sm:min-w-[360px] md:min-w-[420px] max-w-lg bg-white rounded-2xl p-3.5 shadow-2xl border-2 border-[#1C4C96]/40 pointer-events-auto transition-all animate-in fade-in zoom-in-95 duration-150 ${
+                          idx >= 3 ? 'bottom-0' : 'top-0'
+                        }`}
+                        style={{
+                          boxShadow: '0 20px 30px -10px rgba(0, 0, 53, 0.25), 0 10px 15px -5px rgba(28, 76, 150, 0.15)',
+                        }}
+                        onMouseEnter={() => setHoveredIdx(idx)}
+                        onMouseLeave={() => setHoveredIdx((prev) => (prev === idx ? null : prev))}
+                      >
+                        {/* Header with Word, CEFR, Part of Speech, and Pronunciation */}
+                        <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 mb-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-[#000035] tracking-tight mr-1">
+                              {cleanWord}
+                            </span>
+                            {def.cefrLevel && (
+                              <span className="text-[9px] font-black text-white bg-[#000035] px-1.5 py-0.5 rounded uppercase tracking-wider shadow-2xs">
+                                {def.cefrLevel}
+                              </span>
+                            )}
+                            {def.partOfSpeech && (
+                              <span className="text-[9px] font-bold text-[#1C4C96] bg-[#9AB4FF]/20 border border-[#9AB4FF]/40 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                {def.partOfSpeech}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                speakText(cleanWord);
+                              }}
+                              className="p-1 text-[#1C4C96] hover:bg-[#9AB4FF]/20 rounded-lg transition cursor-pointer"
+                              title={isEn ? 'Listen to word pronunciation' : 'Ouvir pronúncia da palavra'}
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="text-[9px] text-purple-700 font-semibold flex items-center gap-1 bg-purple-50 px-1.5 py-0.5 rounded-md border border-purple-200/60">
+                              <Sparkles className="w-2.5 h-2.5 text-purple-600" />
+                              <span>Native Friend Notes</span>
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Full English Definition */}
+                        <div className="text-xs text-[#000035] leading-relaxed font-medium">
+                          {def.definitionEn}
+                        </div>
+
+                        {/* Full Authentic Example Sentence */}
+                        {def.exampleSentenceEn && (
+                          <div className="mt-2.5 p-2.5 rounded-xl bg-[#9AB4FF]/10 border border-[#607EC9]/30 text-xs text-[#062863] italic leading-relaxed flex items-start gap-1.5">
+                            <span className="font-bold text-[#1C4C96] not-italic shrink-0 text-[11px] uppercase tracking-wide">
+                              {isEn ? 'Example:' : 'Exemplo:'}
+                            </span>
+                            <span>"{def.exampleSentenceEn}"</span>
+                          </div>
                         )}
-                      </>
-                    ) : (
-                      <span className="text-[11px] text-purple-700 italic truncate select-none flex items-center gap-1.5 animate-pulse">
-                        <Sparkles className="w-3 h-3 text-purple-600 shrink-0" />
-                        <span>{isEn ? 'AI personalizing definition & real examples...' : 'AI personalizando definição e exemplos reais...'}</span>
-                      </span>
+                      </div>
                     )}
                   </div>
                 ) : (
