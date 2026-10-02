@@ -95,6 +95,7 @@ interface AuthModalProps {
     initialProfile?: Partial<UserProfile>,
     tutorData?: NativeFriendTutor
   ) => void;
+  onOpenOnboarding?: (email?: string) => void;
 }
 
 const ROLE_LABELS: Record<
@@ -228,6 +229,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   currentLanguage,
   onShowToast,
   onLoginSuccess,
+  onOpenOnboarding,
 }) => {
   const isEn = currentLanguage === 'en';
   const roleText = ROLE_LABELS[currentLanguage] || ROLE_LABELS.pt;
@@ -1015,6 +1017,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
               <span className="leading-snug">{errorMsg}</span>
             </div>
+            {(errorMsg.toLowerCase().includes('não encontrada') ||
+              errorMsg.toLowerCase().includes('not found') ||
+              errorMsg.toLowerCase().includes('crie seu cadastro') ||
+              errorMsg.toLowerCase().includes('cadastre-se')) && role === 'student' && onOpenOnboarding && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenOnboarding(email.trim());
+                  onClose();
+                }}
+                className="self-start py-2 px-3.5 bg-[#000035] hover:bg-[#062863] text-white text-xs font-black rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-98"
+              >
+                <span>{isEn ? 'Start Student Onboarding Wizard →' : 'Criar cadastro no Wizard Onboard →'}</span>
+              </button>
+            )}
+
             {(errorMsg.toLowerCase().includes('já está cadastrado') ||
               errorMsg.toLowerCase().includes('already registered') ||
               errorMsg.toLowerCase().includes('já existe')) && (

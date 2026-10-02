@@ -40,7 +40,8 @@ export interface LoginModalProps {
     initialProfile?: Partial<UserProfile>,
     tutorData?: NativeFriendTutor
   ) => void;
-  onSwitchToSignUp?: (role: UserRole) => void;
+  onSwitchToSignUp?: (role: UserRole, email?: string) => void;
+  onOpenOnboarding?: (email?: string) => void;
 }
 
 const ROLE_LABELS: Record<
@@ -84,6 +85,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onShowToast,
   onLoginSuccess,
   onSwitchToSignUp,
+  onOpenOnboarding,
 }) => {
   const isEn = currentLanguage === 'en';
   const roleText = ROLE_LABELS[currentLanguage] || ROLE_LABELS.pt;
@@ -585,11 +587,30 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               </div>
             </div>
 
-            {/* Error Message */}
+            {/* Error Message with direct Wizard Onboarding action */}
             {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-                <span className="font-medium">{errorMsg}</span>
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex flex-col gap-2.5 animate-in fade-in">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+                  <span className="font-medium leading-relaxed">{errorMsg}</span>
+                </div>
+                {selectedRole === 'student' && (onOpenOnboarding || onSwitchToSignUp) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cleanEmail = email.trim();
+                      if (onOpenOnboarding) {
+                        onOpenOnboarding(cleanEmail);
+                      } else if (onSwitchToSignUp) {
+                        onSwitchToSignUp('student', cleanEmail);
+                      }
+                      onClose();
+                    }}
+                    className="self-start py-2 px-3.5 bg-[#000035] hover:bg-[#062863] text-white text-xs font-black rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-98"
+                  >
+                    <span>{isEn ? 'Start Student Onboarding Wizard →' : 'Criar cadastro no Wizard Onboard →'}</span>
+                  </button>
+                )}
               </div>
             )}
 
@@ -626,13 +647,21 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           </form>
 
           {/* Switch to SignUp */}
-          {onSwitchToSignUp && (
+          {(onSwitchToSignUp || onOpenOnboarding) && (
             <div className="mt-5 text-center pt-4 border-t border-slate-100">
               <p className="text-xs text-slate-500">
                 {isEn ? "Don't have an account yet?" : 'Ainda não possui uma conta?'}{' '}
                 <button
                   type="button"
-                  onClick={() => onSwitchToSignUp(selectedRole)}
+                  onClick={() => {
+                    const cleanEmail = email.trim();
+                    if (selectedRole === 'student' && onOpenOnboarding) {
+                      onOpenOnboarding(cleanEmail);
+                      onClose();
+                    } else if (onSwitchToSignUp) {
+                      onSwitchToSignUp(selectedRole, cleanEmail);
+                    }
+                  }}
                   className="font-extrabold text-[#1C4C96] hover:underline cursor-pointer"
                 >
                   {isEn ? 'Create account' : 'Cadastre-se gratuitamente'}

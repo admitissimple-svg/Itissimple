@@ -793,6 +793,22 @@ app.post('/api/auth/login', async (req, res) => {
     await writeDbSync(db);
   }
 
+  // If an active user profile exists in db.userProfiles, restore authRecord so active students are never locked out
+  if (!authRecord && db.userProfiles?.[cleanEmail] && (db.userProfiles[cleanEmail].onboardingCompleted || db.userProfiles[cleanEmail].enrollmentStatus === 'active')) {
+    const prof = db.userProfiles[cleanEmail];
+    authRecord = {
+      uid: prof.uid || prof.id || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+      email: cleanEmail,
+      name: prof.name || cleanEmail.split('@')[0],
+      password: password || '',
+      role: 'student',
+      createdAt: prof.createdAt || new Date().toISOString(),
+    };
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = authRecord;
+    await writeDbSync(db);
+  }
+
   // Strictly require existing registered account (no auto-creating unregistered accounts on login)
   if (!authRecord && cleanEmail !== 'adm.itissimple@gmail.com') {
     const isKnownTeacher = (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
@@ -3393,31 +3409,11 @@ app.get('/api/user-profile', (req, res) => {
     db.userProfiles[email] = profile;
     writeDb(db);
   } else if (!profile && !student) {
-    const defaultName = (req.query.name as string) || email.split('@')[0];
-    profile = {
-      id: `usr-${Date.now()}`,
-      name: defaultName.charAt(0).toUpperCase() + defaultName.slice(1),
-      email,
-      level: 'iniciante',
-      routineVideoTime: '09:00',
-      routineAudioTime: '14:00',
-      dailyPhraseTime: '20:00',
-      enrollmentStatus: 'not_enrolled',
-      learningGoal: 'English for everyday life & work',
-      streakDays: 0,
-      streakCount: 0,
-      points: 0,
-      dailyGoalMinutes: 30,
-      completedTodayMinutes: 0,
-      contractedLessons: db.contractedLessons?.[email] ?? 0,
-      completedLessonsCount: 0,
-      teacherEmail: null,
-      teacherName: null,
-      createdAt: new Date().toISOString(),
-    };
-    if (!db.userProfiles) db.userProfiles = {};
-    db.userProfiles[email] = profile;
-    writeDb(db);
+    return res.json({
+      success: true,
+      profile: null,
+      message: 'Profile not found',
+    });
   }
 
   if (profile) {

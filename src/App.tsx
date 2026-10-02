@@ -5327,9 +5327,21 @@ export default function App() {
           ...prev,
         ]);
       }}
-      onSwitchToSignUp={(role) => {
-        setAuthModalMode('signup');
-        setAuthModalRole(role || 'student');
+      onOpenOnboarding={(email) => {
+        setIsAuthModalOpen(false);
+        setOnboardingInitialEmail(email || authInitialEmail || '');
+        setIsOnboardingModalOpen(true);
+      }}
+      onSwitchToSignUp={(role, email) => {
+        if (role === 'student') {
+          setIsAuthModalOpen(false);
+          setOnboardingInitialEmail(email || authInitialEmail || '');
+          setIsOnboardingModalOpen(true);
+        } else {
+          setAuthModalMode('signup');
+          setAuthModalRole(role || 'student');
+          if (email) setAuthInitialEmail(email);
+        }
       }}
     />
   ) : (
@@ -5341,6 +5353,11 @@ export default function App() {
       initialEmail={authInitialEmail}
       currentLanguage={currentLanguage}
       onLoginSuccess={handleLoginSuccess}
+      onOpenOnboarding={(email) => {
+        setIsAuthModalOpen(false);
+        setOnboardingInitialEmail(email || authInitialEmail || '');
+        setIsOnboardingModalOpen(true);
+      }}
       onShowToast={(title, message, type) => {
         setNotifications((prev) => [
           {
