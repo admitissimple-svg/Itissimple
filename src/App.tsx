@@ -46,7 +46,7 @@ import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
 import { getInstantOrCachedWord } from './utils/dictionaryService';
 import { auth, getDb } from './firebase';
 import { onAuthStateChanged, signOut as firebaseSignOutAuth } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -516,12 +516,82 @@ export default function App() {
             });
           }
         }
+        // Direct Cloud Firestore /tutors collection fetch for 100% cloud persistence & zero data loss
+        try {
+          const fsTutorsSnap = await getDocs(collection(getDb(), 'tutors'));
+          const fsTutorsList: NativeFriendTutor[] = [];
+          fsTutorsSnap.forEach((d) => {
+            const data = d.data();
+            if (data && data.email && d.id !== 'test_tutor_id') {
+              fsTutorsList.push({ id: d.id, ...data } as any);
+            }
+          });
+          if (fsTutorsList.length > 0) {
+            setTutors((prev) => {
+              const map = new Map<string, NativeFriendTutor>();
+              prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+              fsTutorsList.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+              return Array.from(map.values());
+            });
+            setTeacherMeetSettings((prev) => {
+              const updated = { ...prev };
+              fsTutorsList.forEach((tut: any) => {
+                const email = (tut.email || '').toLowerCase().trim();
+                const mUrl = (tut.meetUrl || tut.meetLink || '').trim();
+                if (email && mUrl) {
+                  updated[email] = {
+                    ...(updated[email] || {
+                      workingHoursStart: '08:00',
+                      workingHoursEnd: '18:00',
+                      slotDurationMinutes: 30,
+                      availableDays: tut.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+                      timezone: tut.timezone || 'America/Toronto',
+                    }),
+                    teacherEmail: email,
+                    meetLink: mUrl,
+                  };
+                }
+              });
+              return updated;
+            });
+          }
+        } catch (fsErr) {
+          console.warn('Direct Firestore tutors fetch notice:', fsErr);
+        }
       } catch (err) {
         console.warn('Using local default state:', err);
       }
     }
 
     loadInitialData();
+
+    // Attach real-time Firestore listener for tutors collection to ensure instantaneous sync
+    let unsubTutors: (() => void) | undefined;
+    try {
+      unsubTutors = onSnapshot(collection(getDb(), 'tutors'), (snapshot) => {
+        const liveTutors: NativeFriendTutor[] = [];
+        snapshot.forEach((d) => {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_tutor_id') {
+            liveTutors.push({ id: d.id, ...data } as any);
+          }
+        });
+        if (liveTutors.length > 0) {
+          setTutors((prev) => {
+            const map = new Map<string, NativeFriendTutor>();
+            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+            liveTutors.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+            return Array.from(map.values());
+          });
+        }
+      }, (err) => {
+        console.warn('Realtime tutors subscription notice:', err);
+      });
+    } catch {}
+
+    return () => {
+      if (unsubTutors) unsubTutors();
+    };
   }, []);
 
   // Check for direct /admin, #admin, /teacher, or #teacher URL triggers with strict RBAC enforcement
@@ -1147,6 +1217,27 @@ export default function App() {
 
       async function loadTeacherProfile() {
         try {
+          const cleanEmail = email.toLowerCase().trim();
+          const cleanTutorId = `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+          // Direct Firestore tutor document check (Authoritative)
+          try {
+            const tutorSnap = await getDoc(doc(getDb(), 'tutors', cleanTutorId));
+            if (tutorSnap.exists()) {
+              const directTutor = { id: tutorSnap.id, ...tutorSnap.data() } as NativeFriendTutor;
+              setTutors((prev) => {
+                const filtered = prev.filter(
+                  (t) =>
+                    t.email.toLowerCase() !== directTutor.email.toLowerCase() &&
+                    t.id !== directTutor.id
+                );
+                return [...filtered, directTutor];
+              });
+            }
+          } catch (fsErr) {
+            console.warn('Direct Firestore tutor check notice:', fsErr);
+          }
+
           const res = await fetch(`/api/user-profile?email=${encodeURIComponent(email)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`);
           if (res.ok) {
             const data = await res.json();
@@ -3773,6 +3864,26 @@ export default function App() {
     );
 
     try {
+      const cleanDocEmail = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+      const cleanTutorId = `tutor-${cleanDocEmail}`;
+      await Promise.all([
+        setDoc(doc(getDb(), 'teacher_availability', cleanDocEmail), {
+          ...merged,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true }),
+        setDoc(doc(getDb(), 'tutors', cleanTutorId), {
+          meetUrl: settings.meetLink,
+          timezone: settings.timezone,
+          availableDays: settings.availableDays,
+          availability: settings.availability || settings.availableHoursByDay,
+          updatedAt: new Date().toISOString(),
+        }, { merge: true }),
+      ]);
+    } catch (fsErr) {
+      console.warn('Direct Firestore teacher settings notice:', fsErr);
+    }
+
+    try {
       await fetch('/api/teacher-settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3986,6 +4097,20 @@ export default function App() {
         }
         return prev;
       });
+    }
+
+    // Direct Firestore persistence for instant consistency
+    try {
+      const cleanDocId = mergedTutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+      await setDoc(doc(getDb(), 'tutors', cleanDocId), {
+        ...mergedTutor,
+        id: cleanDocId,
+        email: cleanEmail,
+        role: 'teacher',
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    } catch (fsErr) {
+      console.warn('Direct Firestore tutor update notice:', fsErr);
     }
 
     try {

@@ -635,13 +635,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           const docRole = (firestoreUserDoc?.role || '').toLowerCase();
           let verifiedRole: UserRole = 'student';
 
+          // Check if user is a registered Native Friend in Firestore or backend
+          let isRegisteredTutorDoc = false;
+          try {
+            const cleanTutorId = `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+            const tutorSnap = await getDoc(doc(getDb(), 'tutors', cleanTutorId)).catch(() => null);
+            if (tutorSnap && tutorSnap.exists()) {
+              isRegisteredTutorDoc = true;
+            }
+          } catch {}
+
           if (cleanEmail === 'adm.itissimple@gmail.com') {
             verifiedRole = 'admin';
+          } else if (isRegisteredTutorDoc || docRole === 'native_friend' || docRole === 'teacher' || account.role === 'teacher') {
+            verifiedRole = 'teacher';
           } else if (docRole === 'student' || account.role === 'student') {
             // STRICT RBAC: Registered student locked strictly to student role
             verifiedRole = 'student';
-          } else if (docRole === 'native_friend' || docRole === 'teacher' || account.role === 'teacher') {
-            verifiedRole = 'teacher';
           } else if (docRole === 'admin') {
             verifiedRole = cleanEmail === 'adm.itissimple@gmail.com' ? 'admin' : 'student';
           } else {

@@ -16,6 +16,8 @@ import { Language, DayOfWeek } from '../types';
 import { ImageUploadInput } from './ImageUploadInput';
 import { TIMEZONE_OPTIONS, getDefaultTimezoneForCountry } from '../utils/timezone';
 import { extractYouTubeVideoId } from '../utils/youtube';
+import { doc, setDoc } from 'firebase/firestore';
+import { getDb } from '../firebase';
 
 interface BecomeTutorModalProps {
   isOpen: boolean;
@@ -160,6 +162,43 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
       }
 
       const createdTutor = resData.tutor || tutorPayload;
+
+      // Direct Cloud Firestore persistence for /tutors/{tutorId}, /users/{cleanDocId}, and /teacher_availability/
+      try {
+        const firestore = getDb();
+        const cleanTutorId = createdTutor.id || `tutor-${tutorPayload.email.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        const cleanDocEmail = tutorPayload.email.replace(/[^a-zA-Z0-9]/g, '-');
+        await Promise.all([
+          setDoc(doc(firestore, 'tutors', cleanTutorId), {
+            ...createdTutor,
+            id: cleanTutorId,
+            email: tutorPayload.email,
+            role: 'teacher',
+            updatedAt: new Date().toISOString(),
+          }, { merge: true }),
+          setDoc(doc(firestore, 'users', cleanDocEmail), {
+            email: tutorPayload.email,
+            name: tutorPayload.name,
+            role: 'teacher',
+            country: tutorPayload.country,
+            timezone: tutorPayload.timezone,
+            avatar: tutorPayload.avatar,
+            updatedAt: new Date().toISOString(),
+          }, { merge: true }),
+          setDoc(doc(firestore, 'teacher_availability', cleanDocEmail), {
+            teacherEmail: tutorPayload.email,
+            meetLink: formData.meetUrl,
+            workingHoursStart: '08:00',
+            workingHoursEnd: '18:00',
+            slotDurationMinutes: 30,
+            availableDays: formData.availableDays,
+            timezone: formData.timezone || 'America/Toronto',
+            updatedAt: new Date().toISOString(),
+          }, { merge: true }),
+        ]);
+      } catch (fsErr) {
+        console.warn('Direct Firestore registration sync notice:', fsErr);
+      }
 
       // Save meet settings
       await fetch('/api/meet-settings', {

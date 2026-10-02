@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, setLogLevel, doc, getDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, setLogLevel, doc, getDoc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 
@@ -11,11 +11,14 @@ try {
 export const ACTIVE_FIREBASE_PROJECT_ID = 'itissimple-8663d';
 export const ACTIVE_PROJECT_NUMBER = '245342369537';
 export const ACTIVE_FIREBASE_AUTH_DOMAIN = `${ACTIVE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
-export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.appspot.com`;
-export const ACTIVE_OAUTH_CLIENT_ID = '';
+export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.firebasestorage.app`;
+export const ACTIVE_OAUTH_CLIENT_ID = '245342369537-9e4gb0lshgsacvt7dkd66d64orr20fn6.apps.googleusercontent.com';
 export const ACTIVE_FIREBASE_APP_ID = '1:245342369537:web:7c8551e8eeb3933ed68d00';
 export const ACTIVE_APP_ID = ACTIVE_FIREBASE_APP_ID;
-export const ACTIVE_FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
+export const ACTIVE_FIREBASE_DATABASE_ID =
+  (process.env.FIREBASE_DATABASE_ID && process.env.FIREBASE_DATABASE_ID !== '(default)')
+    ? process.env.FIREBASE_DATABASE_ID
+    : 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
 export const ACTIVE_FIRESTORE_DATABASE_ID = ACTIVE_FIREBASE_DATABASE_ID;
 
 let dbInstance: any = null;
@@ -29,17 +32,20 @@ export function getFirestoreDb() {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       // Enforce active project configuration: itissimple-8663d and dedicated firestore database ID
       config.projectId = ACTIVE_FIREBASE_PROJECT_ID;
-      config.appId = `1:${ACTIVE_PROJECT_NUMBER}:web:${ACTIVE_FIREBASE_PROJECT_ID}`;
-      config.apiKey = process.env.FIREBASE_API_KEY || config.apiKey || 'AIzaSyBDgPCPMD36mSX0lkkyEcz6-rHJdBqk';
+      config.appId = config.appId || ACTIVE_FIREBASE_APP_ID;
+      config.apiKey = process.env.FIREBASE_API_KEY || config.apiKey || 'AIzaSyBDgPCPMD5wd36mSX0lkkyECz6-rHJdBqk';
       config.authDomain = ACTIVE_FIREBASE_AUTH_DOMAIN;
-      config.storageBucket = ACTIVE_FIREBASE_STORAGE_BUCKET;
-      config.firestoreDatabaseId = ACTIVE_FIRESTORE_DATABASE_ID;
+      config.storageBucket = config.storageBucket || ACTIVE_FIREBASE_STORAGE_BUCKET;
+      const targetDbId = (config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)')
+        ? config.firestoreDatabaseId
+        : ACTIVE_FIRESTORE_DATABASE_ID;
+      config.firestoreDatabaseId = targetDbId;
       config.messagingSenderId = ACTIVE_PROJECT_NUMBER;
-      config.oAuthClientId = ACTIVE_OAUTH_CLIENT_ID;
+      config.oAuthClientId = config.oAuthClientId || ACTIVE_OAUTH_CLIENT_ID;
 
       const app = getApps().length === 0 ? initializeApp(config) : getApp();
-      dbInstance = config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)'
-        ? getFirestore(app, config.firestoreDatabaseId)
+      dbInstance = targetDbId && targetDbId !== '(default)'
+        ? getFirestore(app, targetDbId)
         : getFirestore(app);
       return dbInstance;
     }
@@ -50,7 +56,7 @@ export function getFirestoreDb() {
 }
 
 // Timeout helper so remote Firestore never blocks an Express API response
-function withTimeout<T>(promise: Promise<T>, ms: number = 3500): Promise<T | null> {
+function withTimeout<T>(promise: Promise<T>, ms: number = 12000): Promise<T | null> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), ms);
@@ -62,6 +68,77 @@ function withTimeout<T>(promise: Promise<T>, ms: number = 3500): Promise<T | nul
     }),
     timeoutPromise,
   ]);
+}
+
+/**
+ * Direct persistence for individual Native Friend / Tutor profiles in /tutors/{tutorId}
+ */
+export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !tutor) return false;
+  try {
+    const cleanEmail = (tutor.email || '').toLowerCase().trim();
+    const tutorId = tutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    const sanitized = JSON.parse(JSON.stringify({
+      ...tutor,
+      id: tutorId,
+      email: cleanEmail,
+      role: 'teacher',
+      updatedAt: new Date().toISOString(),
+    }));
+
+    const savePromise = setDoc(doc(db, 'tutors', tutorId), sanitized, { merge: true }).then(() => true);
+    const result = await withTimeout(savePromise, 8000);
+    return !!result;
+  } catch (err) {
+    console.warn('Firestore saveTutor error:', err);
+    return false;
+  }
+}
+
+/**
+ * Fetch all Native Friend / Tutor profiles directly from /tutors collection
+ */
+export async function fetchTutorsFromFirestore(): Promise<any[]> {
+  const db = getFirestoreDb();
+  if (!db) return [];
+  try {
+    const fetchPromise = async () => {
+      const snap = await getDocs(collection(db, 'tutors'));
+      const list: any[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        if (data && data.email && d.id !== 'test_tutor_id') {
+          list.push({
+            id: d.id,
+            ...data,
+          });
+        }
+      });
+      return list;
+    };
+    const result = await withTimeout(fetchPromise(), 10000);
+    return Array.isArray(result) ? result : [];
+  } catch (err) {
+    console.warn('Firestore fetchTutors error:', err);
+    return [];
+  }
+}
+
+/**
+ * Delete a tutor profile from /tutors/{tutorId}
+ */
+export async function deleteTutorFromFirestore(tutorId: string): Promise<boolean> {
+  const db = getFirestoreDb();
+  if (!db || !tutorId) return false;
+  try {
+    const delPromise = deleteDoc(doc(db, 'tutors', tutorId)).then(() => true);
+    const result = await withTimeout(delPromise, 6000);
+    return !!result;
+  } catch (err) {
+    console.warn('Firestore deleteTutor error:', err);
+    return false;
+  }
 }
 
 export async function fetchAppStateFromFirestore(): Promise<any | null> {
@@ -84,20 +161,43 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
       fetchDoc('assignments'),
       fetchDoc('lessons'),
       fetchDoc('youtube_playlists'),
-    ]).then(([mainData, routines, tutors, assignments, lessons, ytPlaylists]) => {
-      if (!mainData && !routines && !tutors && !assignments && !lessons && !ytPlaylists) {
+      fetchTutorsFromFirestore().catch(() => []),
+    ]).then(([mainData, routines, tutors, assignments, lessons, ytPlaylists, directTutors]) => {
+      if (!mainData && !routines && !tutors && !assignments && !lessons && !ytPlaylists && (!directTutors || directTutors.length === 0)) {
         return null;
       }
+
+      // Merge tutors from /tutors collection with tutors from app_state/tutors so NO tutor is EVER lost
+      const tutorMap = new Map<string, any>();
+      const stateTutors = Array.isArray(tutors?.tutorsList) ? tutors.tutorsList : [];
+      stateTutors.forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) tutorMap.set(key, t);
+      });
+      (directTutors || []).forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) {
+          const existing = tutorMap.get(key) || {};
+          tutorMap.set(key, { ...existing, ...t });
+        }
+      });
+
+      const consolidatedTutorsList = Array.from(tutorMap.values());
+      const mergedTutorsDoc = {
+        ...(tutors || {}),
+        tutorsList: consolidatedTutorsList,
+      };
+
       return {
         ...(mainData || {}),
         ...(routines || {}),
-        ...(tutors || {}),
+        ...mergedTutorsDoc,
         ...(assignments || {}),
         ...(lessons || {}),
         ...(ytPlaylists && ytPlaylists.playlists ? { youtubePlaylists: ytPlaylists.playlists } : {}),
       };
     });
-    return await withTimeout(fetchAllPromise, 3500);
+    return await withTimeout(fetchAllPromise, 15000);
   } catch (err) {
     console.warn('Firestore fetchAppState error:', err);
   }
@@ -220,16 +320,53 @@ export async function saveAppStateToFirestore(data: any): Promise<boolean> {
     delete mainData.studentHomeworkMap;
     mainData.updatedAt = new Date().toISOString();
 
+    // Safe tutors preservation: never overwrite existing tutors with an empty list
+    let tutorsDocToWrite = tutorsData;
+    if (!tutorsData.tutorsList || tutorsData.tutorsList.length === 0) {
+      try {
+        const existingSnap = await getDoc(doc(db, 'app_state', 'tutors')).catch(() => null);
+        if (existingSnap && existingSnap.exists()) {
+          const exData = existingSnap.data();
+          if (Array.isArray(exData?.tutorsList) && exData.tutorsList.length > 0) {
+            tutorsDocToWrite = {
+              ...tutorsData,
+              tutorsList: exData.tutorsList,
+              teachers: (tutorsData.teachers && tutorsData.teachers.length > 1) ? tutorsData.teachers : (exData.teachers || tutorsData.teachers),
+              updatedAt: new Date().toISOString(),
+            };
+          }
+        }
+      } catch {}
+    }
+
+    const tutorSavePromises = (Array.isArray(tutorsDocToWrite.tutorsList) ? tutorsDocToWrite.tutorsList : []).map((tut: any) => {
+      if (tut && (tut.id || tut.email)) {
+        const cEmail = (tut.email || '').toLowerCase().trim();
+        const tId = tut.id || `tutor-${cEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        return setDoc(doc(db, 'tutors', tId), {
+          ...tut,
+          id: tId,
+          email: cEmail,
+          role: 'teacher',
+          updatedAt: tut.updatedAt || new Date().toISOString(),
+        }, { merge: true }).catch((err) => {
+          console.warn(`Could not save individual tutor ${tId} to /tutors/ collection:`, err);
+        });
+      }
+      return Promise.resolve();
+    });
+
     const savePromises = Promise.all([
-      setDoc(doc(db, 'app_state', 'main_data'), mainData),
-      setDoc(doc(db, 'app_state', 'routines'), routinesData),
-      setDoc(doc(db, 'app_state', 'tutors'), tutorsData),
-      setDoc(doc(db, 'app_state', 'assignments'), assignmentsData),
-      setDoc(doc(db, 'app_state', 'lessons'), lessonsData),
+      setDoc(doc(db, 'app_state', 'main_data'), mainData, { merge: true }),
+      setDoc(doc(db, 'app_state', 'routines'), routinesData, { merge: true }),
+      setDoc(doc(db, 'app_state', 'tutors'), tutorsDocToWrite, { merge: true }),
+      setDoc(doc(db, 'app_state', 'assignments'), assignmentsData, { merge: true }),
+      setDoc(doc(db, 'app_state', 'lessons'), lessonsData, { merge: true }),
+      ...tutorSavePromises,
       ...(cachedYtPlaylists ? [saveYouTubePlaylistsToFirestore(cachedYtPlaylists)] : []),
     ]).then(() => true);
 
-    const result = await withTimeout(savePromises, 4000);
+    const result = await withTimeout(savePromises, 15000);
     return !!result;
   } catch (err) {
     console.warn('Firestore saveAppState error:', err);

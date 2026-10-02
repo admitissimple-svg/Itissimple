@@ -25,6 +25,9 @@ import {
   fetchSessionNotesFromFirestoreServer,
   saveYouTubePlaylistsToFirestore,
   fetchYouTubePlaylistsFromFirestore,
+  saveTutorToFirestore,
+  fetchTutorsFromFirestore,
+  deleteTutorFromFirestore,
 } from './src/serverFirestore';
 import { DEFAULT_CURATED_PLAYLISTS } from './src/utils/youtubeService';
 import {
@@ -71,7 +74,7 @@ const ACTIVE_FIREBASE_PROJECT_ID = 'itissimple-8663d';
 const GEMINI_PROJECT_ID = ACTIVE_FIREBASE_PROJECT_ID;
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = process.env.APP_PORT ? parseInt(process.env.APP_PORT, 10) : 3000;
 
 // Universal CORS & embedding middleware for published app previews, Cloud Run, and cross-account requests
 app.use((req, res, next) => {
@@ -397,11 +400,16 @@ function readDb(): AppDb {
 }
 
 let syncTimeout: any = null;
+let isCloudHydrated = false;
 
 function writeDb(db: AppDb) {
   inMemoryDb = db;
 
-  // Cloud Firestore asynchronous sync
+  // Cloud Firestore asynchronous sync - only persist to cloud once hydrated
+  if (!isCloudHydrated) {
+    return;
+  }
+
   if (syncTimeout) clearTimeout(syncTimeout);
   syncTimeout = setTimeout(() => {
     saveAppStateToFirestore(db).catch((err) => {
@@ -413,6 +421,9 @@ function writeDb(db: AppDb) {
 // Immediate synchronous memory update + background Cloud Firestore sync
 async function writeDbSync(db: AppDb): Promise<void> {
   inMemoryDb = db;
+  if (!isCloudHydrated) {
+    return;
+  }
   // Run Firestore sync in background without blocking the HTTP response
   saveAppStateToFirestore(db).catch((err) => {
     console.warn('Background Firestore sync error:', err);
@@ -438,12 +449,24 @@ async function initCloudPersistence() {
       // Merge tutorsList by email/id so NO tutor is ever lost
       const localTutors = inMemoryDb.tutorsList || [];
       const cloudTutors = Array.isArray(cloudState.tutorsList) ? cloudState.tutorsList : [];
+      const directTutors = await fetchTutorsFromFirestore().catch(() => []);
       const tutorMap = new Map<string, any>();
-      cloudTutors.forEach((t: any) => {
+
+      // 1. Put local memory tutors first
+      localTutors.forEach((t: any) => {
         const key = (t.email || t.id || '').toLowerCase().trim();
         if (key) tutorMap.set(key, t);
       });
-      localTutors.forEach((t: any) => {
+      // 2. Put cloudState tutors over local memory
+      cloudTutors.forEach((t: any) => {
+        const key = (t.email || t.id || '').toLowerCase().trim();
+        if (key) {
+          const existing = tutorMap.get(key) || {};
+          tutorMap.set(key, { ...existing, ...t });
+        }
+      });
+      // 3. Put direct collection /tutors/ over everything (authoritative source of truth)
+      (directTutors || []).forEach((t: any) => {
         const key = (t.email || t.id || '').toLowerCase().trim();
         if (key) {
           const existing = tutorMap.get(key) || {};
@@ -456,15 +479,30 @@ async function initCloudPersistence() {
       const localTeachers = inMemoryDb.teachers || [];
       const cloudTeachers = Array.isArray(cloudState.teachers) ? cloudState.teachers : [];
       const teacherMap = new Map<string, any>();
-      cloudTeachers.forEach((t: any) => {
+      localTeachers.forEach((t: any) => {
         const key = (t.email || '').toLowerCase().trim();
         if (key) teacherMap.set(key, t);
       });
-      localTeachers.forEach((t: any) => {
+      cloudTeachers.forEach((t: any) => {
         const key = (t.email || '').toLowerCase().trim();
         if (key) {
           const existing = teacherMap.get(key) || {};
           teacherMap.set(key, { ...existing, ...t });
+        }
+      });
+      // Ensure all tutors have teacher entries
+      mergedTutorsList.forEach((t: any) => {
+        const key = (t.email || '').toLowerCase().trim();
+        if (key && !teacherMap.has(key)) {
+          teacherMap.set(key, {
+            email: key,
+            name: t.name || key.split('@')[0],
+            role: 'teacher',
+            country: t.country,
+            timezone: t.timezone,
+            avatar: t.avatar,
+            approvalStatus: t.approvalStatus,
+          });
         }
       });
       const mergedTeachers = Array.from(teacherMap.values());
@@ -575,13 +613,20 @@ async function initCloudPersistence() {
         studentListenedTracks: mergedListenedTracks,
         studentDictionaryMap: mergedStudentDictionary,
       });
+      isCloudHydrated = true;
       await saveAppStateToFirestore(inMemoryDb);
     } else {
-      console.log('No existing Firestore state found, bootstrapping initial state to cloud');
-      await saveAppStateToFirestore(inMemoryDb);
+      console.warn('Could not fetch app_state from Firestore cloud. Attempting recovery from direct collections...');
+      const directTutors = await fetchTutorsFromFirestore().catch(() => []);
+      if (directTutors && directTutors.length > 0) {
+        console.log(`Recovered ${directTutors.length} tutors directly from /tutors collection!`);
+        inMemoryDb.tutorsList = directTutors;
+      }
+      isCloudHydrated = true;
     }
   } catch (err) {
     console.warn('Cloud persistence init notice:', err);
+    isCloudHydrated = true;
   }
 }
 
@@ -769,20 +814,20 @@ app.post('/api/auth/login', async (req, res) => {
     (t: any) => (t.email || '').toLowerCase() === cleanEmail && t.role !== 'admin'
   );
 
-  // Check if user is registered as a student in Firestore or local database
-  const isRegisteredStudent = !isMasterAdmin && (
-    firestoreRole === 'student' ||
-    authRecordRole === 'student' ||
-    isStudentInDb
-  );
-
-  // Check if user is registered as a teacher/tutor
-  const isRegisteredTeacher = !isMasterAdmin && !isRegisteredStudent && (
+  // Check if user is registered as a teacher/tutor (Native Friend priority)
+  const isRegisteredTeacher = !isMasterAdmin && (
     firestoreRole === 'teacher' ||
     firestoreRole === 'native_friend' ||
     authRecordRole === 'teacher' ||
     isTutorInDb ||
     isTeacherInDb
+  );
+
+  // Check if user is registered as a student in Firestore or local database (only if not a teacher)
+  const isRegisteredStudent = !isMasterAdmin && !isRegisteredTeacher && (
+    firestoreRole === 'student' ||
+    authRecordRole === 'student' ||
+    isStudentInDb
   );
 
   let role: string = 'student';
@@ -1887,12 +1932,24 @@ app.get('/api/teachers', (req, res) => {
   res.json({ teachers: db.teachers || [] });
 });
 
-app.get('/api/tutors', (req, res) => {
+app.get('/api/tutors', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
   const db = readDb();
+  // Ensure tutors are loaded from Firestore collection if in-memory list is empty
+  if (!db.tutorsList || db.tutorsList.length === 0) {
+    try {
+      const directTutors = await fetchTutorsFromFirestore();
+      if (directTutors && directTutors.length > 0) {
+        db.tutorsList = directTutors;
+      }
+    } catch (err) {
+      console.warn('Error fetching tutors from Firestore in GET /api/tutors:', err);
+    }
+  }
+
   const requesterEmail = ((req.query.email as string) || '').toLowerCase().trim();
   const role = req.query.role as string;
   const uid = (req.query.uid as string) || '';
@@ -2007,17 +2064,44 @@ app.post('/api/tutors', async (req, res) => {
 
   // Unmark from deleted lists if newly registered or re-registering
   if (db.deletedTutorIds) {
-    db.deletedTutorIds = db.deletedTutorIds.filter((id) => id !== newTutor.id?.toLowerCase());
+    db.deletedTutorIds = db.deletedTutorIds.filter((id) => id !== newTutor.id?.toLowerCase() && id !== tutorId.toLowerCase());
   }
   if (db.deletedTutorEmails) {
     db.deletedTutorEmails = db.deletedTutorEmails.filter((em) => em !== cleanEmail);
   }
 
-  await writeDbSync(db);
+  // Purge any accidental student profile entry for this teacher
+  if (db.userProfiles && db.userProfiles[cleanEmail]) {
+    delete db.userProfiles[cleanEmail];
+  }
+  if (db.students) {
+    db.students = db.students.filter((s: any) => (s.email || s.studentEmail || '').toLowerCase() !== cleanEmail);
+  }
+
+  // Persist directly to Cloud Firestore /tutors/{tutorId} collection (Authoritative source of truth)
+  await saveTutorToFirestore(tutorEntry).catch((err) => {
+    console.warn('Error saving tutor to Firestore collection:', err);
+  });
+
+  // Ensure user profile in Firestore has role teacher
+  await saveUserToFirestore({
+    uid: tutorId,
+    email: cleanEmail,
+    name: cleanName,
+    role: 'teacher',
+    country: tutorEntry.country,
+    timezone: tutorEntry.timezone,
+    createdAt: tutorEntry.appliedAt,
+  }).catch(() => {});
+
+  await saveAppStateToFirestore(db).catch((err) => {
+    console.warn('Background Firestore app_state sync notice:', err);
+  });
+
   res.json({ success: true, tutor: tutorEntry, tutors: db.tutorsList });
 });
 
-app.put('/api/tutors/:id', (req, res) => {
+app.put('/api/tutors/:id', async (req, res) => {
   const db = readDb();
   const tutorId = req.params.id;
   const rawBody = req.body;
@@ -2096,6 +2180,11 @@ app.put('/api/tutors/:id', (req, res) => {
       };
     }
 
+    // Direct Firestore persistence
+    await saveTutorToFirestore(db.tutorsList[existingIdx]).catch((err) => {
+      console.warn('Error saving updated tutor to Firestore collection:', err);
+    });
+
     writeDb(db);
     return res.json({ success: true, tutor: db.tutorsList[existingIdx], tutors: db.tutorsList });
   }
@@ -2104,6 +2193,7 @@ app.put('/api/tutors/:id', (req, res) => {
   const newEntry = { ...updatedData, id: tutorId };
   db.tutorsList = db.tutorsList || [];
   db.tutorsList.push(newEntry);
+  await saveTutorToFirestore(newEntry).catch(() => {});
   writeDb(db);
   res.json({ success: true, tutor: newEntry, tutors: db.tutorsList });
 });
@@ -2160,6 +2250,14 @@ app.delete('/api/tutors/:id', async (req, res) => {
     }
   }
 
+  // Delete directly from Firestore /tutors/{tutorId}
+  await deleteTutorFromFirestore(tutorId).catch((err) => {
+    console.warn('Error deleting tutor from Firestore collection:', err);
+  });
+  if (targetTutor?.id && targetTutor.id !== tutorId) {
+    await deleteTutorFromFirestore(targetTutor.id).catch(() => {});
+  }
+
   await writeDbSync(db);
   res.json({ success: true, message: 'Amigo Nativo excluído com sucesso.', tutors: db.tutorsList });
 });
@@ -2168,10 +2266,12 @@ app.post('/api/tutors/:id/approve', async (req, res) => {
   const db = readDb();
   const tutorId = req.params.id;
   let approvedEmail = '';
+  let approvedTutor: any = null;
   db.tutorsList = (db.tutorsList || []).map((t) => {
     if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
       approvedEmail = (t.email || '').toLowerCase();
-      return { ...t, approvalStatus: 'approved' };
+      approvedTutor = { ...t, approvalStatus: 'approved' };
+      return approvedTutor;
     }
     return t;
   });
@@ -2183,6 +2283,10 @@ app.post('/api/tutors/:id/approve', async (req, res) => {
     }
   }
 
+  if (approvedTutor) {
+    await saveTutorToFirestore(approvedTutor).catch(() => {});
+  }
+
   await writeDbSync(db);
   res.json({ success: true, tutors: db.tutorsList });
 });
@@ -2191,13 +2295,19 @@ app.post('/api/tutors/:id/reject', async (req, res) => {
   const db = readDb();
   const tutorId = req.params.id;
   let rejectedEmail = '';
+  let rejectedTutor: any = null;
   db.tutorsList = (db.tutorsList || []).map((t) => {
     if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
       rejectedEmail = (t.email || '').toLowerCase();
-      return { ...t, approvalStatus: 'rejected' };
+      rejectedTutor = { ...t, approvalStatus: 'rejected' };
+      return rejectedTutor;
     }
     return t;
   });
+
+  if (rejectedTutor) {
+    await saveTutorToFirestore(rejectedTutor).catch(() => {});
+  }
 
   if (rejectedEmail) {
     const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === rejectedEmail);
@@ -10435,6 +10545,12 @@ async function startServer() {
   // Preload local database into memory immediately
   readDb();
 
+  // Hydrate from Cloud Firestore first before opening port so state is fully synchronized
+  await initCloudPersistence().catch((err) => {
+    console.warn('Initial cloud persistence notice:', err);
+    isCloudHydrated = true;
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: {
@@ -10454,10 +10570,6 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`It's Simple Server running on http://localhost:${PORT}`);
-    // Sync with Cloud Firestore asynchronously without blocking dev server startup
-    initCloudPersistence().catch((err) => {
-      console.warn('Initial cloud persistence notice:', err);
-    });
   });
 }
 

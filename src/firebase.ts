@@ -42,7 +42,7 @@ function sanitizeAuthDomain(raw?: string): string {
 export const effectiveFirebaseConfig = {
   projectId: sanitizeProjectId(env.VITE_FIREBASE_PROJECT_ID || baseFirebaseConfig.projectId),
   appId: env.VITE_FIREBASE_APP_ID || baseFirebaseConfig.appId || ACTIVE_APP_ID,
-  apiKey: env.VITE_FIREBASE_API_KEY || baseFirebaseConfig.apiKey || 'AIzaSyBDgPCPMD36mSX0lkkyEcz6-rHJdBqk',
+  apiKey: env.VITE_FIREBASE_API_KEY || baseFirebaseConfig.apiKey || 'AIzaSyBDgPCPMD5wd36mSX0lkkyECz6-rHJdBqk',
   authDomain: sanitizeAuthDomain(env.VITE_FIREBASE_AUTH_DOMAIN || baseFirebaseConfig.authDomain),
   firestoreDatabaseId: ACTIVE_FIRESTORE_DATABASE_ID,
   storageBucket: ACTIVE_FIREBASE_STORAGE_BUCKET,
