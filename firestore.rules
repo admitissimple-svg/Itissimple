@@ -122,9 +122,7 @@ service cloud.firestore {
 
     // Native Friend / Tutor profiles
     match /tutors/{tutorId} {
-      allow read: if true;
-      allow create, update: if isAuthenticated() || isAdmin() || request.auth == null;
-      allow delete: if isAdmin();
+      allow read, write: if true;
     }
 
     // Live lessons - accessible for scheduling, trials, and multi-profile lesson sync

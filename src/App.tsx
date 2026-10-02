@@ -576,14 +576,12 @@ export default function App() {
             liveTutors.push({ id: d.id, ...data } as any);
           }
         });
-        if (liveTutors.length > 0) {
-          setTutors((prev) => {
-            const map = new Map<string, NativeFriendTutor>();
-            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
-            liveTutors.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
-            return Array.from(map.values());
-          });
-        }
+        setTutors((prev) => {
+          if (liveTutors.length === 0) return [];
+          const map = new Map<string, NativeFriendTutor>();
+          liveTutors.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+          return Array.from(map.values());
+        });
       }, (err) => {
         console.warn('Realtime tutors subscription notice:', err);
       });

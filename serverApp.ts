@@ -473,7 +473,22 @@ async function initCloudPersistence() {
           tutorMap.set(key, { ...existing, ...t });
         }
       });
-      const mergedTutorsList = Array.from(tutorMap.values());
+      // Track deleted tutors across reboots
+      const localDeletedTutorEmails: string[] = inMemoryDb.deletedTutorEmails || [];
+      const cloudDeletedTutorEmails: string[] = Array.isArray(cloudState.deletedTutorEmails) ? cloudState.deletedTutorEmails : [];
+      const allDeletedTutorEmails = Array.from(new Set([...localDeletedTutorEmails, ...cloudDeletedTutorEmails]));
+      inMemoryDb.deletedTutorEmails = allDeletedTutorEmails;
+
+      const localDeletedTutorIds: string[] = inMemoryDb.deletedTutorIds || [];
+      const cloudDeletedTutorIds: string[] = Array.isArray(cloudState.deletedTutorIds) ? cloudState.deletedTutorIds : [];
+      const allDeletedTutorIds = Array.from(new Set([...localDeletedTutorIds, ...cloudDeletedTutorIds]));
+      inMemoryDb.deletedTutorIds = allDeletedTutorIds;
+
+      const mergedTutorsList = Array.from(tutorMap.values()).filter((t: any) => {
+        const em = (t.email || '').toLowerCase().trim();
+        const id = (t.id || '').toLowerCase().trim();
+        return !allDeletedTutorEmails.includes(em) && !allDeletedTutorIds.includes(id);
+      });
 
       // Merge teachers list by email
       const localTeachers = inMemoryDb.teachers || [];
@@ -481,11 +496,11 @@ async function initCloudPersistence() {
       const teacherMap = new Map<string, any>();
       localTeachers.forEach((t: any) => {
         const key = (t.email || '').toLowerCase().trim();
-        if (key) teacherMap.set(key, t);
+        if (key && !allDeletedTutorEmails.includes(key)) teacherMap.set(key, t);
       });
       cloudTeachers.forEach((t: any) => {
         const key = (t.email || '').toLowerCase().trim();
-        if (key) {
+        if (key && !allDeletedTutorEmails.includes(key)) {
           const existing = teacherMap.get(key) || {};
           teacherMap.set(key, { ...existing, ...t });
         }
@@ -505,7 +520,20 @@ async function initCloudPersistence() {
           });
         }
       });
-      const mergedTeachers = Array.from(teacherMap.values());
+      const mergedTeachers = Array.from(teacherMap.values()).filter((t: any) => {
+        const em = (t.email || '').toLowerCase().trim();
+        if (t.role === 'admin' || em === 'adm.itissimple@gmail.com') return true;
+        return !allDeletedTutorEmails.includes(em);
+      });
+
+      allDeletedTutorEmails.forEach((em) => {
+        if (em !== 'adm.itissimple@gmail.com') {
+          delete mergedUserProfiles[em];
+          if (mergedAuthUsers[em]?.role === 'teacher') {
+            delete mergedAuthUsers[em];
+          }
+        }
+      });
 
       // Merge students list by email, excluding deleted students
       const localDeletedStudents: string[] = inMemoryDb.deletedStudentEmails || [];

@@ -320,9 +320,10 @@ export async function saveAppStateToFirestore(data: any): Promise<boolean> {
     delete mainData.studentHomeworkMap;
     mainData.updatedAt = new Date().toISOString();
 
-    // Safe tutors preservation: never overwrite existing tutors with an empty list
+    // Safe tutors preservation: never overwrite existing tutors with an empty list unless an explicit deletion was requested
     let tutorsDocToWrite = tutorsData;
-    if (!tutorsData.tutorsList || tutorsData.tutorsList.length === 0) {
+    const hasIntentionalDeletion = Array.isArray(tutorsData.deletedTutorEmails) && tutorsData.deletedTutorEmails.length > 0;
+    if ((!tutorsData.tutorsList || tutorsData.tutorsList.length === 0) && !hasIntentionalDeletion) {
       try {
         const existingSnap = await getDoc(doc(db, 'app_state', 'tutors')).catch(() => null);
         if (existingSnap && existingSnap.exists()) {
