@@ -10569,9 +10569,13 @@ async function startServer() {
   // Preload local database into memory immediately
   readDb();
 
-  // Hydrate from Cloud Firestore first before opening port so state is fully synchronized
-  await initCloudPersistence().catch((err) => {
+  // Hydrate from Cloud Firestore first with safety timeout so server always starts quickly
+  await Promise.race([
+    initCloudPersistence(),
+    new Promise((resolve) => setTimeout(resolve, 3500)),
+  ]).catch((err) => {
     console.warn('Initial cloud persistence notice:', err);
+  }).finally(() => {
     isCloudHydrated = true;
   });
 
@@ -10579,7 +10583,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        hmr: false,
       },
       appType: 'spa',
     });
@@ -10592,8 +10596,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`It's Simple Server running on http://localhost:${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`Port ${PORT} is already in use, listening skipped.`);
+    } else {
+      console.error('Server error event:', err);
+    }
   });
 }
 
