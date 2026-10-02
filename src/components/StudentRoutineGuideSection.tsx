@@ -377,6 +377,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
           if (persisted && (persisted.videoId || persisted.playlistId) && !next[d]) {
             next[d] = persisted.playlistId || (persisted.isRepeatVideo ? 'repeat_previous_video' : '');
             changed = true;
+          } else if (persisted && persisted.videoId === '' && persisted.playlistId === '' && next[d]) {
+            delete next[d];
+            changed = true;
           }
         });
         return changed ? next : prev;
@@ -393,7 +396,10 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     setSentenceInput('');
     setSentenceSavedSuccess(false);
     setSentenceEvaluation(null);
-  }, [effectiveStudentUid, weeklyCycle]);
+    if (typeof resetRoutinesForNewWeek === 'function') {
+      resetRoutinesForNewWeek().catch(() => {});
+    }
+  }, [effectiveStudentUid, weeklyCycle, resetRoutinesForNewWeek]);
 
   // Quick jump helpers
   const activeStudyDays: DayOfWeek[] = useMemo(() => {
@@ -668,29 +674,35 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const persistedVideo = persistedRoutinesByDay[selectedDay];
 
   // Active YouTube video extraction: priority given to Firestore persisted video, then activeActivity, then day activities
+  // If persistedVideo explicitly has empty videoId (''), no video was chosen by the student yet
+  const hasPersistedVideoId = Boolean(persistedVideo && persistedVideo.videoId && persistedVideo.videoId.trim() !== '');
+  const isPersistedClean = Boolean(persistedVideo && persistedVideo.videoId === '');
+
   const rawAssignedVideo: TeacherAssignedVideo | null =
-    (persistedVideo && (persistedVideo.videoId || persistedVideo.url))
+    hasPersistedVideoId
       ? ({
-          id: persistedVideo.activityId || `vid-${persistedVideo.videoId}`,
-          videoId: persistedVideo.videoId,
-          url: persistedVideo.url || `https://www.youtube.com/watch?v=${persistedVideo.videoId}`,
-          title: persistedVideo.videoTitle || persistedVideo.title || 'Daily Video Practice',
-          duration: persistedVideo.duration || '5-10 min',
-          instructions: persistedVideo.instructions || '',
-          addedAt: persistedVideo.updatedAt || new Date().toISOString(),
-          playlistId: persistedVideo.playlistId,
-          playlistTitle: persistedVideo.playlistTitle,
-          isRepeatVideo: persistedVideo.isRepeatVideo,
+          id: persistedVideo!.activityId || `vid-${persistedVideo!.videoId}`,
+          videoId: persistedVideo!.videoId,
+          url: persistedVideo!.url || `https://www.youtube.com/watch?v=${persistedVideo!.videoId}`,
+          title: persistedVideo!.videoTitle || persistedVideo!.title || 'Daily Video Practice',
+          duration: persistedVideo!.duration || '5-10 min',
+          instructions: persistedVideo!.instructions || '',
+          addedAt: persistedVideo!.updatedAt || new Date().toISOString(),
+          playlistId: persistedVideo!.playlistId,
+          playlistTitle: persistedVideo!.playlistTitle,
+          isRepeatVideo: persistedVideo!.isRepeatVideo,
         } as any)
-      : ((activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0
+      : isPersistedClean
+      ? null
+      : ((activeActivity?.teacherVideos && activeActivity.teacherVideos.length > 0 && activeActivity.teacherVideos[0]?.videoId
           ? activeActivity.teacherVideos[0]
           : null) ||
-        currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0)?.teacherVideos?.[0] ||
+        currentDayActivities.find((act) => act && act.teacherVideos && act.teacherVideos.length > 0 && act.teacherVideos[0]?.videoId)?.teacherVideos?.[0] ||
         null);
 
   const userChosenTopicForDay =
     selectedTopicByDay[selectedDay] ||
-    persistedVideo?.playlistId ||
+    (hasPersistedVideoId ? (persistedVideo?.playlistId || '') : '') ||
     (persistedVideo?.isRepeatVideo ? 'repeat_previous_video' : '') ||
     '';
 
@@ -707,13 +719,8 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
   const hasPersistedOrAssignedVideo = Boolean(
     (userChosenTopicForDay && userChosenTopicForDay !== '') ||
-    (persistedVideo?.videoId && persistedVideo.videoId !== '') ||
-    (persistedVideo?.url && persistedVideo.url !== '') ||
-    (persistedVideo?.playlistId && persistedVideo.playlistId !== '') ||
+    hasPersistedVideoId ||
     (persistedVideo?.isRepeatVideo) ||
-    (rawAssignedVideo?.videoId && rawAssignedVideo.videoId !== '') ||
-    (rawAssignedVideo?.url && rawAssignedVideo.url !== '') ||
-    ((rawAssignedVideo as any)?.playlistId && (rawAssignedVideo as any).playlistId !== '') ||
     ((rawAssignedVideo as any)?.isCustomSuggestion) ||
     ((rawAssignedVideo as any)?.isRepeatVideo) ||
     ((rawAssignedVideo as any)?.assignedByTeacher)
@@ -748,7 +755,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     : '';
   const defaultVideoTitle = hasAssignedVideo
     ? (assignedVideo?.title || 'Daily Video Practice')
-    : (isEn ? 'Choose a Topic to Start' : 'Escolha um Tópico para Iniciar');
+    : (isEn ? 'Choose Video' : 'Escolher Vídeo');
   const embedUrl = validVidId ? getYouTubeEmbedUrl(validVidId) : '';
 
   const rawAssignedSpotify =
@@ -1800,18 +1807,18 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   currentPlaylistId = 'custom_suggestion';
                 } else if (dayTopicSelection) {
                   currentPlaylistId = dayTopicSelection;
-                } else if (persistedDay?.playlistId) {
+                } else if (persistedDay?.playlistId && hasPersistedVideoId) {
                   currentPlaylistId = persistedDay.playlistId;
-                } else if ((assignedVid as any)?.playlistId) {
+                } else if (hasPersistedVideoId && (assignedVid as any)?.playlistId) {
                   currentPlaylistId = (assignedVid as any).playlistId;
-                } else if ((assignedVid as any)?.playlistTitle) {
+                } else if (hasPersistedVideoId && (assignedVid as any)?.playlistTitle) {
                   const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === (assignedVid as any).playlistTitle?.toLowerCase());
                   if (matched) currentPlaylistId = matched.id;
-                } else if (act.activityName && act.activityName !== 'Video of the Day' && act.activityName !== 'Vídeo do Dia') {
+                } else if (userChosenTopicForDay && act.activityName && act.activityName !== 'Video of the Day' && act.activityName !== 'Vídeo do Dia') {
                   const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === act.activityName?.toLowerCase());
                   if (matched) currentPlaylistId = matched.id;
                 } else {
-                  // Strictly neutral initial "Choose Topic..." state ("" or null)
+                  // Strictly neutral initial "Choose Video..." state ("" or null)
                   // The user must voluntarily pick a topic; never auto-match or inherit from previous day
                   currentPlaylistId = '';
                 }
@@ -1956,18 +1963,18 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                                       ? 'Topic selection is disabled while "Repeat Previous Video" is checked'
                                       : 'Seleção de tópicos desabilitada enquanto "Repetir Vídeo Anterior" estiver marcado')
                                   : (isEn
-                                      ? 'Topic: Choose playlist to unify routine name & inject exclusive video'
-                                      : 'Tópico: Escolha a playlist para unificar o nome da rotina e injetar o vídeo exclusivo')
+                                      ? 'Topic: Choose video from playlist to unify routine name & inject exclusive video'
+                                      : 'Tópico: Escolha o vídeo da playlist para unificar o nome da rotina e injetar o vídeo exclusivo')
                               }
                             >
                               <option value="" className="text-slate-600 bg-white font-medium">
                                 {isLoadingPlaylists
-                                  ? (isEn ? '⏳ Loading topics...' : '⏳ Carregando tópicos...')
+                                  ? (isEn ? '⏳ Loading videos...' : '⏳ Carregando vídeos...')
                                   : loadingPlaylistAssignId === act.id
-                                  ? (isEn ? '⏳ Assigning Topic...' : '⏳ Injetando Tópico...')
+                                  ? (isEn ? '⏳ Assigning Video...' : '⏳ Injetando Vídeo...')
                                   : isRepeatVideo
                                   ? (isEn ? '🔁 Repeat Previous Video' : '🔁 Repetir Vídeo Anterior')
-                                  : (isEn ? '🎯 Choose Topic...' : '🎯 Escolher Tópico...')}
+                                  : (isEn ? '🎯 Choose Video' : '🎯 Escolher Vídeo')}
                               </option>
                               <option value="custom_suggestion" className="text-[#000035] bg-white font-semibold">
                                 {isEn ? '💡 Your Suggestion' : '💡 Sua Sugestão'}
@@ -2319,12 +2326,12 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   <Sparkles className="w-6 h-6 text-[#F4CA54]" />
                 </div>
                 <p className="text-sm font-black text-white">
-                  {isEn ? 'Choose a Topic for this Day' : 'Escolha um Tópico para este Dia'}
+                  {isEn ? 'Choose Video for this Day' : 'Escolha um Vídeo para este Dia'}
                 </p>
                 <p className="text-xs text-slate-300 max-w-sm leading-relaxed">
                   {isEn
-                    ? 'Select a topic from the dropdown menu above or paste your own suggestion to start this day of your new weekly cycle.'
-                    : 'Selecione um tópico na lista suspensa acima ou sugira seu próprio vídeo para iniciar este dia do seu novo ciclo semanal.'}
+                    ? 'Select a topic from the dropdown menu above or paste your own suggestion to choose your video for this day of your routine.'
+                    : 'Selecione um tópico no menu suspenso acima ou sugira seu próprio vídeo para escolher o vídeo deste dia da sua rotina.'}
                 </p>
               </div>
             )}

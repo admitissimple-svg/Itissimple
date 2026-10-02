@@ -1070,20 +1070,39 @@ export default function App() {
                   const merged = { ...prev };
                   (Object.keys(cloudVideos) as DayOfWeek[]).forEach((day) => {
                     const v = cloudVideos[day];
-                    if (v && (v.videoId || v.url)) {
+                    const cleanVidId = v && v.videoId ? v.videoId.trim() : '';
+                    if (cleanVidId) {
                       const dayList = merged[day] || defaultRoutinesByDay[day] || [];
                       merged[day] = dayList.map((item, idx) => {
                         if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
                           return {
                             ...item,
+                            activityName: v.playlistTitle || v.title || v.videoTitle || item.activityName,
+                            playlistId: v.playlistId || '',
+                            playlistTitle: v.playlistTitle || '',
                             teacherVideos: [{
-                              id: v.videoId,
-                              videoId: v.videoId,
+                              id: cleanVidId,
+                              videoId: cleanVidId,
                               title: v.title || v.videoTitle || 'Daily Video Practice',
-                              url: v.url || `https://www.youtube.com/watch?v=${v.videoId}`,
+                              url: v.url || `https://www.youtube.com/watch?v=${cleanVidId}`,
                               playlistId: v.playlistId || '',
                               isRepeatVideo: Boolean(v.isRepeatVideo),
                             }],
+                            completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
+                          };
+                        }
+                        return item;
+                      });
+                    } else if (v && v.videoId === '') {
+                      const dayList = merged[day] || defaultRoutinesByDay[day] || [];
+                      merged[day] = dayList.map((item, idx) => {
+                        if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
+                          return {
+                            ...item,
+                            activityName: 'Video of the Day',
+                            playlistId: '',
+                            playlistTitle: '',
+                            teacherVideos: [],
                             completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
                           };
                         }
@@ -1389,8 +1408,9 @@ export default function App() {
             if (dayData && typeof dayData === 'object') {
               if (Array.isArray(dayData)) {
                 merged[day] = dayData;
-              } else if (dayData.videoId || dayData.url || dayData.teacherVideos || dayData.teacherOverrideTrack) {
+              } else {
                 const dayList = merged[day] || defaultRoutinesByDay[day] || [];
+                const cleanVidId = dayData.videoId ? dayData.videoId.trim() : '';
                 merged[day] = dayList.map((item, idx) => {
                   if (
                     idx === 0 ||
@@ -1398,9 +1418,13 @@ export default function App() {
                     item.activityName?.toLowerCase().includes('vídeo') ||
                     item.activityName?.toLowerCase().includes('video')
                   ) {
-                    const cleanVidId = dayData.videoId;
                     return {
                       ...item,
+                      activityName: cleanVidId
+                        ? (dayData.playlistTitle || dayData.title || dayData.videoTitle || item.activityName)
+                        : 'Video of the Day',
+                      playlistId: cleanVidId ? (dayData.playlistId || '') : '',
+                      playlistTitle: cleanVidId ? (dayData.playlistTitle || '') : '',
                       teacherVideos: cleanVidId
                         ? [
                             {
@@ -1412,7 +1436,7 @@ export default function App() {
                               isRepeatVideo: Boolean(dayData.isRepeatVideo),
                             },
                           ]
-                        : item.teacherVideos,
+                        : [],
                       teacherSpotify: dayData.teacherOverrideTrack
                         ? {
                             id: dayData.teacherOverrideTrack.url || 'track',

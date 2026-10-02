@@ -3551,7 +3551,8 @@ app.post('/api/user-profile', async (req, res) => {
     });
   }
 
-  // If student level changed, redistribute Spotify and YouTube tracks to match the new level
+  // If student level changed, redistribute Spotify tracks to match the new level.
+  // YouTube videos are strictly chosen voluntarily by the student ("Choose Video") or assigned by teacher.
   if (oldLevelKey !== newLevelKey || !db.studentSpotifyAssignments?.[email]) {
     const studentPlanDays: string[] =
       db.userProfiles[email]?.weeklyStudyDays ||
@@ -3559,7 +3560,6 @@ app.post('/api/user-profile', async (req, res) => {
       DAYS_SEQUENCE;
     const resolvedUid = db.userProfiles[email]?.uid || '';
     distributeWeeklySpotifyForStudent(db, email, resolvedUid, newLevelKey, undefined, undefined, studentPlanDays);
-    distributeWeeklyYouTubeForStudent(db, email, resolvedUid, newLevelKey, undefined, undefined, studentPlanDays);
   }
 
   await writeDbSync(db);
@@ -4368,6 +4368,28 @@ app.get('/api/student-routines', (req, res) => {
   if (routines && typeof routines === 'object' && Object.keys(routines).length > 0) {
     const base = createCleanStudentRoutines();
     const merged = { ...base, ...routines };
+    if (isAwaitingTopicSelection) {
+      Object.keys(merged).forEach((d) => {
+        if (Array.isArray(merged[d])) {
+          merged[d] = merged[d].map((act: any) => {
+            const isVideo =
+              act.id?.endsWith('1') ||
+              act.activityName?.toLowerCase().includes('vídeo') ||
+              act.activityName?.toLowerCase().includes('video');
+            if (isVideo && !act.teacherAssigned) {
+              return {
+                ...act,
+                activityName: 'Video of the Day',
+                playlistId: '',
+                playlistTitle: '',
+                teacherVideos: [],
+              };
+            }
+            return act;
+          });
+        }
+      });
+    }
     return res.json(merged);
   }
   res.json(createCleanStudentRoutines());
@@ -7972,12 +7994,14 @@ app.get('/api/student-video-assignments', (req, res) => {
       : DAYS_SEQUENCE;
   const expectedDaysCount = Math.max(1, studentPlanDays.length);
 
+  const hasVoluntaryVideoAssignments = assignments.length > 0;
   const isAwaitingTopicSelection = Boolean(
     (email && db.studentAwaitingTopicSelection?.[email]) ||
-    (resolvedUid && db.studentAwaitingTopicSelection?.[resolvedUid])
+    (resolvedUid && db.studentAwaitingTopicSelection?.[resolvedUid]) ||
+    !hasVoluntaryVideoAssignments
   );
 
-  if ((assignments.length < expectedDaysCount || hasRepeatingBug) && !isAwaitingTopicSelection) {
+  if ((assignments.length < expectedDaysCount || hasRepeatingBug) && !isAwaitingTopicSelection && hasVoluntaryVideoAssignments) {
     if (email || resolvedUid) {
       assignments = distributeWeeklyYouTubeForStudent(db, email, resolvedUid, studentLevel, undefined, undefined, studentPlanDays);
       writeDb(db);
