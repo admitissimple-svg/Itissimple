@@ -2218,7 +2218,12 @@ app.get('/api/tutors', async (req, res) => {
     if (db.deletedTutorEmails?.includes(tEmail) || db.deletedTutorIds?.includes(tId)) {
       return false;
     }
-    if (t.approvalStatus === 'approved') return true;
+    const isApproved =
+      t.approvalStatus === 'approved' ||
+      t.isApproved === true ||
+      t.status === 'approved' ||
+      t.approved === true;
+    if (isApproved) return true;
     if (requesterEmail && tEmail === requesterEmail) return true;
     if (uid && t.uid === uid) return true;
     return false;
@@ -2513,28 +2518,63 @@ app.post('/api/tutors/:id/approve', async (req, res) => {
   const tutorId = req.params.id;
   let approvedEmail = '';
   let approvedTutor: any = null;
+
   db.tutorsList = (db.tutorsList || []).map((t) => {
-    if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
-      approvedEmail = (t.email || '').toLowerCase();
-      approvedTutor = { ...t, approvalStatus: 'approved' };
+    if (t.id === tutorId || t.email?.toLowerCase() === tutorId.toLowerCase()) {
+      approvedEmail = (t.email || '').toLowerCase().trim();
+      approvedTutor = {
+        ...t,
+        approvalStatus: 'approved',
+        isApproved: true,
+        status: 'approved',
+        approved: true,
+        updatedAt: new Date().toISOString(),
+      };
       return approvedTutor;
     }
     return t;
   });
 
+  // If tutor wasn't in db.tutorsList but was passed in body or found in teachers
+  if (!approvedTutor) {
+    const passedTutor = req.body.tutor;
+    if (passedTutor) {
+      approvedEmail = (passedTutor.email || '').toLowerCase().trim();
+      approvedTutor = {
+        ...passedTutor,
+        id: tutorId,
+        approvalStatus: 'approved',
+        isApproved: true,
+        status: 'approved',
+        approved: true,
+        updatedAt: new Date().toISOString(),
+      };
+      db.tutorsList = db.tutorsList || [];
+      db.tutorsList.push(approvedTutor);
+    }
+  }
+
   if (approvedEmail) {
     const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === approvedEmail);
     if (tIdx >= 0) {
-      db.teachers[tIdx] = { ...db.teachers[tIdx], approvalStatus: 'approved' };
+      db.teachers[tIdx] = {
+        ...db.teachers[tIdx],
+        approvalStatus: 'approved',
+        isApproved: true,
+        status: 'approved',
+        approved: true,
+      };
     }
   }
 
   if (approvedTutor) {
-    await saveTutorToFirestore(approvedTutor).catch(() => {});
+    await saveTutorToFirestore(approvedTutor).catch((err) => {
+      console.warn('Error saving approved tutor to Firestore:', err);
+    });
   }
 
   await writeDbSync(db);
-  res.json({ success: true, tutors: db.tutorsList });
+  res.json({ success: true, tutors: db.tutorsList, approvedTutor });
 });
 
 app.post('/api/tutors/:id/reject', async (req, res) => {
@@ -2543,22 +2583,37 @@ app.post('/api/tutors/:id/reject', async (req, res) => {
   let rejectedEmail = '';
   let rejectedTutor: any = null;
   db.tutorsList = (db.tutorsList || []).map((t) => {
-    if (t.id === tutorId || t.email.toLowerCase() === tutorId.toLowerCase()) {
-      rejectedEmail = (t.email || '').toLowerCase();
-      rejectedTutor = { ...t, approvalStatus: 'rejected' };
+    if (t.id === tutorId || t.email?.toLowerCase() === tutorId.toLowerCase()) {
+      rejectedEmail = (t.email || '').toLowerCase().trim();
+      rejectedTutor = {
+        ...t,
+        approvalStatus: 'rejected',
+        isApproved: false,
+        status: 'rejected',
+        approved: false,
+        updatedAt: new Date().toISOString(),
+      };
       return rejectedTutor;
     }
     return t;
   });
 
   if (rejectedTutor) {
-    await saveTutorToFirestore(rejectedTutor).catch(() => {});
+    await saveTutorToFirestore(rejectedTutor).catch((err) => {
+      console.warn('Error saving rejected tutor to Firestore:', err);
+    });
   }
 
   if (rejectedEmail) {
     const tIdx = (db.teachers || []).findIndex((tc: any) => (tc.email || '').toLowerCase() === rejectedEmail);
     if (tIdx >= 0) {
-      db.teachers[tIdx] = { ...db.teachers[tIdx], approvalStatus: 'rejected' };
+      db.teachers[tIdx] = {
+        ...db.teachers[tIdx],
+        approvalStatus: 'rejected',
+        isApproved: false,
+        status: 'rejected',
+        approved: false,
+      };
     }
   }
 

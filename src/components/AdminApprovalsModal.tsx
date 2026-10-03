@@ -22,8 +22,8 @@ interface AdminApprovalsModalProps {
   isOpen: boolean;
   onClose: () => void;
   tutors: NativeFriendTutor[];
-  onApproveTutor: (tutorId: string) => void;
-  onRejectTutor: (tutorId: string) => void;
+  onApproveTutor: (tutorId: string, tutor?: NativeFriendTutor) => void;
+  onRejectTutor: (tutorId: string, tutor?: NativeFriendTutor) => void;
   onDeleteTutor?: (tutorId: string, tutorEmail?: string) => Promise<void> | void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
@@ -41,9 +41,19 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
   isRefreshing = false,
   currentLanguage,
 }) => {
-  const pendingCount = tutors.filter((t) => (t.approvalStatus || 'approved') === 'pending').length;
-  const approvedCount = tutors.filter((t) => (t.approvalStatus || 'approved') === 'approved').length;
-  const rejectedCount = tutors.filter((t) => t.approvalStatus === 'rejected').length;
+  const isTutorApproved = (t: NativeFriendTutor) =>
+    t.approvalStatus === 'approved' ||
+    t.isApproved === true ||
+    (t as any).status === 'approved' ||
+    (t as any).approved === true;
+
+  const isTutorRejected = (t: NativeFriendTutor) =>
+    !isTutorApproved(t) &&
+    (t.approvalStatus === 'rejected' || (t as any).status === 'rejected');
+
+  const pendingCount = tutors.filter((t) => !isTutorApproved(t) && !isTutorRejected(t)).length;
+  const approvedCount = tutors.filter((t) => isTutorApproved(t)).length;
+  const rejectedCount = tutors.filter((t) => isTutorRejected(t)).length;
 
   const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('all');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -74,7 +84,11 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
   const isEn = currentLanguage === 'en';
 
   const filteredTutors = tutors.filter((t) => {
-    const status = t.approvalStatus || 'approved';
+    const status = isTutorApproved(t)
+      ? 'approved'
+      : isTutorRejected(t)
+      ? 'rejected'
+      : 'pending';
     if (filter === 'all') return true;
     return status === filter;
   });
@@ -195,7 +209,11 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
             </div>
           ) : (
             filteredTutors.map((tutor) => {
-              const status = tutor.approvalStatus || 'approved';
+              const status = isTutorApproved(tutor)
+                ? 'approved'
+                : isTutorRejected(tutor)
+                ? 'rejected'
+                : 'pending';
               const avatarSrc =
                 tutor.avatar ||
                 tutor.photoUrl ||
@@ -349,7 +367,7 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
                     {status !== 'approved' && (
                       <button
                         type="button"
-                        onClick={() => onApproveTutor(tutor.id)}
+                        onClick={() => onApproveTutor(tutor.id, tutor)}
                         className="flex-1 sm:flex-initial px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                       >
                         <CheckCircle className="w-4 h-4" />
@@ -360,7 +378,7 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
                     {status !== 'rejected' && (
                       <button
                         type="button"
-                        onClick={() => onRejectTutor(tutor.id)}
+                        onClick={() => onRejectTutor(tutor.id, tutor)}
                         className="flex-1 sm:flex-initial px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                       >
                         <XCircle className="w-4 h-4" />

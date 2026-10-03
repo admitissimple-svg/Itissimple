@@ -41,11 +41,30 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
   const tutors = useMemo(() => {
     const list = passedTutors && passedTutors.length > 0 ? passedTutors : INITIAL_NATIVE_FRIENDS;
     // O Amigo Nativo só deve aparecer listado como disponível após a aprovação do Admin e com role == 'teacher'
-    return list.filter((t) => {
-      const isApproved = t.approvalStatus === 'approved';
+    const approvedList = list.filter((t) => {
+      const isApproved =
+        t.approvalStatus === 'approved' ||
+        t.isApproved === true ||
+        (t as any).status === 'approved' ||
+        (t as any).approved === true;
       const isTeacherRole = !t.role || t.role === 'teacher' || (t as any).role === 'native_friend';
       return isApproved && isTeacherRole;
     });
+
+    console.log('[NativeFriends Public Directory] Rendered public tutors:', {
+      totalInputTutors: list.length,
+      approvedCount: approvedList.length,
+      approvedTutors: approvedList.map((t) => ({
+        id: t.id,
+        name: t.name,
+        email: t.email,
+        approvalStatus: t.approvalStatus,
+        isApproved: t.isApproved,
+        status: (t as any).status,
+      })),
+    });
+
+    return approvedList;
   }, [passedTutors]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCountry, setSelectedCountry] = useState<string>('all');

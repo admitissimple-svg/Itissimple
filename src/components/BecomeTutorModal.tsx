@@ -145,6 +145,9 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
         availableDays: formData.availableDays,
         timezone: formData.timezone || 'America/Toronto',
         approvalStatus: 'pending',
+        isApproved: false,
+        status: 'pending',
+        approved: false,
         registeredByAdmin: false,
       };
 

@@ -79,11 +79,18 @@ export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
   try {
     const cleanEmail = (tutor.email || '').toLowerCase().trim();
     const tutorId = tutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    const approvalStatus = tutor.approvalStatus || (tutor.isApproved ? 'approved' : 'pending');
+    const isApproved = approvalStatus === 'approved' || tutor.isApproved === true || tutor.status === 'approved' || tutor.approved === true;
+
     const sanitized = JSON.parse(JSON.stringify({
       ...tutor,
       id: tutorId,
       email: cleanEmail,
       role: 'teacher',
+      approvalStatus,
+      isApproved,
+      status: approvalStatus,
+      approved: isApproved,
       updatedAt: new Date().toISOString(),
     }));
 
@@ -137,9 +144,15 @@ export async function fetchTutorsFromFirestore(): Promise<any[]> {
           const data = d.data();
           if (data && data.email && d.id !== 'test_tutor_id') {
             const key = (data.email || d.id).toLowerCase().trim();
-            if (!listMap.has(key)) {
-              listMap.set(key, { id: d.id, ...data, role: 'teacher' });
+            const existing = listMap.get(key) || {};
+            // If existing is already approved or legacy is approved, preserve approval
+            const merged = { ...data, ...existing, id: existing.id || d.id, role: 'teacher' };
+            if (data.approvalStatus === 'approved' || data.isApproved || data.status === 'approved') {
+              merged.approvalStatus = 'approved';
+              merged.isApproved = true;
+              merged.status = 'approved';
             }
+            listMap.set(key, merged);
           }
         });
       }
@@ -274,7 +287,15 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
         const key = (t.email || t.id || '').toLowerCase().trim();
         if (key) {
           const existing = tutorMap.get(key) || {};
-          tutorMap.set(key, { ...existing, ...t });
+          const isExistingApproved = existing.approvalStatus === 'approved' || existing.isApproved === true || existing.status === 'approved';
+          const isDirectApproved = t.approvalStatus === 'approved' || t.isApproved === true || t.status === 'approved';
+          const merged = { ...existing, ...t };
+          if (isExistingApproved || isDirectApproved) {
+            merged.approvalStatus = 'approved';
+            merged.isApproved = true;
+            merged.status = 'approved';
+          }
+          tutorMap.set(key, merged);
         }
       });
 

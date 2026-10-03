@@ -60,6 +60,9 @@ export interface NativeFriendTutor {
   isSuperTutor?: boolean;
   languagesSpoken?: string[];
   approvalStatus?: 'approved' | 'pending' | 'rejected';
+  isApproved?: boolean;
+  status?: string;
+  approved?: boolean;
   appliedAt?: string;
   meetUrl?: string;
   meetLink?: string;
