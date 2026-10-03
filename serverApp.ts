@@ -176,23 +176,13 @@ const DEFAULT_LANDING_CONTENT = {
 // Active production users allowed in the platform
 export const ACTIVE_PRODUCTION_USERS = new Set([
   'adm.itissimple@gmail.com',
-  'estilobeeforkids@gmail.com',
-  'estilobeeadm@gmail.com',
-  'laviniatilapiafc@gmail.com',
 ]);
 
-export const ACTIVE_PRODUCTION_STUDENTS = new Set([
-  'estilobeeadm@gmail.com',
-  'laviniatilapiafc@gmail.com',
-]);
+export const ACTIVE_PRODUCTION_STUDENTS = new Set<string>();
 
 export const PURGED_OBSOLETE_STUDENTS = [
-  'reginahelena1980@gmail.com',
-  'laviniatilapia@gmail.com',
-  'laviniatilapia1@gmail.com',
   'test-student@example.com',
   'test-student-123',
-  'charles.lambert1939@gmail.com',
 ];
 
 // Clean initial state: zero mock tutors, zero fake test accounts
@@ -596,18 +586,18 @@ async function initCloudPersistence() {
       const allDeletedStudentEmails = Array.from(new Set([...localDeletedStudents, ...cloudDeletedStudents, ...PURGED_OBSOLETE_STUDENTS]));
       inMemoryDb.deletedStudentEmails = allDeletedStudentEmails;
 
-      // Purge non-production user profiles and auth users (never purge teachers/tutors)
+      // Purge deleted user profiles and auth users (never purge teachers/tutors)
       Object.keys(mergedUserProfiles).forEach((em) => {
         const cleanEm = em.toLowerCase().trim();
         const isTeacher = mergedUserProfiles[em]?.role === 'teacher';
-        if (!isTeacher && (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm))) {
+        if (!isTeacher && allDeletedStudentEmails.includes(cleanEm)) {
           delete mergedUserProfiles[em];
         }
       });
       Object.keys(mergedAuthUsers).forEach((em) => {
         const cleanEm = em.toLowerCase().trim();
         const isTeacher = mergedAuthUsers[em]?.role === 'teacher';
-        if (!isTeacher && (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm))) {
+        if (!isTeacher && allDeletedStudentEmails.includes(cleanEm)) {
           delete mergedAuthUsers[em];
         }
       });
@@ -617,13 +607,13 @@ async function initCloudPersistence() {
       const studentMap = new Map<string, any>();
       cloudStudents.forEach((s: any) => {
         const key = (s.studentEmail || s.email || '').toLowerCase().trim();
-        if (key && ACTIVE_PRODUCTION_STUDENTS.has(key) && !allDeletedStudentEmails.includes(key)) {
+        if (key && !allDeletedStudentEmails.includes(key)) {
           studentMap.set(key, s);
         }
       });
       localStudents.forEach((s: any) => {
         const key = (s.studentEmail || s.email || '').toLowerCase().trim();
-        if (key && ACTIVE_PRODUCTION_STUDENTS.has(key) && !allDeletedStudentEmails.includes(key)) {
+        if (key && !allDeletedStudentEmails.includes(key)) {
           const existing = studentMap.get(key) || {};
           studentMap.set(key, { ...existing, ...s });
         }
@@ -3397,7 +3387,7 @@ app.get('/api/students', (req, res) => {
     return res.json(
       (db.students || []).filter((s: any) => {
         const em = (s.email || s.studentEmail || '').toLowerCase().trim();
-        return ACTIVE_PRODUCTION_STUDENTS.has(em);
+        return Boolean(em && !(db.deletedStudentEmails || []).includes(em));
       })
     );
   }
@@ -3512,7 +3502,7 @@ app.get('/api/students', (req, res) => {
 
     const filteredStudents = Array.from(studentMap.values()).filter((st: any) => {
       const em = (st.email || st.studentEmail || '').toLowerCase().trim();
-      return ACTIVE_PRODUCTION_STUDENTS.has(em);
+      return Boolean(em && !(db.deletedStudentEmails || []).includes(em));
     });
     return res.json(filteredStudents);
   }
@@ -3520,7 +3510,7 @@ app.get('/api/students', (req, res) => {
   if (role === 'student' || req.query.studentEmail) {
     const list = (db.students || []).filter((s: any) => {
       const em = (s.email || s.studentEmail || '').toLowerCase().trim();
-      return ACTIVE_PRODUCTION_STUDENTS.has(em) && (em === requesterEmail || (uid && s.uid === uid));
+      return Boolean(em && !(db.deletedStudentEmails || []).includes(em)) && (em === requesterEmail || (uid && s.uid === uid));
     });
     return res.json(list);
   }

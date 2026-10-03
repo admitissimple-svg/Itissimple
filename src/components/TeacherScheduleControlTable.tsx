@@ -108,11 +108,6 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('all');
 
   const availableStudentsForFilter = React.useMemo(() => {
-    const ALLOWED_PRODUCTION_STUDENTS = new Set([
-      'estilobeeadm@gmail.com',
-      'laviniatilapiafc@gmail.com',
-    ]);
-
     const map = new Map<string, { email: string; name: string }>();
     const teacherEmailClean = (currentAccount?.email || '').toLowerCase().trim();
     const currentTeacherUid = (currentAccount?.id || (currentAccount as any)?.uid || '').trim();
@@ -153,7 +148,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       const stTeacherName = ((st as any).teacherName || '').toLowerCase().trim();
       const stStatus = (st as any).status || (st as any).enrollmentStatus;
 
-      if (!email || !ALLOWED_PRODUCTION_STUDENTS.has(email)) return;
+      if (!email) return;
 
       // Strictly filter out cancelled or unenrolled students
       if (stStatus === 'cancelled' || stStatus === 'not_enrolled') return;
@@ -174,7 +169,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
       const lTeacherName = (l.teacherName || '').toLowerCase().trim();
 
-      if (!email || !ALLOWED_PRODUCTION_STUDENTS.has(email)) return;
+      if (!email) return;
 
       if (isTeacher) {
         if (!isMatchingTeacher(lTeacherEmail, lTeacherUid, lTeacherName)) return;
@@ -203,7 +198,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       }
     });
 
-    return Array.from(map.values()).filter((st) => ALLOWED_PRODUCTION_STUDENTS.has(st.email.toLowerCase().trim()));
+    return Array.from(map.values());
   }, [students, lessons, currentAccount, tutorProfile]);
 
   const sortedLessons = [...lessons].sort((a, b) => {

@@ -4901,14 +4901,9 @@ export default function App() {
       } as any);
     }
 
-    const ALLOWED_PRODUCTION_STUDENTS = new Set([
-      'estilobeeadm@gmail.com',
-      'laviniatilapiafc@gmail.com',
-    ]);
-
     return Array.from(studentMap.values()).filter((st) => {
       const email = (st.email || (st as any).studentEmail || '').toLowerCase().trim();
-      return ALLOWED_PRODUCTION_STUDENTS.has(email);
+      return Boolean(email && email.includes('@') && !email.includes('test-student'));
     });
   }, [students, availableAccounts, lessons, currentAccount, userProfile, currentTutorProfile]);
 
