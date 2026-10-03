@@ -1064,9 +1064,11 @@ app.post('/api/auth/login', async (req, res) => {
   const isRegisteredTeacher = !isMasterAdmin && (
     firestoreRole === 'teacher' ||
     firestoreRole === 'native_friend' ||
+    firestoreRole === 'tutor' ||
     authRecordRole === 'teacher' ||
     isTutorInDb ||
-    isTeacherInDb
+    isTeacherInDb ||
+    requestedRole === 'teacher'
   );
 
   // Check if user is registered as a student in Firestore or local database (only if not a teacher)

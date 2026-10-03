@@ -347,8 +347,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setMode(initialMode || 'login');
-      // Mandatory requirement: Default role selected when opening modal MUST BE 'student'
-      setRole('student');
+      // Initialize with initialRole if provided, otherwise 'student'
+      setRole(initialRole || 'student');
       setErrorMsg('');
       setSuccessMsg('');
       setIsLoading(false);
@@ -581,16 +581,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         let firebaseUid: string | undefined;
         try {
           const authResult = await firebaseSignInWithEmail(cleanEmail, password);
-          firebaseUid = authResult.user.uid;
+          firebaseUid = authResult?.user?.uid;
         } catch (authErr: any) {
-          console.log('Firebase Auth sign-in notice:', authErr?.code || authErr?.message);
+          console.warn('Firebase Auth sign-in notice in AuthModal:', authErr?.code || authErr?.message);
+          const code = authErr?.code || '';
+          if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/user-not-found') {
+            const msg = isEn ? 'Invalid email or password.' : 'E-mail ou senha incorretos.';
+            setErrorMsg(msg);
+            if (onShowToast) {
+              onShowToast(isEn ? 'Invalid credentials' : 'Credenciais inválidas', msg, 'error');
+            }
+            setIsLoading(false);
+            return;
+          }
         }
 
-        // 2. Query user document in users/{uid} in Firestore to read role ('student', 'native_friend'/'teacher', or 'admin')
+        // 2. Query user document in 'users' collection in Firestore using the authenticated UID
         let firestoreUserDoc: any = null;
+        const firestoreDb = getDb();
+
         if (firebaseUid) {
           try {
-            const firestoreDb = getDb();
             const userDocRef = doc(firestoreDb, 'users', firebaseUid);
             const snap = await Promise.race([
               getDoc(userDocRef),
@@ -604,7 +615,58 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           }
         }
 
-        // 3. Fallback or primary sync with backend API with timeout protection
+        // Fallback: Query by sanitized email doc ID in users collection if not found by UID
+        if (!firestoreUserDoc && cleanEmail) {
+          try {
+            const cleanDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+            const emailDocRef = doc(firestoreDb, 'users', cleanDocId);
+            const snapEmail = await Promise.race([
+              getDoc(emailDocRef),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+            ]);
+            if (snapEmail && 'exists' in snapEmail && snapEmail.exists()) {
+              firestoreUserDoc = snapEmail.data();
+            }
+          } catch (fsErr) {
+            console.warn('Firestore user fetch by email notice in AuthModal:', fsErr);
+          }
+        }
+
+        // Check tutor document in /tutors or /users with tutor prefix
+        if (!firestoreUserDoc && cleanEmail) {
+          try {
+            const cleanTutorId = `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+            const tutorSnap = await getDoc(doc(firestoreDb, 'tutors', cleanTutorId)).catch(() => null);
+            if (tutorSnap && tutorSnap.exists()) {
+              firestoreUserDoc = { ...tutorSnap.data(), role: 'teacher' };
+            } else {
+              const userTutorSnap = await getDoc(doc(firestoreDb, 'users', cleanTutorId)).catch(() => null);
+              if (userTutorSnap && userTutorSnap.exists()) {
+                firestoreUserDoc = { ...userTutorSnap.data(), role: 'teacher' };
+              }
+            }
+          } catch {}
+        }
+
+        // 3. Read role field corresponding to user's role ('teacher', 'native_friend', 'admin', 'student')
+        const docRole = (firestoreUserDoc?.role || firestoreUserDoc?.userRole || '').toLowerCase().trim();
+        let verifiedRole: UserRole = 'student';
+
+        if (cleanEmail === 'adm.itissimple@gmail.com' || docRole === 'admin') {
+          verifiedRole = 'admin';
+        } else if (docRole === 'teacher' || docRole === 'native_friend' || docRole === 'tutor') {
+          verifiedRole = 'teacher';
+        } else if (docRole === 'student') {
+          verifiedRole = 'student';
+        } else {
+          // Fallback: if Firestore document does not explicitly specify role, align with selected tab if teacher or admin, else default to student
+          verifiedRole = role === 'teacher' || role === 'admin' ? role : 'student';
+        }
+
+        // 4. Synchronize role selection tab state with the authenticated user role
+        setRole(verifiedRole);
+
+        // 5. Sync with backend API
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 6000);
 
@@ -614,8 +676,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           body: JSON.stringify({
             email: cleanEmail,
             password,
-            role: firestoreUserDoc?.role || role,
-            uid: firebaseUid,
+            role: verifiedRole,
+            uid: firebaseUid || firestoreUserDoc?.uid,
           }),
           signal: controller.signal,
         }).catch(() => {
@@ -631,64 +693,40 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         if (res.ok) {
           const data = await res.json();
-          const account: GoogleAccount = data.account;
+          const account: GoogleAccount = data.account || {
+            uid: firebaseUid || firestoreUserDoc?.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            email: cleanEmail,
+            name: firestoreUserDoc?.name || cleanEmail.split('@')[0],
+            role: verifiedRole,
+          };
 
-          // 4. Dynamic Verification and Redirection by UID / Document role
-          const docRole = (firestoreUserDoc?.role || '').toLowerCase();
-          let verifiedRole: UserRole = 'student';
-
-          // Check if user is a registered Native Friend in Firestore or backend
-          let isRegisteredTutorDoc = false;
-          try {
-            const cleanTutorId = `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
-            const tutorSnap = await getDoc(doc(getDb(), 'tutors', cleanTutorId)).catch(() => null);
-            if (tutorSnap && tutorSnap.exists()) {
-              isRegisteredTutorDoc = true;
-            }
-          } catch {}
-
-          if (cleanEmail === 'adm.itissimple@gmail.com') {
-            verifiedRole = 'admin';
-          } else if (isRegisteredTutorDoc || docRole === 'native_friend' || docRole === 'teacher' || account.role === 'teacher') {
-            verifiedRole = 'teacher';
-          } else if (docRole === 'student' || account.role === 'student') {
-            // STRICT RBAC: Registered student locked strictly to student role
-            verifiedRole = 'student';
-          } else if (docRole === 'admin') {
-            verifiedRole = cleanEmail === 'adm.itissimple@gmail.com' ? 'admin' : 'student';
-          } else {
-            verifiedRole = account.role || 'student';
+          const effectiveAuthUid = firebaseUid || firestoreUserDoc?.uid || account?.uid || '';
+          if (effectiveAuthUid) {
+            account.uid = effectiveAuthUid;
+            account.id = effectiveAuthUid;
           }
-
           account.role = verifiedRole;
 
-          // STRICT RBAC POLICY: Prevent users with registered "student" role from accessing
-          // "Native Friend" or "Administrator" panels by clicking tabs on the login screen.
-          if (verifiedRole === 'student' && role !== 'student') {
-            const attemptedPanel = role === 'admin'
-              ? (isEn ? 'Administrator' : 'Administrador')
-              : (isEn ? 'Native Friend' : 'Amigo Nativo');
-            const alertTitle = isEn ? 'Access Restricted' : 'Acesso Restrito';
-            const alertMsg = isEn
-              ? `Your account is registered as a Student. Access to the ${attemptedPanel} panel is blocked, and your session has been locked to your Student Space.`
-              : `Sua conta está registrada com o perfil de Aluno(a). O acesso ao painel de ${attemptedPanel} foi bloqueado e sua sessão foi direcionada ao seu Espaço do Aluno.`;
+          // 6. Conditional redirection strictly based on verifiedRole:
+          // - Teacher / Native Friend -> /teacher (Native Friend / Teacher Panel)
+          // - Administrator -> /admin (Administrator Panel)
+          // - Student -> /dashboard (Student Space)
+          let resolvedProfile: Partial<UserProfile> | undefined = undefined;
 
-            if (onShowToast) {
-              onShowToast(alertTitle, alertMsg, 'warning');
+          if (verifiedRole === 'teacher') {
+            if (typeof window !== 'undefined') {
+              try {
+                window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+              } catch {}
             }
-          } else if (verifiedRole === 'teacher' && role === 'admin') {
-            const alertTitle = isEn ? 'Access Restricted' : 'Acesso Restrito';
-            const alertMsg = isEn
-              ? 'Your account is registered as a Native Friend. Access to Administrator panel is restricted.'
-              : 'Sua conta está registrada como Amigo Nativo. O acesso ao Painel de Administrador é restrito.';
-            if (onShowToast) {
-              onShowToast(alertTitle, alertMsg, 'warning');
+          } else if (verifiedRole === 'admin') {
+            if (typeof window !== 'undefined') {
+              try {
+                window.history.replaceState({ page: 'admin' }, '', '/admin');
+              } catch {}
             }
-          }
-
-          // Hydrate student profile with routines, level, study plan, and unique Native Friend UID
-          let resolvedProfile: Partial<UserProfile> | undefined = data.profile;
-          if (verifiedRole === 'student') {
+          } else {
+            // Student space
             resolvedProfile = {
               ...(data.profile || {}),
               id: account.uid,
@@ -714,30 +752,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               weeklyStudyDays: firestoreUserDoc?.weeklyStudyDays || data.profile?.weeklyStudyDays,
             };
 
-            // Redirection: Student Dashboard
             if (typeof window !== 'undefined') {
               try {
                 window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
               } catch {}
             }
-          } else if (verifiedRole === 'teacher') {
-            // Redirection: Native Friend Panel
-            if (typeof window !== 'undefined') {
-              try {
-                window.history.replaceState({ page: 'teacher' }, '', '/teacher');
-              } catch {}
-            }
-          } else if (verifiedRole === 'admin') {
-            // Redirection: Administrator Panel
-            if (typeof window !== 'undefined') {
-              try {
-                window.history.replaceState({ page: 'admin' }, '', '/admin');
-              } catch {}
-            }
           }
 
           setIsLoading(false);
-          onLoginSuccess(account, resolvedProfile, data.tutor);
+          const tutorPayload = data.tutor || (verifiedRole === 'teacher' ? (firestoreUserDoc || { email: cleanEmail, name: account.name, role: 'teacher' }) : undefined);
+          onLoginSuccess(account, resolvedProfile, tutorPayload);
           onClose();
         } else {
           const errData = await res.json().catch(() => ({}));
@@ -1569,7 +1593,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               )}
               <span>
                 {mode === 'login'
-                  ? isEn ? 'Log in' : 'Entrar'
+                  ? role === 'teacher'
+                    ? isEn ? 'Log in as Native Friend' : 'Acessar como Amigo Nativo'
+                    : role === 'admin'
+                    ? isEn ? 'Log in as Administrator' : 'Acessar como Administrador'
+                    : isEn ? 'Log in to Student Space' : 'Acessar Espaço do Aluno'
                   : role === 'teacher'
                   ? isEn ? 'Register as Native Friend' : 'Cadastrar como Amigo Nativo'
                   : role === 'admin'

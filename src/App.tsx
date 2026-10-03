@@ -268,9 +268,9 @@ export default function App() {
             ]);
             if (snap && snap.exists()) {
               firestoreDoc = snap.data();
-              const r = (firestoreDoc.role || '').toLowerCase();
+              const r = (firestoreDoc.role || firestoreDoc.userRole || '').toLowerCase();
               if (r === 'admin' || isMasterAdmin) resolvedRole = isMasterAdmin ? 'admin' : 'student';
-              else if (r === 'teacher' || r === 'native_friend') resolvedRole = 'teacher';
+              else if (r === 'teacher' || r === 'native_friend' || r === 'tutor') resolvedRole = 'teacher';
               else resolvedRole = 'student';
             } else if (cleanEmail) {
               const cleanDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
@@ -280,17 +280,39 @@ export default function App() {
               ]);
               if (snapEmail && snapEmail.exists()) {
                 firestoreDoc = snapEmail.data();
-                const r = (firestoreDoc.role || '').toLowerCase();
+                const r = (firestoreDoc.role || firestoreDoc.userRole || '').toLowerCase();
                 if (r === 'admin' || isMasterAdmin) resolvedRole = isMasterAdmin ? 'admin' : 'student';
-                else if (r === 'teacher' || r === 'native_friend') resolvedRole = 'teacher';
+                else if (r === 'teacher' || r === 'native_friend' || r === 'tutor') resolvedRole = 'teacher';
                 else resolvedRole = 'student';
+              } else {
+                // Check in tutors collection
+                const cleanTutorId = `tutor-${cleanDocId}`;
+                const [tutorSnap, userTutorSnap] = await Promise.all([
+                  getDoc(doc(db, 'tutors', cleanTutorId)).catch(() => null),
+                  getDoc(doc(db, 'users', cleanTutorId)).catch(() => null),
+                ]);
+                if (tutorSnap && tutorSnap.exists()) {
+                  firestoreDoc = { ...tutorSnap.data(), role: 'teacher' };
+                  resolvedRole = 'teacher';
+                } else if (userTutorSnap && userTutorSnap.exists()) {
+                  firestoreDoc = { ...userTutorSnap.data(), role: 'teacher' };
+                  resolvedRole = 'teacher';
+                }
               }
             }
           } catch (e) {
             console.warn('Notice hydrating Firebase Auth user in App:', e);
           }
 
-          if (resolvedRole === 'student' && typeof window !== 'undefined') {
+          if (resolvedRole === 'teacher' && typeof window !== 'undefined') {
+            try {
+              window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+            } catch {}
+          } else if (resolvedRole === 'admin' && typeof window !== 'undefined') {
+            try {
+              window.history.replaceState({ page: 'admin' }, '', '/admin');
+            } catch {}
+          } else if (resolvedRole === 'student' && typeof window !== 'undefined') {
             const p = window.location.pathname;
             const h = window.location.hash;
             if (p === '/admin' || p === '/teacher' || h === '#admin' || h === '#teacher') {
