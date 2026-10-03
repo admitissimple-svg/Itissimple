@@ -173,6 +173,28 @@ const DEFAULT_LANDING_CONTENT = {
   footerSlogan: 'Learn English by living your life!',
 };
 
+// Active production users allowed in the platform
+export const ACTIVE_PRODUCTION_USERS = new Set([
+  'adm.itissimple@gmail.com',
+  'estilobeeforkids@gmail.com',
+  'estilobeeadm@gmail.com',
+  'laviniatilapiafc@gmail.com',
+]);
+
+export const ACTIVE_PRODUCTION_STUDENTS = new Set([
+  'estilobeeadm@gmail.com',
+  'laviniatilapiafc@gmail.com',
+]);
+
+export const PURGED_OBSOLETE_STUDENTS = [
+  'reginahelena1980@gmail.com',
+  'laviniatilapia@gmail.com',
+  'laviniatilapia1@gmail.com',
+  'test-student@example.com',
+  'test-student-123',
+  'charles.lambert1939@gmail.com',
+];
+
 // Clean initial state: zero mock tutors, zero fake test accounts
 const DEFAULT_TUTORS_LIST: any[] = [];
 
@@ -188,7 +210,7 @@ const DEFAULT_DB: AppDb = {
   tutorsList: [],
   deletedTutorIds: [],
   deletedTutorEmails: [],
-  deletedStudentEmails: [],
+  deletedStudentEmails: PURGED_OBSOLETE_STUDENTS,
   students: [],
   meetSettings: {},
   teacherSettings: {},
@@ -568,14 +590,24 @@ async function initCloudPersistence() {
         }
       });
 
-      // Merge students list by email, excluding deleted students
+      // Merge students list by email, excluding deleted and non-production students
       const localDeletedStudents: string[] = inMemoryDb.deletedStudentEmails || [];
       const cloudDeletedStudents: string[] = Array.isArray(cloudState.deletedStudentEmails) ? cloudState.deletedStudentEmails : [];
-      const allDeletedStudentEmails = Array.from(new Set([...localDeletedStudents, ...cloudDeletedStudents]));
+      const allDeletedStudentEmails = Array.from(new Set([...localDeletedStudents, ...cloudDeletedStudents, ...PURGED_OBSOLETE_STUDENTS]));
       inMemoryDb.deletedStudentEmails = allDeletedStudentEmails;
 
-      allDeletedStudentEmails.forEach((em) => {
-        delete mergedUserProfiles[em];
+      // Purge non-production user profiles and auth users
+      Object.keys(mergedUserProfiles).forEach((em) => {
+        const cleanEm = em.toLowerCase().trim();
+        if (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm)) {
+          delete mergedUserProfiles[em];
+        }
+      });
+      Object.keys(mergedAuthUsers).forEach((em) => {
+        const cleanEm = em.toLowerCase().trim();
+        if (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm)) {
+          delete mergedAuthUsers[em];
+        }
       });
 
       const localStudents = inMemoryDb.students || [];
@@ -583,11 +615,13 @@ async function initCloudPersistence() {
       const studentMap = new Map<string, any>();
       cloudStudents.forEach((s: any) => {
         const key = (s.studentEmail || s.email || '').toLowerCase().trim();
-        if (key && !allDeletedStudentEmails.includes(key)) studentMap.set(key, s);
+        if (key && ACTIVE_PRODUCTION_STUDENTS.has(key) && !allDeletedStudentEmails.includes(key)) {
+          studentMap.set(key, s);
+        }
       });
       localStudents.forEach((s: any) => {
         const key = (s.studentEmail || s.email || '').toLowerCase().trim();
-        if (key && !allDeletedStudentEmails.includes(key)) {
+        if (key && ACTIVE_PRODUCTION_STUDENTS.has(key) && !allDeletedStudentEmails.includes(key)) {
           const existing = studentMap.get(key) || {};
           studentMap.set(key, { ...existing, ...s });
         }
@@ -609,7 +643,7 @@ async function initCloudPersistence() {
       });
 
       allActiveStudentEmails.forEach((cleanEmail) => {
-        if (!allDeletedStudentEmails.includes(cleanEmail)) {
+        if (ACTIVE_PRODUCTION_STUDENTS.has(cleanEmail) && !allDeletedStudentEmails.includes(cleanEmail)) {
           const resolvedUid = `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
           if (!mergedUserProfiles[cleanEmail]) {
             mergedUserProfiles[cleanEmail] = {
@@ -647,9 +681,12 @@ async function initCloudPersistence() {
         }
       });
 
-      const mergedStudents = Array.from(studentMap.values());
+      const mergedStudents = Array.from(studentMap.values()).filter((s: any) => {
+        const em = (s.email || s.studentEmail || '').toLowerCase().trim();
+        return ACTIVE_PRODUCTION_STUDENTS.has(em);
+      });
 
-      // Merge liveLessons by id
+      // Merge liveLessons by id, keeping only valid lessons for active production users
       const localLessons = inMemoryDb.liveLessons || [];
       const cloudLessons = Array.isArray(cloudState.liveLessons) ? cloudState.liveLessons : [];
       const lessonMap = new Map<string, any>();
@@ -668,38 +705,82 @@ async function initCloudPersistence() {
           lessonMap.set(l.id, merged);
         }
       });
-      const mergedLiveLessons = Array.from(lessonMap.values()).map((l: any) => {
-        if (l && (l.cancelledAt || l.cancelledBy || l.cancellationReason) && l.status !== 'cancelled') {
-          l.status = 'cancelled';
-        }
-        if (!l.studentEmail || l.studentEmail.trim() === '') {
-          if (l.studentUid) {
-            const allProfiles = Object.values(inMemoryDb?.userProfiles || cloudState?.userProfiles || {});
-            const foundProfile = (allProfiles as any[]).find((p: any) => p.id === l.studentUid || p.uid === l.studentUid);
-            const foundStudent = (Array.isArray(inMemoryDb?.students) ? inMemoryDb.students : []).find((s: any) => s.studentUid === l.studentUid || s.id === l.studentUid);
-            if (foundProfile?.email) {
-              l.studentEmail = foundProfile.email.toLowerCase().trim();
-            } else if (foundStudent?.email || foundStudent?.studentEmail) {
-              l.studentEmail = (foundStudent.email || foundStudent.studentEmail).toLowerCase().trim();
+      const mergedLiveLessons = Array.from(lessonMap.values())
+        .map((l: any) => {
+          if (l && (l.cancelledAt || l.cancelledBy || l.cancellationReason) && l.status !== 'cancelled') {
+            l.status = 'cancelled';
+          }
+          if (!l.studentEmail || l.studentEmail.trim() === '') {
+            if (l.studentUid) {
+              const allProfiles = Object.values(inMemoryDb?.userProfiles || cloudState?.userProfiles || {});
+              const foundProfile = (allProfiles as any[]).find((p: any) => p.id === l.studentUid || p.uid === l.studentUid);
+              const foundStudent = (Array.isArray(inMemoryDb?.students) ? inMemoryDb.students : []).find((s: any) => s.studentUid === l.studentUid || s.id === l.studentUid);
+              if (foundProfile?.email) {
+                l.studentEmail = foundProfile.email.toLowerCase().trim();
+              } else if (foundStudent?.email || foundStudent?.studentEmail) {
+                l.studentEmail = (foundStudent.email || foundStudent.studentEmail).toLowerCase().trim();
+              }
             }
           }
-        }
-        return l;
-      });
+          return l;
+        })
+        .filter((l: any) => {
+          const sEmail = (l.studentEmail || '').toLowerCase().trim();
+          const tEmail = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+          return (
+            ACTIVE_PRODUCTION_STUDENTS.has(sEmail) &&
+            (tEmail === 'estilobeeforkids@gmail.com' || tEmail === 'adm.itissimple@gmail.com')
+          );
+        });
 
-      // Merge student media assignments, routines and progress maps across reboots
-      const mergedVideoAssignments = {
+      // Filter and clean student media assignments, routines and progress maps to remove stale users
+      const isAllowedKey = (k: string) => {
+        const lk = k.toLowerCase().trim();
+        for (const purged of PURGED_OBSOLETE_STUDENTS) {
+          if (lk.includes(purged) || lk.includes(purged.replace(/[^a-zA-Z0-9]/g, '-'))) return false;
+        }
+        for (const allowed of ACTIVE_PRODUCTION_USERS) {
+          if (lk.includes(allowed) || lk.includes(allowed.replace(/[^a-zA-Z0-9]/g, '-'))) return true;
+        }
+        return false;
+      };
+
+      const rawVideoAssignments = {
         ...(inMemoryDb.studentVideoAssignments || {}),
         ...(cloudState.studentVideoAssignments || {}),
       };
-      const mergedSpotifyAssignments = {
+      const cleanVideoAssignments: Record<string, any> = {};
+      Object.entries(rawVideoAssignments).forEach(([k, v]) => {
+        if (isAllowedKey(k)) cleanVideoAssignments[k] = v;
+      });
+
+      const rawSpotifyAssignments = {
         ...(inMemoryDb.studentSpotifyAssignments || {}),
         ...(cloudState.studentSpotifyAssignments || {}),
       };
-      const mergedStudentRoutines = {
+      const cleanSpotifyAssignments: Record<string, any> = {};
+      Object.entries(rawSpotifyAssignments).forEach(([k, v]) => {
+        if (isAllowedKey(k)) cleanSpotifyAssignments[k] = v;
+      });
+
+      const rawStudentRoutines = {
         ...(inMemoryDb.studentRoutinesMap || {}),
         ...(cloudState.studentRoutinesMap || {}),
       };
+      const cleanStudentRoutines: Record<string, any> = {};
+      Object.entries(rawStudentRoutines).forEach(([k, v]) => {
+        if (isAllowedKey(k)) cleanStudentRoutines[k] = v;
+      });
+
+      const rawStudentDictionary = {
+        ...(inMemoryDb.studentDictionaryMap || {}),
+        ...(cloudState.studentDictionaryMap || {}),
+      };
+      const cleanStudentDictionary: Record<string, any> = {};
+      Object.entries(rawStudentDictionary).forEach(([k, v]) => {
+        if (isAllowedKey(k)) cleanStudentDictionary[k] = v;
+      });
+
       const mergedWatchedVideos = {
         ...(inMemoryDb.studentWatchedVideos || {}),
         ...(cloudState.studentWatchedVideos || {}),
@@ -707,10 +788,6 @@ async function initCloudPersistence() {
       const mergedListenedTracks = {
         ...(inMemoryDb.studentListenedTracks || {}),
         ...(cloudState.studentListenedTracks || {}),
-      };
-      const mergedStudentDictionary = {
-        ...(inMemoryDb.studentDictionaryMap || {}),
-        ...(cloudState.studentDictionaryMap || {}),
       };
 
       inMemoryDb = mergeDbWithDefaults({
@@ -722,12 +799,12 @@ async function initCloudPersistence() {
         teachers: mergedTeachers,
         students: mergedStudents,
         liveLessons: mergedLiveLessons,
-        studentVideoAssignments: mergedVideoAssignments,
-        studentSpotifyAssignments: mergedSpotifyAssignments,
-        studentRoutinesMap: mergedStudentRoutines,
+        studentVideoAssignments: cleanVideoAssignments,
+        studentSpotifyAssignments: cleanSpotifyAssignments,
+        studentRoutinesMap: cleanStudentRoutines,
         studentWatchedVideos: mergedWatchedVideos,
         studentListenedTracks: mergedListenedTracks,
-        studentDictionaryMap: mergedStudentDictionary,
+        studentDictionaryMap: cleanStudentDictionary,
       });
       isCloudHydrated = true;
       await saveAppStateToFirestore(inMemoryDb);
@@ -3292,7 +3369,12 @@ app.get('/api/students', (req, res) => {
 
   // Only return raw all students if explicitly requested with all=true by admin
   if ((role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') && req.query.all === 'true') {
-    return res.json(db.students || []);
+    return res.json(
+      (db.students || []).filter((s: any) => {
+        const em = (s.email || s.studentEmail || '').toLowerCase().trim();
+        return ACTIVE_PRODUCTION_STUDENTS.has(em);
+      })
+    );
   }
 
   if (role === 'teacher' || role === 'admin' || req.query.teacherEmail || requesterEmail) {
@@ -3403,19 +3485,127 @@ app.get('/api/students', (req, res) => {
       }
     });
 
-    return res.json(Array.from(studentMap.values()));
+    const filteredStudents = Array.from(studentMap.values()).filter((st: any) => {
+      const em = (st.email || st.studentEmail || '').toLowerCase().trim();
+      return ACTIVE_PRODUCTION_STUDENTS.has(em);
+    });
+    return res.json(filteredStudents);
   }
 
   if (role === 'student' || req.query.studentEmail) {
-    const list = (db.students || []).filter((s: any) =>
-      (s.email || s.studentEmail || '').toLowerCase() === requesterEmail ||
-      (s.uid && s.uid === uid)
-    );
+    const list = (db.students || []).filter((s: any) => {
+      const em = (s.email || s.studentEmail || '').toLowerCase().trim();
+      return ACTIVE_PRODUCTION_STUDENTS.has(em) && (em === requesterEmail || (uid && s.uid === uid));
+    });
     return res.json(list);
   }
 
   // If unauthenticated or no matching filter, return empty array to prevent data leaks
   res.json([]);
+});
+
+// Dedicated maintenance endpoint to purge obsolete users and sanitize Firestore app_state
+app.post('/api/admin/clean-obsolete-users', async (_req, res) => {
+  try {
+    const db = readDb();
+    console.log('[CLEANUP] Starting cleanup of obsolete users...');
+
+    db.deletedStudentEmails = Array.from(
+      new Set([...(db.deletedStudentEmails || []), ...PURGED_OBSOLETE_STUDENTS])
+    );
+
+    // 1. Sanitize students
+    db.students = (db.students || []).filter((s: any) => {
+      const em = (s.email || s.studentEmail || '').toLowerCase().trim();
+      return ACTIVE_PRODUCTION_STUDENTS.has(em);
+    });
+
+    // 2. Sanitize userProfiles
+    if (db.userProfiles) {
+      Object.keys(db.userProfiles).forEach((key) => {
+        const em = key.toLowerCase().trim();
+        if (!ACTIVE_PRODUCTION_USERS.has(em)) {
+          delete db.userProfiles[key];
+        }
+      });
+    }
+
+    // 3. Sanitize authUsers
+    if (db.authUsers) {
+      Object.keys(db.authUsers).forEach((key) => {
+        const em = key.toLowerCase().trim();
+        if (!ACTIVE_PRODUCTION_USERS.has(em)) {
+          delete db.authUsers[key];
+        }
+      });
+    }
+
+    // 4. Sanitize liveLessons
+    if (Array.isArray(db.liveLessons)) {
+      db.liveLessons = db.liveLessons.filter((l: any) => {
+        const sEmail = (l.studentEmail || '').toLowerCase().trim();
+        const tEmail = (l.teacherEmail || l.tutorEmail || '').toLowerCase().trim();
+        return (
+          ACTIVE_PRODUCTION_STUDENTS.has(sEmail) &&
+          (tEmail === 'estilobeeforkids@gmail.com' || tEmail === 'adm.itissimple@gmail.com')
+        );
+      });
+    }
+
+    // 5. Sanitize assignments, routines and dictionary
+    const isAllowedKey = (k: string) => {
+      const lk = k.toLowerCase().trim();
+      for (const purged of PURGED_OBSOLETE_STUDENTS) {
+        if (lk.includes(purged) || lk.includes(purged.replace(/[^a-zA-Z0-9]/g, '-'))) return false;
+      }
+      for (const allowed of ACTIVE_PRODUCTION_USERS) {
+        if (lk.includes(allowed) || lk.includes(allowed.replace(/[^a-zA-Z0-9]/g, '-'))) return true;
+      }
+      return false;
+    };
+
+    if (db.studentVideoAssignments) {
+      Object.keys(db.studentVideoAssignments).forEach((k) => {
+        if (!isAllowedKey(k)) delete db.studentVideoAssignments[k];
+      });
+    }
+    if (db.studentSpotifyAssignments) {
+      Object.keys(db.studentSpotifyAssignments).forEach((k) => {
+        if (!isAllowedKey(k)) delete db.studentSpotifyAssignments[k];
+      });
+    }
+    if (db.studentRoutinesMap) {
+      Object.keys(db.studentRoutinesMap).forEach((k) => {
+        if (!isAllowedKey(k)) delete db.studentRoutinesMap[k];
+      });
+    }
+    if (db.studentWeeklyChecks) {
+      Object.keys(db.studentWeeklyChecks).forEach((k) => {
+        if (!isAllowedKey(k)) delete db.studentWeeklyChecks[k];
+      });
+    }
+    if (db.studentDictionaryMap) {
+      Object.keys(db.studentDictionaryMap).forEach((k) => {
+        if (!isAllowedKey(k)) delete db.studentDictionaryMap[k];
+      });
+    }
+
+    await writeDbSync(db);
+    const saved = await saveAppStateToFirestore(db);
+    console.log('[CLEANUP] Obsolete users cleanup completed. Firestore saved:', saved);
+
+    res.json({
+      success: true,
+      activeStudents: db.students.map((s: any) => s.email || s.studentEmail),
+      activeProfiles: Object.keys(db.userProfiles || {}),
+      activeAuthUsers: Object.keys(db.authUsers || {}),
+      remainingLessons: (db.liveLessons || []).length,
+      firestoreSaved: saved,
+    });
+  } catch (err: any) {
+    console.error('[CLEANUP ERROR]:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/students', (req, res) => {

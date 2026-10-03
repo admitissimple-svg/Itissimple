@@ -144,7 +144,7 @@ export function useTeacherStudentRoutineSync(params: {
     weekId = 'week-1',
   } = params;
 
-  const effectiveUid = studentUid || studentEmail || '';
+  const effectiveUid = normalizeStudentIdForPath(studentUid || studentEmail || '');
   const [routineDoc, setRoutineDoc] = useState<StudentCurrentRoutineDoc | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSavingFeedback, setIsSavingFeedback] = useState<boolean>(false);

@@ -7,10 +7,11 @@ import {
   User as FirebaseUser,
   GoogleAuthProvider,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { auth, googleAuthProvider, getDb } from '../firebase';
 import { GoogleAccount, UserProfile, UserRole, EnglishLevel, NativeFriendTutor } from '../types';
 import { setGoogleOAuthToken, getGoogleOAuthToken, requestGoogleDriveAuth } from '../utils/auth';
+import { DEFAULT_STUDENT_TIMEZONE } from '../utils/timezone';
 
 export interface AuthUserDoc {
   uid: string;
@@ -138,15 +139,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return null;
   }, []);
 
-  // Sync Firebase Auth session on mount
+  // Sync Firebase Auth session on mount and attach real-time onSnapshot listener to users/{user.uid}
   useEffect(() => {
+    let userDocUnsub: (() => void) | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (userDocUnsub) {
+        userDocUnsub();
+        userDocUnsub = null;
+      }
       setFirebaseUser(user);
+
       if (user) {
         const cleanEmail = (user.email || '').toLowerCase().trim();
         const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
 
-        // Hydrate from Firestore with resilient fallback
+        // 1. Initial hydration from Firestore
         try {
           const docData = await fetchFirestoreUser(user.uid, user.email || undefined);
           const resolvedRole: UserRole = docData
@@ -176,14 +184,72 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           };
           setCurrentAccount(acc);
         }
+
+        // 2. Active multi-device real-time sync with onSnapshot tied to auth.currentUser.uid
+        try {
+          const db = getDb();
+          const userDocRef = doc(db, 'users', user.uid);
+          userDocUnsub = onSnapshot(
+            userDocRef,
+            (snap) => {
+              if (snap.exists()) {
+                const liveData = snap.data() as AuthUserDoc;
+                const liveRole: UserRole = isMasterAdmin
+                  ? 'admin'
+                  : (liveData.role === 'teacher' || liveData.role === 'native_friend'
+                      ? 'teacher'
+                      : 'student');
+
+                setCurrentAccount((prev) => ({
+                  uid: user.uid,
+                  email: cleanEmail,
+                  name: liveData.name || prev?.name || user.displayName || cleanEmail.split('@')[0],
+                  role: liveRole,
+                  picture: liveData.picture || liveData.avatar || prev?.picture || user.photoURL || '',
+                }));
+
+                setUserProfile((prev) => ({
+                  ...(prev || {
+                    id: user.uid,
+                    uid: user.uid,
+                    email: cleanEmail,
+                    name: liveData.name || user.displayName || cleanEmail.split('@')[0],
+                    picture: liveData.picture || liveData.avatar || user.photoURL || '',
+                    avatar: liveData.avatar || liveData.picture || user.photoURL || '',
+                    level: (liveData.level as any) || EnglishLevel.BEGINNER,
+                    streakDays: 0,
+                    streakCount: 0,
+                    points: 0,
+                    dailyGoalMinutes: 30,
+                    completedTodayMinutes: 0,
+                    targetAudienceCategory: 'general',
+                    timezone: DEFAULT_STUDENT_TIMEZONE,
+                  }),
+                  ...(liveData as any),
+                  id: user.uid,
+                  uid: user.uid,
+                }));
+              }
+            },
+            (snapshotError) => {
+              console.error('[Firestore onSnapshot user error]:', snapshotError);
+            }
+          );
+        } catch (subErr) {
+          console.error('[Firestore onSnapshot setup error]:', subErr);
+        }
       } else {
         setCurrentAccount(null);
+        setUserProfile(null);
         setGoogleOAuthToken(null);
         setGoogleOAuthTokenState(null);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      if (userDocUnsub) userDocUnsub();
+      unsubscribe();
+    };
   }, [fetchFirestoreUser]);
 
   // Dynamic Login with Email/Password and Firestore Role Verification

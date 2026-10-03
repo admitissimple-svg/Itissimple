@@ -47,7 +47,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.warn('Firestore Operation Notice:', JSON.stringify(errInfo));
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
 }
 
 /**
@@ -109,10 +109,21 @@ const lastSyncedSignatureMap = new Map<string, string>();
  * Prioritizes the authenticated Firebase Auth user UID when available.
  */
 export function normalizeStudentIdForPath(rawIdOrEmail: string): string {
-  if (!rawIdOrEmail || rawIdOrEmail === 'undefined' || rawIdOrEmail === 'null') {
+  if (!rawIdOrEmail || rawIdOrEmail === 'undefined' || rawIdOrEmail === 'null' || rawIdOrEmail === 'user-default' || rawIdOrEmail === 'anonymous_student') {
     return auth?.currentUser?.uid || '';
   }
   const trimmed = rawIdOrEmail.trim();
+
+  // If active authenticated user matches the input (by UID or email), strictly bind to auth.currentUser.uid
+  if (auth?.currentUser?.uid) {
+    const curUid = auth.currentUser.uid;
+    const curEmail = (auth.currentUser.email || '').toLowerCase().trim();
+    const cleanLower = trimmed.toLowerCase();
+    if (cleanLower === curUid.toLowerCase() || (curEmail && cleanLower === curEmail)) {
+      return curUid;
+    }
+  }
+
   // Standardize email addresses to safe key tokens
   if (trimmed.includes('@')) {
     return trimmed.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, '_');

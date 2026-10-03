@@ -1630,9 +1630,9 @@ export default function App() {
                       ...item,
                       activityName: cleanVidId
                         ? (dayData.playlistTitle || dayData.title || dayData.videoTitle || item.activityName)
-                        : 'Video of the Day',
-                      playlistId: cleanVidId ? (dayData.playlistId || '') : '',
-                      playlistTitle: cleanVidId ? (dayData.playlistTitle || '') : '',
+                        : (dayData.playlistTitle || 'Video of the Day'),
+                      playlistId: dayData.playlistId || '',
+                      playlistTitle: dayData.playlistTitle || '',
                       teacherVideos: cleanVidId
                         ? [
                             {
@@ -4942,9 +4942,7 @@ export default function App() {
 
     const adminEmails = [
       'adm.itissimple@gmail.com',
-      'estilobeeforkids@gmail.com',
       'adm.itssimple@gmail.com',
-      'estilobeeadm@gmail.com',
     ];
 
     const isMatchingTeacher = (sTeacherEmail?: string, sTeacherUid?: string, sTeacherName?: string) => {
@@ -4959,6 +4957,11 @@ export default function App() {
       if (adminEmails.includes(teacherEmailClean) && adminEmails.includes(cleanSTeacher)) return true;
       if (adminEmails.includes(teacherEmailClean) && cleanSTeacherName.includes('simple')) return true;
       if (teacherNameClean.includes('simple') && (adminEmails.includes(cleanSTeacher) || cleanSTeacherName.includes('simple'))) return true;
+
+      // Both active production students are assigned to Teacher Re (estilobeeforkids@gmail.com)
+      if (teacherEmailClean === 'estilobeeforkids@gmail.com' || adminEmails.includes(teacherEmailClean)) {
+        return true;
+      }
 
       return false;
     };
@@ -5079,7 +5082,15 @@ export default function App() {
       } as any);
     }
 
-    return Array.from(studentMap.values());
+    const ALLOWED_PRODUCTION_STUDENTS = new Set([
+      'estilobeeadm@gmail.com',
+      'laviniatilapiafc@gmail.com',
+    ]);
+
+    return Array.from(studentMap.values()).filter((st) => {
+      const email = (st.email || (st as any).studentEmail || '').toLowerCase().trim();
+      return ALLOWED_PRODUCTION_STUDENTS.has(email);
+    });
   }, [students, availableAccounts, lessons, currentAccount, userProfile, currentTutorProfile]);
 
   return (
@@ -5935,7 +5946,7 @@ export default function App() {
       <StudentManagementModal
         isOpen={isStudentMgmtModalOpen}
         onClose={() => setIsStudentMgmtModalOpen(false)}
-        students={students}
+        students={studentsList as any}
         onAddStudent={(newSt) => {
           const created: StudentProfile = { ...newSt, id: `st-${Date.now()}` };
           setStudents((prev) => [...prev, created]);

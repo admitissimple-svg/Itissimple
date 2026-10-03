@@ -257,8 +257,9 @@ export async function sendDirectMessage(params: {
     const docRef = doc(db, 'direct_messages', msgId);
     const stampedMessage = stampSchemaVersion(message);
     assertSafeFirestoreWrite(`direct_messages/${msgId}`, stampedMessage, undefined, true);
-    await setDoc(docRef, stampedMessage);
+    await setDoc(docRef, stampedMessage, { merge: true });
   } catch (err) {
+    console.error(`[Firestore Error] Failed to write direct message ${msgId}:`, err);
     handleFirestoreError(err, OperationType.WRITE, `direct_messages/${msgId}`);
   }
 

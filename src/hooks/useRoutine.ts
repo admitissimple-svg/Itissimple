@@ -57,11 +57,10 @@ export async function saveRoutineVideoToFirestore(
   const cleanUid = normalizeStudentIdForPath(studentUid);
   if (!cleanUid || !dayOfWeek) return false;
 
-  const validVidId = extractYouTubeVideoId(videoData.videoId || videoData.url || '') || videoData.videoId;
-  if (!validVidId) return false;
-
-  const cleanUrl = videoData.url || `https://www.youtube.com/watch?v=${validVidId}`;
-  const cleanTitle = videoData.title || videoData.videoTitle || 'Daily Video Practice';
+  const rawVidId = videoData.videoId || videoData.url || '';
+  const validVidId = extractYouTubeVideoId(rawVidId) || (videoData.videoId || '').trim();
+  const cleanUrl = validVidId ? (videoData.url || `https://www.youtube.com/watch?v=${validVidId}`) : '';
+  const cleanTitle = videoData.title || videoData.videoTitle || (validVidId ? 'Daily Video Practice' : 'Video of the Day');
   const path = `users/${cleanUid}/routines/${dayOfWeek}`;
 
   const payload: SavedRoutineVideo = {
@@ -84,17 +83,36 @@ export async function saveRoutineVideoToFirestore(
     const routineRef = doc(db, 'users', cleanUid, 'routines', dayOfWeek);
     await withFirestoreTimeout(setDoc(routineRef, payload, { merge: true }), 3500, undefined);
 
-    // Record into weekly history subcollection asynchronously
-    const videoTitle = videoData.videoTitle || videoData.title || 'Daily Video Practice';
-    recordConsumedVideo(cleanUid, 'weekData', {
-      id: validVidId,
-      videoId: validVidId,
-      title: videoTitle,
-      videoTitle,
-      url: videoData.url || `https://www.youtube.com/watch?v=${validVidId}`,
-      dayOfWeek,
-      watchedAt: new Date().toISOString(),
-    }).catch(() => {});
+    // Also mirror to user root document routines map for instant multi-device hydration
+    const userRef = doc(db, 'users', cleanUid);
+    await withFirestoreTimeout(
+      setDoc(
+        userRef,
+        {
+          routinesByDay: {
+            [dayOfWeek]: payload,
+          },
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ),
+      2500,
+      undefined
+    );
+
+    // Record into weekly history subcollection asynchronously if valid video
+    if (validVidId) {
+      const videoTitle = videoData.videoTitle || videoData.title || 'Daily Video Practice';
+      recordConsumedVideo(cleanUid, 'weekData', {
+        id: validVidId,
+        videoId: validVidId,
+        title: videoTitle,
+        videoTitle,
+        url: cleanUrl,
+        dayOfWeek,
+        watchedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
 
     // Mirror to server for backend persistence
     fetch('/api/routines/daily-video', {
@@ -110,6 +128,7 @@ export async function saveRoutineVideoToFirestore(
 
     return true;
   } catch (error) {
+    console.error(`[Firestore Error] Failed to save routine for ${dayOfWeek} to ${path}:`, error);
     handleFirestoreError(error, OperationType.WRITE, path);
     return false;
   }
@@ -734,7 +753,9 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [lastSavedDay, setLastSavedDay] = useState<DayOfWeek | null>(null);
 
-  const effectiveUid = studentUid ? normalizeStudentIdForPath(studentUid) : '';
+  const effectiveUid = studentUid
+    ? normalizeStudentIdForPath(studentUid)
+    : (auth?.currentUser?.uid || '');
 
   // Load routines and watched history on mount / studentUid change + real-time onSnapshot sync
   useEffect(() => {
@@ -760,7 +781,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
         setWatchedHistory(history);
       })
       .catch((err) => {
-        console.warn('Error loading routine data from Firestore:', err);
+        console.error('[Firestore Error] Error loading routine data:', err);
       })
       .finally(() => {
         if (isMounted) setIsLoading(false);
@@ -768,7 +789,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
 
     const db = getDb();
 
-    // Listen in real-time to the student user document for changes to watchedVideosHistory
+    // Listen in real-time to the student user document for changes to watchedVideosHistory and routinesByDay
     let userUnsub = () => {};
     try {
       const userRef = doc(db, 'users', effectiveUid);
@@ -791,13 +812,21 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
 
             const ids = Array.from(new Set([...idsFromHistory, ...idsFromJournal]));
             setWatchedHistory(ids);
+
+            if (data.routinesByDay && typeof data.routinesByDay === 'object') {
+              setRoutinesByDay((prev) => ({ ...prev, ...data.routinesByDay }));
+            }
           }
         },
-        () => {}
+        (err) => {
+          console.error('[Firestore onSnapshot user routines error]:', err);
+        }
       );
-    } catch {}
+    } catch (err) {
+      console.error('[Firestore onSnapshot user listener error]:', err);
+    }
 
-    // Subscribe in real-time to the routines subcollection to mirror teacher updates instantly
+    // Subscribe in real-time to the routines subcollection to mirror updates instantly across devices
     let routinesUnsub = () => {};
     try {
       const routinesCol = collection(db, 'users', effectiveUid, 'routines');
@@ -812,9 +841,13 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
             setRoutinesByDay((prev) => ({ ...prev, ...updated }));
           }
         },
-        () => {}
+        (err) => {
+          console.error('[Firestore onSnapshot routines collection error]:', err);
+        }
       );
-    } catch {}
+    } catch (err) {
+      console.error('[Firestore onSnapshot routines subcollection listener error]:', err);
+    }
 
     return () => {
       isMounted = false;

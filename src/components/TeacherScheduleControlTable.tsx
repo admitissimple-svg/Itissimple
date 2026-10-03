@@ -108,6 +108,11 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
   const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('all');
 
   const availableStudentsForFilter = React.useMemo(() => {
+    const ALLOWED_PRODUCTION_STUDENTS = new Set([
+      'estilobeeadm@gmail.com',
+      'laviniatilapiafc@gmail.com',
+    ]);
+
     const map = new Map<string, { email: string; name: string }>();
     const teacherEmailClean = (currentAccount?.email || '').toLowerCase().trim();
     const currentTeacherUid = (currentAccount?.id || (currentAccount as any)?.uid || '').trim();
@@ -116,9 +121,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
 
     const adminEmails = [
       'adm.itissimple@gmail.com',
-      'estilobeeforkids@gmail.com',
       'adm.itssimple@gmail.com',
-      'estilobeeadm@gmail.com',
     ];
 
     const isMatchingTeacher = (sTeacherEmail?: string, sTeacherUid?: string, sTeacherName?: string) => {
@@ -134,6 +137,11 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       if (adminEmails.includes(teacherEmailClean) && cleanSTeacherName.includes('simple')) return true;
       if (currentTeacherName.includes('simple') && (adminEmails.includes(cleanSTeacher) || cleanSTeacherName.includes('simple'))) return true;
 
+      // Both active production students are assigned to Teacher Re (estilobeeforkids@gmail.com)
+      if (teacherEmailClean === 'estilobeeforkids@gmail.com' || adminEmails.includes(teacherEmailClean)) {
+        return true;
+      }
+
       return false;
     };
 
@@ -145,7 +153,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       const stTeacherName = ((st as any).teacherName || '').toLowerCase().trim();
       const stStatus = (st as any).status || (st as any).enrollmentStatus;
 
-      if (!email) return;
+      if (!email || !ALLOWED_PRODUCTION_STUDENTS.has(email)) return;
 
       // Strictly filter out cancelled or unenrolled students
       if (stStatus === 'cancelled' || stStatus === 'not_enrolled') return;
@@ -165,6 +173,8 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       const lTeacherEmail = (l.teacherEmail || (l as any).tutorEmail || '').toLowerCase().trim();
       const lTeacherUid = (l.teacherUid || (l as any).tutorUid || '').trim();
       const lTeacherName = (l.teacherName || '').toLowerCase().trim();
+
+      if (!email || !ALLOWED_PRODUCTION_STUDENTS.has(email)) return;
 
       if (isTeacher) {
         if (!isMatchingTeacher(lTeacherEmail, lTeacherUid, lTeacherName)) return;
@@ -193,7 +203,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       }
     });
 
-    return Array.from(map.values());
+    return Array.from(map.values()).filter((st) => ALLOWED_PRODUCTION_STUDENTS.has(st.email.toLowerCase().trim()));
   }, [students, lessons, currentAccount, tutorProfile]);
 
   const sortedLessons = [...lessons].sort((a, b) => {

@@ -40,41 +40,48 @@ const inMemoryWeeklyChecksCache = new Map<string, Record<string, boolean>>();
 export { migrateLegacyLocalStorageToFirestore };
 
 export function normalizeUid(rawId?: string | null, email?: string | null): string {
-  // 1. If a valid, non-placeholder, non-email UID was provided, use it
-  if (
-    rawId &&
-    typeof rawId === 'string' &&
-    rawId.trim() !== '' &&
-    !rawId.includes('@') &&
-    !rawId.startsWith('usr-') &&
-    rawId !== 'user-default' &&
-    rawId !== 'anonymous_student' &&
-    rawId !== 'undefined' &&
-    rawId !== 'null'
-  ) {
-    return rawId.trim();
-  }
+  const cleanRawId = (rawId || '').trim();
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const rawIsEmail = cleanRawId.includes('@');
+  const effectiveEmail = cleanEmail || (rawIsEmail ? cleanRawId.toLowerCase() : '');
 
-  // 2. Prioritize authenticated user UID from Firebase Auth if it corresponds to current user
-  if (auth.currentUser?.uid) {
-    const cleanAuthEmail = (auth.currentUser.email || '').toLowerCase().trim();
-    const cleanProvidedEmail = (email || '').toLowerCase().trim();
-    if (!cleanProvidedEmail || !cleanAuthEmail || cleanAuthEmail === cleanProvidedEmail) {
-      return auth.currentUser.uid;
+  // 1. If active authenticated user matches the provided email or rawId, prioritize auth.currentUser.uid
+  if (auth?.currentUser?.uid) {
+    const authUid = auth.currentUser.uid;
+    const authEmail = (auth.currentUser.email || '').toLowerCase().trim();
+    if (
+      (effectiveEmail && authEmail && effectiveEmail === authEmail) ||
+      (cleanRawId && cleanRawId.toLowerCase() === authUid.toLowerCase()) ||
+      (!cleanRawId && !cleanEmail)
+    ) {
+      return authUid;
     }
   }
 
-  // 3. Fallback to provided rawId if no active auth session
-  if (rawId && typeof rawId === 'string' && rawId.trim() && rawId !== 'user-default' && rawId !== 'anonymous_student') {
-    return rawId.trim();
+  // 2. If a valid, non-placeholder, non-email UID was provided, use it
+  if (
+    cleanRawId &&
+    !rawIsEmail &&
+    !cleanRawId.startsWith('usr-') &&
+    cleanRawId !== 'user-default' &&
+    cleanRawId !== 'anonymous_student' &&
+    cleanRawId !== 'undefined' &&
+    cleanRawId !== 'null'
+  ) {
+    return cleanRawId;
   }
 
-  // 4. Fallback to normalized email only if completely unauthenticated
-  if (email && typeof email === 'string' && email.trim()) {
-    return email.toLowerCase().trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  // 3. Fallback to normalized email token
+  if (effectiveEmail) {
+    return effectiveEmail.replace(/[^a-zA-Z0-9_-]/g, '_');
   }
 
-  return '';
+  // 4. Default to auth.currentUser.uid if available
+  if (auth?.currentUser?.uid) {
+    return auth.currentUser.uid;
+  }
+
+  return cleanRawId;
 }
 
 export function getUserDocIds(rawId?: string | null, email?: string | null): string[] {
@@ -1356,6 +1363,17 @@ export async function saveStudentNativeFriendToFirestore(
   const cleanUid = normalizeUid(studentUid, cleanEmail);
   if (!cleanUid) return false;
 
+  const payload: Record<string, any> = {
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (teacherData?.teacherEmail !== undefined) {
+    payload.teacherEmail = teacherData.teacherEmail;
+  }
+  if (teacherData?.teacherName !== undefined) {
+    payload.teacherName = teacherData.teacherName;
+  }
+
   const cleanTeacherEmail = (teacherData?.teacherEmail || '').toLowerCase().trim();
   const cleanTeacherUid =
     teacherData?.teacherUid ||
@@ -1363,22 +1381,27 @@ export async function saveStudentNativeFriendToFirestore(
     teacherData?.nativeFriendUID ||
     (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
 
-  const payload: Record<string, any> = {
-    teacherEmail: teacherData?.teacherEmail || null,
-    teacherName: teacherData?.teacherName || null,
-    teacherUid: cleanTeacherUid || null,
-    assignedNativeFriendUID: cleanTeacherUid || null,
-    nativeFriendUID: cleanTeacherUid || null,
-    enrollmentStatus: teacherData?.enrollmentStatus || (cleanTeacherEmail ? 'active' : 'cancelled'),
-    status: teacherData?.enrollmentStatus || (cleanTeacherEmail ? 'active' : 'cancelled'),
-    updatedAt: new Date().toISOString(),
-  };
+  if (cleanTeacherUid) {
+    payload.teacherUid = cleanTeacherUid;
+    payload.assignedNativeFriendUID = cleanTeacherUid;
+    payload.nativeFriendUID = cleanTeacherUid;
+  } else if (teacherData?.teacherUid !== undefined) {
+    payload.teacherUid = teacherData.teacherUid;
+    payload.assignedNativeFriendUID = teacherData.assignedNativeFriendUID || teacherData.teacherUid;
+    payload.nativeFriendUID = teacherData.nativeFriendUID || teacherData.teacherUid;
+  }
+
+  if (teacherData?.enrollmentStatus !== undefined) {
+    payload.enrollmentStatus = teacherData.enrollmentStatus;
+    payload.status = teacherData.enrollmentStatus;
+  }
 
   try {
     // Strictly write to doc(db, 'users', cleanUid) - authenticated user UID single source of truth
     await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), payload, { merge: true }), 3000, null);
     return true;
   } catch (error) {
+    console.error(`[Firestore Error] Failed to save student Native Friend for ${cleanUid}:`, error);
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
     return false;
   }
@@ -1410,15 +1433,36 @@ export async function saveStudentProfileToFirestore(
     ...sanitized,
     id: cleanUid,
     uid: cleanUid,
-    email: cleanEmail || sanitized.email || '',
-    teacherEmail: profile.teacherEmail !== undefined ? (profile.teacherEmail || null) : null,
-    teacherName: profile.teacherName !== undefined ? (profile.teacherName || null) : null,
-    teacherUid: cleanTeacherUid || null,
-    assignedNativeFriendUID: cleanTeacherUid || null,
-    nativeFriendUID: cleanTeacherUid || null,
-    enrollmentStatus: profile.enrollmentStatus || (cleanTeacherEmail ? 'active' : 'not_enrolled'),
     updatedAt: new Date().toISOString(),
   };
+
+  if (cleanEmail) {
+    payload.email = cleanEmail;
+  }
+  if (profile.teacherEmail !== undefined) {
+    payload.teacherEmail = profile.teacherEmail;
+  }
+  if (profile.teacherName !== undefined) {
+    payload.teacherName = profile.teacherName;
+  }
+  if (profile.teacherUid !== undefined) {
+    payload.teacherUid = profile.teacherUid;
+  } else if (cleanTeacherUid) {
+    payload.teacherUid = cleanTeacherUid;
+  }
+  if (profile.assignedNativeFriendUID !== undefined) {
+    payload.assignedNativeFriendUID = profile.assignedNativeFriendUID;
+  } else if (cleanTeacherUid) {
+    payload.assignedNativeFriendUID = cleanTeacherUid;
+  }
+  if (profile.nativeFriendUID !== undefined) {
+    payload.nativeFriendUID = profile.nativeFriendUID;
+  } else if (cleanTeacherUid) {
+    payload.nativeFriendUID = cleanTeacherUid;
+  }
+  if (profile.enrollmentStatus !== undefined) {
+    payload.enrollmentStatus = profile.enrollmentStatus;
+  }
 
   try {
     const stampedPayload = stampSchemaVersion(payload);
@@ -1428,6 +1472,7 @@ export async function saveStudentProfileToFirestore(
     await withFirestoreTimeout(setDoc(doc(db, 'users', cleanUid), stampedPayload, { merge: true }), 3000, null);
     return true;
   } catch (error) {
+    console.error(`[Firestore Error] Failed to save student profile for ${cleanUid}:`, error);
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}`);
     return false;
   }
@@ -3125,11 +3170,37 @@ export async function saveStudentHomeworkProgressToFirestore(
 
   try {
     const sanitizedHomework = JSON.parse(JSON.stringify(homework));
+    let existingHomework: any = {};
+    if (db && cleanUid) {
+      try {
+        const userRef = doc(db, 'users', cleanUid);
+        const uSnap = await withFirestoreTimeout(getDoc(userRef), 2000, null);
+        if (uSnap && uSnap.exists()) {
+          existingHomework = uSnap.data()?.weeklyHomework || {};
+        }
+      } catch {}
+    }
+
+    const mergedCompletedParts = {
+      ...(existingHomework?.completedPartsByDay || {}),
+      ...(sanitizedHomework?.completedPartsByDay || {}),
+    };
+
+    const mergedStudentAnswers = {
+      matching: { ...(existingHomework?.studentAnswers?.matching || {}), ...(sanitizedHomework?.studentAnswers?.matching || {}) },
+      fillInBlanks: { ...(existingHomework?.studentAnswers?.fillInBlanks || {}), ...(sanitizedHomework?.studentAnswers?.fillInBlanks || {}) },
+      sentences: { ...(existingHomework?.studentAnswers?.sentences || {}), ...(sanitizedHomework?.studentAnswers?.sentences || {}) },
+      quizAnswers: { ...(existingHomework?.studentAnswers?.quizAnswers || {}), ...(sanitizedHomework?.studentAnswers?.quizAnswers || {}) },
+    };
+
     const payload = stampSchemaVersion({
+      ...existingHomework,
       ...sanitizedHomework,
       id: weekId,
       studentUid: cleanUid,
       studentEmail: cleanEmail,
+      completedPartsByDay: mergedCompletedParts,
+      studentAnswers: mergedStudentAnswers,
       updatedAt: new Date().toISOString(),
     });
 
@@ -3170,13 +3241,14 @@ export async function saveStudentHomeworkProgressToFirestore(
         body: JSON.stringify({
           studentEmail: cleanEmail,
           uid: cleanUid,
-          weeklyHomework: sanitizedHomework,
+          weeklyHomework: payload,
         }),
       }).catch(() => {});
     }
 
     return true;
   } catch (error) {
+    console.error(`[Firestore Error] Failed to save homework for ${cleanUid}:`, error);
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/homework/${weekId}`);
     return false;
   }
