@@ -72,6 +72,7 @@ export function useNativeFriendsNotesReminder({
   const [latestTransformation, setLatestTransformation] = useState<PedagogicalLessonTransformation | null>(null);
   const [stepIndex, setStepIndex] = useState<number>(0);
   const [storedSessionKey, setStoredSessionKey] = useState<string>('');
+  const [storedLastReviewedDate, setStoredLastReviewedDate] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // 1. Fetch past sessions for the isolated student (Strictly Descending: newest first)
@@ -218,6 +219,7 @@ export function useNativeFriendsNotesReminder({
           if (data) {
             loadedSessionKey = data.lastSessionKey || '';
             loadedStepIndex = typeof data.stepIndex === 'number' ? data.stepIndex : 0;
+            if (data.lastReviewedDate) setStoredLastReviewedDate(data.lastReviewedDate);
           }
         }
       }
@@ -238,6 +240,7 @@ export function useNativeFriendsNotesReminder({
           if (progressData && progressData.lastSessionKey) {
             loadedSessionKey = progressData.lastSessionKey;
             loadedStepIndex = progressData.stepIndex || 0;
+            if (progressData.lastReviewedDate) setStoredLastReviewedDate(progressData.lastReviewedDate);
           }
         }
       } catch (err) {
@@ -266,6 +269,7 @@ export function useNativeFriendsNotesReminder({
           if (data) {
             if (data.lastSessionKey) setStoredSessionKey(data.lastSessionKey);
             if (typeof data.stepIndex === 'number') setStepIndex(data.stepIndex);
+            if (data.lastReviewedDate) setStoredLastReviewedDate(data.lastReviewedDate);
           }
         }
       },
@@ -330,6 +334,15 @@ export function useNativeFriendsNotesReminder({
       setStoredSessionKey(newSessionKey);
       setStepIndex(newStepIndex);
 
+      const todayInTz = new Intl.DateTimeFormat('en-CA', {
+        timeZone: effectiveTz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+
+      setStoredLastReviewedDate(todayInTz);
+
       // Save directly to Firestore /users/{studentUid}/session_notes/review_cycle and users/{studentUid}
       try {
         const firestore = getDb();
@@ -338,6 +351,7 @@ export function useNativeFriendsNotesReminder({
             lastSessionKey: newSessionKey,
             stepIndex: newStepIndex,
             lastReviewedTab: lastTab || '',
+            lastReviewedDate: todayInTz,
             updatedAt: new Date().toISOString(),
           };
 
@@ -364,13 +378,14 @@ export function useNativeFriendsNotesReminder({
             lastSessionKey: newSessionKey,
             stepIndex: newStepIndex,
             lastReviewedTab: lastTab || '',
+            lastReviewedDate: todayInTz,
           }),
         });
       } catch (err) {
         console.warn('useNativeFriendsNotesReminder: Server progress save notice:', err);
       }
     },
-    [resolvedUid, resolvedEmail]
+    [resolvedUid, resolvedEmail, effectiveTz]
   );
 
   // 5. Check Regra 1: Se o aluno nunca teve nenhuma aula com o amigo nativo, nenhum lembrete será exibido
@@ -597,6 +612,19 @@ export function useNativeFriendsNotesReminder({
     isEn,
   ]);
 
+  const todayInTz = useMemo(() => {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: effectiveTz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  }, [effectiveTz]);
+
+  const isReviewCompletedToday = useMemo(() => {
+    return Boolean(storedLastReviewedDate && storedLastReviewedDate === todayInTz);
+  }, [storedLastReviewedDate, todayInTz]);
+
   return {
     reminder,
     advanceSequentialStep,
@@ -609,5 +637,7 @@ export function useNativeFriendsNotesReminder({
     hasLessonToday,
     hasHadAnyLesson,
     scheduledLessonToday,
+    isReviewCompletedToday,
+    storedLastReviewedDate,
   };
 }

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Award,
   Edit3,
@@ -25,6 +25,7 @@ import {
   UserProfile,
 } from '../types';
 import { Translations } from '../utils/i18n';
+import { sanitizeTimeZone } from '../utils/timezone';
 import { LiveMeetLessonsPanel } from './LiveMeetLessonsPanel';
 import { NativeFriendsNotesModal } from './NativeFriendsNotesModal';
 import { useNativeFriendsNotesReminder } from '../hooks/useNativeFriendsNotesReminder';
@@ -85,6 +86,7 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
     reminder,
     advanceSequentialStep,
     latestSession,
+    isReviewCompletedToday,
   } = useNativeFriendsNotesReminder({
     studentUid,
     studentEmail,
@@ -95,18 +97,69 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
   });
 
   const [isAlertOpen, setIsAlertOpen] = useState(false);
-  const hasTriggeredOnLoadRef = useRef<string | null>(null);
+  const hasAutoOpenedRef = useRef<boolean>(false);
 
-  // Automatically trigger the alert as soon as the student opens and loads the page (according to the strict 4 rules)
+  // Regra 1: Abertura Única Inicial: O painel do Sequential Review deve abrir automaticamente apenas na primeira vez que o aluno abrir/carregar o aplicativo na sessão/dia.
   useEffect(() => {
-    if (reminder) {
-      const loadKey = `${studentUid || studentEmail}_${reminder.rule}_${reminder.targetTab}_${reminder.sessionKey}`;
-      if (hasTriggeredOnLoadRef.current !== loadKey) {
-        setIsAlertOpen(true);
-        hasTriggeredOnLoadRef.current = loadKey;
-      }
+    if (!reminder) return;
+    const studentKey = (studentUid || studentEmail || '').trim().toLowerCase();
+    if (!studentKey) return;
+
+    const effectiveTz = sanitizeTimeZone(timeZone);
+    const todayStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: effectiveTz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+
+    const sessionOpenedKey = `sequential_review_opened_${studentKey}_${todayStr}`;
+    const sessionCompletedKey = `sequential_review_completed_${studentKey}_${todayStr}`;
+
+    let alreadyOpenedOrCompleted = hasAutoOpenedRef.current || isReviewCompletedToday;
+    if (!alreadyOpenedOrCompleted && typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        alreadyOpenedOrCompleted =
+          window.sessionStorage.getItem(sessionOpenedKey) === 'true' ||
+          window.sessionStorage.getItem(sessionCompletedKey) === 'true';
+      } catch {}
     }
-  }, [reminder, studentUid, studentEmail]);
+
+    if (!alreadyOpenedOrCompleted) {
+      hasAutoOpenedRef.current = true;
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        try {
+          window.sessionStorage.setItem(sessionOpenedKey, 'true');
+        } catch {}
+      }
+      setIsAlertOpen(true);
+    }
+  }, [reminder, studentUid, studentEmail, timeZone, isReviewCompletedToday]);
+
+  // Regra 2: Fechamento ao Concluir: Assim que o aluno concluir a revisão do dia (marcando-a como concluída/lida), o painel deve ser fechado imediatamente.
+  const handleCompleteReview = useCallback(() => {
+    setIsAlertOpen(false);
+    setIsNotesModalOpen(false);
+
+    const studentKey = (studentUid || studentEmail || '').trim().toLowerCase();
+    const effectiveTz = sanitizeTimeZone(timeZone);
+    const todayStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: effectiveTz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+
+    hasAutoOpenedRef.current = true;
+    if (studentKey && typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        window.sessionStorage.setItem(`sequential_review_opened_${studentKey}_${todayStr}`, 'true');
+        window.sessionStorage.setItem(`sequential_review_completed_${studentKey}_${todayStr}`, 'true');
+      } catch {}
+    }
+
+    advanceSequentialStep();
+  }, [advanceSequentialStep, studentUid, studentEmail, timeZone]);
 
   const handleOpenNotesTab = (tab: 'all' | 'mistakes' | 'grammar' | 'vocab' | 'summary') => {
     setModalInitialTab(tab);
@@ -529,18 +582,31 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
 
             {/* Alert Actions */}
             <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2.5 border-t border-white/10">
-              {reminder.rule === 'rule_3_sequential_review' && (
+              {reminder.rule === 'rule_3_sequential_review' ? (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    advanceSequentialStep();
+                    handleCompleteReview();
                   }}
                   className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-1.5 border border-white/15 transition cursor-pointer"
                   title={isEn ? 'Mark this step as read and advance sequence' : 'Marcar como lida e avançar para o próximo passo'}
                 >
                   <CheckCheck className="w-4 h-4 text-emerald-400" />
                   <span>{isEn ? 'Mark as Read & Advance' : 'Marcar como Lida & Avançar'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCompleteReview();
+                  }}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center justify-center gap-1.5 border border-white/15 transition cursor-pointer"
+                  title={isEn ? 'Mark as read and close' : 'Marcar como lida e fechar'}
+                >
+                  <CheckCheck className="w-4 h-4 text-emerald-400" />
+                  <span>{isEn ? 'Mark as Read' : 'Marcar como Lida'}</span>
                 </button>
               )}
 
@@ -630,7 +696,7 @@ export const StudentHeaderSection: React.FC<StudentHeaderSectionProps> = ({
         timeZone={timeZone}
         currentLanguage={currentLanguage}
         initialTab={modalInitialTab}
-        onAdvanceSequentialStep={advanceSequentialStep}
+        onAdvanceSequentialStep={handleCompleteReview}
         currentSequentialTab={reminder?.targetTab}
         currentStepNumber={reminder?.tabNumber}
         isLessonToday={reminder?.isLessonToday}
