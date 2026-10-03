@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, setLogLevel, doc, getDoc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { getFirestore, setLogLevel, doc, getDoc, setDoc, collection, getDocs, deleteDoc, query, where } from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 
@@ -162,10 +162,76 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
       fetchDoc('lessons'),
       fetchDoc('youtube_playlists'),
       fetchTutorsFromFirestore().catch(() => []),
-    ]).then(([mainData, routines, tutors, assignments, lessons, ytPlaylists, directTutors]) => {
-      if (!mainData && !routines && !tutors && !assignments && !lessons && !ytPlaylists && (!directTutors || directTutors.length === 0)) {
+      fetchUsersFromFirestore().catch(() => []),
+    ]).then(([mainData, routines, tutors, assignments, lessons, ytPlaylists, directTutors, directUsers]) => {
+      if (!mainData && !routines && !tutors && !assignments && !lessons && !ytPlaylists && (!directTutors || directTutors.length === 0) && (!directUsers || directUsers.length === 0)) {
         return null;
       }
+
+      // Merge direct users from /users collection into userProfiles, authUsers, and students
+      const mergedUserProfiles = { ...(mainData?.userProfiles || {}) };
+      const mergedAuthUsers = { ...(mainData?.authUsers || {}) };
+      const studentMap = new Map<string, any>();
+      (mainData?.students || []).forEach((s: any) => {
+        const key = (s.studentEmail || s.email || '').toLowerCase().trim();
+        if (key) studentMap.set(key, s);
+      });
+
+      (directUsers || []).forEach((u: any) => {
+        const key = (u.email || '').toLowerCase().trim();
+        if (key) {
+          if (!mergedUserProfiles[key]) {
+            mergedUserProfiles[key] = {
+              id: u.uid || u.id || `usr-${key.replace(/[^a-zA-Z0-9]/g, '-')}`,
+              uid: u.uid || u.id,
+              name: u.name || key.split('@')[0],
+              email: key,
+              level: u.level || u.englishLevel || 'iniciante',
+              enrollmentStatus: u.enrollmentStatus || 'active',
+              learningGoal: u.learningGoal || u.goal || 'English for everyday life & work',
+              weeklyStudyDaysTarget: u.weeklyStudyDaysTarget ?? 7,
+              weeklyStudyDays: u.weeklyStudyDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+              createdAt: u.createdAt || new Date().toISOString(),
+            };
+          }
+          if (!mergedAuthUsers[key]) {
+            mergedAuthUsers[key] = {
+              uid: u.uid || u.id || `usr-${key.replace(/[^a-zA-Z0-9]/g, '-')}`,
+              email: key,
+              name: u.name || key.split('@')[0],
+              password: u.password || '',
+              role: u.role || 'student',
+              createdAt: u.createdAt || new Date().toISOString(),
+            };
+          }
+          if ((u.role === 'student' || !u.role) && !studentMap.has(key)) {
+            studentMap.set(key, {
+              id: u.uid || u.id || `usr-${key.replace(/[^a-zA-Z0-9]/g, '-')}`,
+              studentUid: u.uid || u.id,
+              name: u.name || key.split('@')[0],
+              studentName: u.name || key.split('@')[0],
+              email: key,
+              studentEmail: key,
+              level: u.level || u.englishLevel || 'iniciante',
+              studentLevel: u.level || u.englishLevel || 'iniciante',
+              goal: u.learningGoal || u.goal || 'English for everyday life & work',
+              learningGoal: u.learningGoal || u.goal || 'English for everyday life & work',
+              contractedLessons: u.contractedLessons || 5,
+              completedLessonsCount: u.completedLessonsCount || 0,
+              status: 'active',
+              activeSince: (u.createdAt || new Date().toISOString()).split('T')[0],
+              createdAt: u.createdAt || new Date().toISOString(),
+            });
+          }
+        }
+      });
+
+      const hydratedMainData = {
+        ...(mainData || {}),
+        userProfiles: mergedUserProfiles,
+        authUsers: mergedAuthUsers,
+        students: Array.from(studentMap.values()),
+      };
 
       // Merge tutors from /tutors collection with tutors from app_state/tutors so NO tutor is EVER lost
       const tutorMap = new Map<string, any>();
@@ -189,7 +255,7 @@ export async function fetchAppStateFromFirestore(): Promise<any | null> {
       };
 
       return {
-        ...(mainData || {}),
+        ...hydratedMainData,
         ...(routines || {}),
         ...mergedTutorsDoc,
         ...(assignments || {}),
@@ -380,13 +446,47 @@ export async function saveUserToFirestore(user: any): Promise<boolean> {
   if (!db || !user?.email) return false;
   try {
     const sanitized = JSON.parse(JSON.stringify(user));
-    const docId = user.uid || user.email.toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '-');
-    const savePromise = setDoc(doc(db, 'users', docId), sanitized, { merge: true }).then(() => true);
-    const result = await withTimeout(savePromise, 2000);
+    const cleanDocId = user.email.toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '-');
+    const docId = user.uid || cleanDocId;
+
+    const savePromises = [
+      setDoc(doc(db, 'users', docId), sanitized, { merge: true }),
+    ];
+    if (docId !== cleanDocId) {
+      savePromises.push(setDoc(doc(db, 'users', cleanDocId), sanitized, { merge: true }));
+    }
+
+    const result = await withTimeout(Promise.all(savePromises).then(() => true), 10000);
     return !!result;
   } catch (err) {
     console.warn('Firestore saveUser error:', err);
     return false;
+  }
+}
+
+export async function fetchUsersFromFirestore(): Promise<any[]> {
+  const db = getFirestoreDb();
+  if (!db) return [];
+  try {
+    const fetchPromise = async () => {
+      const snap = await getDocs(collection(db, 'users'));
+      const list: any[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        if (data && (data.email || data.id)) {
+          list.push({
+            id: d.id,
+            ...data,
+          });
+        }
+      });
+      return list;
+    };
+    const result = await withTimeout(fetchPromise(), 10000);
+    return result || [];
+  } catch (err) {
+    console.warn('Firestore fetchUsers error:', err);
+    return [];
   }
 }
 
@@ -395,6 +495,8 @@ export async function fetchUserFromFirestore(email: string, uid?: string): Promi
   if (!db || (!email && !uid)) return null;
   try {
     const cleanDocId = email ? email.toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '-') : '';
+    const cleanEmail = email ? email.toLowerCase().trim() : '';
+
     const fetchPromise = (async () => {
       if (uid) {
         const snapUid = await getDoc(doc(db, 'users', uid));
@@ -404,9 +506,18 @@ export async function fetchUserFromFirestore(email: string, uid?: string): Promi
         const snapEmail = await getDoc(doc(db, 'users', cleanDocId));
         if (snapEmail.exists()) return snapEmail.data();
       }
+      if (cleanEmail) {
+        try {
+          const q = query(collection(db, 'users'), where('email', '==', cleanEmail));
+          const qSnap = await getDocs(q);
+          if (!qSnap.empty) {
+            return qSnap.docs[0].data();
+          }
+        } catch {}
+      }
       return null;
     })();
-    return await withTimeout(fetchPromise, 3500);
+    return await withTimeout(fetchPromise, 8000);
   } catch (err) {
     console.warn('Firestore fetchUser error:', err);
     return null;

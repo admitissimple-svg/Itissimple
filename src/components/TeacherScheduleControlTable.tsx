@@ -105,6 +105,7 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
   };
 
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('active');
+  const [selectedTeacherFilter, setSelectedTeacherFilter] = useState<string>('all');
 
   const availableStudentsForFilter = React.useMemo(() => {
     const map = new Map<string, { email: string; name: string }>();
@@ -211,6 +212,11 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
         (currentTeacherUid && lTeacherUid && currentTeacherUid === lTeacherUid) ||
         (teacherEmailClean && lTeacherEmail && teacherEmailClean === lTeacherEmail);
       if (!isMyLesson) return false;
+    } else if (selectedTeacherFilter !== 'all') {
+      const lTeacherEmail = (lesson.teacherEmail || (lesson as any).tutorEmail || '').toLowerCase().trim();
+      const lTeacherUid = (lesson.teacherUid || (lesson as any).tutorUid || '').trim();
+      const filterEmail = selectedTeacherFilter.toLowerCase().trim();
+      if (lTeacherEmail !== filterEmail && lTeacherUid !== filterEmail) return false;
     }
 
     if (selectedStudentFilter !== 'all') {
@@ -269,39 +275,60 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
         timezone: resolvedTutorTz,
       };
 
+  const displayedTutorProfile = React.useMemo(() => {
+    if (selectedTeacherFilter !== 'all') {
+      const match = teachers.find(
+        (tch) => (tch.email || '').toLowerCase().trim() === selectedTeacherFilter.toLowerCase().trim()
+      );
+      if (match) {
+        return {
+          id: match.id || `tutor-${match.email}`,
+          name: match.name,
+          email: match.email,
+          avatar: match.picture || match.avatar || '',
+          headline: (match as any).headline || 'Native Friend',
+          bio: (match as any).bio || '',
+          timezone: (match as any).timezone || resolvedTutorTz,
+          meetUrl: (match as any).meetUrl || (match as any).meetLink || '',
+        } as NativeFriendTutor;
+      }
+    }
+    return tutorProfile;
+  }, [selectedTeacherFilter, teachers, tutorProfile, resolvedTutorTz]);
+
   return (
     <div className="bg-white rounded-2xl border border-[#607EC9]/30 shadow-xs p-3.5 sm:p-5 space-y-4" id="teacher-schedule-control-table">
       {/* 🌟 Native Friend Profile Card */}
-      {tutorProfile && (
+      {displayedTutorProfile && (
         <div className="bg-gradient-to-r from-[#000035] via-[#062863] to-[#1C4C96] rounded-2xl p-4 sm:p-5 text-white border border-[#9AB4FF]/40 shadow-sm flex items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
             <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border-2 border-[#F4CA54] shrink-0 bg-white/10 shadow-md flex items-center justify-center">
-              {tutorProfile.avatar && tutorProfile.avatar.trim() !== '' ? (
+              {displayedTutorProfile.avatar && displayedTutorProfile.avatar.trim() !== '' ? (
                 <img
-                  src={tutorProfile.avatar}
-                  alt={tutorProfile.name}
+                  src={displayedTutorProfile.avatar}
+                  alt={displayedTutorProfile.name}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
               ) : (
                 <span className="font-black text-lg sm:text-xl text-white">
-                  {tutorProfile.name?.slice(0, 2).toUpperCase() || 'NF'}
+                  {displayedTutorProfile.name?.slice(0, 2).toUpperCase() || 'NF'}
                 </span>
               )}
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base sm:text-lg font-black text-white">
-                  {tutorProfile.name}
+                  {displayedTutorProfile.name}
                 </h2>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#1C4C96]/60 text-[#F4CA54] border border-[#9AB4FF]/30 flex items-center gap-1">
                   <Globe className="w-3 h-3 text-[#F4CA54]" />
-                  <span>{getTimezoneDisplayLabel(resolvedTutorTz, 'en')}</span>
+                  <span>{getTimezoneDisplayLabel(displayedTutorProfile.timezone || resolvedTutorTz, 'en')}</span>
                 </span>
               </div>
-              {(tutorProfile.headline || tutorProfile.bio) && (
+              {(displayedTutorProfile.headline || displayedTutorProfile.bio) && (
                 <p className="text-xs text-white/90 line-clamp-1 mt-0.5 max-w-xl">
-                  {tutorProfile.headline || tutorProfile.bio}
+                  {displayedTutorProfile.headline || displayedTutorProfile.bio}
                 </p>
               )}
             </div>
@@ -365,6 +392,28 @@ export const TeacherScheduleControlTable: React.FC<TeacherScheduleControlTablePr
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-[#9AB4FF]/10 rounded-2xl border border-[#607EC9]/30">
         <div className="flex items-center gap-2 flex-wrap">
           <Filter className="w-3.5 h-3.5 text-[#1C4C96]" />
+
+          {/* Teacher selector for Admins */}
+          {currentAccount?.role === 'admin' && teachers.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold text-[#000035]">
+                Native Friend:
+              </span>
+              <select
+                value={selectedTeacherFilter}
+                onChange={(e) => setSelectedTeacherFilter(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-[#607EC9]/40 rounded-xl text-xs font-semibold text-[#000035] focus:outline-hidden focus:ring-2 focus:ring-[#1C4C96]"
+              >
+                <option value="all">All Native Friends</option>
+                {teachers.map((tch) => (
+                  <option key={tch.email} value={tch.email}>
+                    {tch.name} ({tch.email})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <span className="text-xs font-bold text-[#000035]">
             Filter by Student:
           </span>

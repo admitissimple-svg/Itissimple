@@ -526,6 +526,37 @@ async function initCloudPersistence() {
         return !allDeletedTutorEmails.includes(em);
       });
 
+      // Ensure all tutors have entries in mergedAuthUsers and mergedUserProfiles
+      mergedTutorsList.forEach((t: any) => {
+        const key = (t.email || '').toLowerCase().trim();
+        if (key && !allDeletedTutorEmails.includes(key)) {
+          const tId = t.id || `tutor-${key.replace(/[^a-zA-Z0-9]/g, '-')}`;
+          if (!mergedAuthUsers[key]) {
+            mergedAuthUsers[key] = {
+              uid: tId,
+              id: tId,
+              email: key,
+              name: t.name || key.split('@')[0],
+              password: t.password || '',
+              role: 'teacher',
+              createdAt: t.createdAt || new Date().toISOString(),
+            };
+          }
+          if (!mergedUserProfiles[key]) {
+            mergedUserProfiles[key] = {
+              id: tId,
+              uid: tId,
+              name: t.name || key.split('@')[0],
+              email: key,
+              role: 'teacher',
+              picture: t.avatar || '',
+              avatar: t.avatar || '',
+              createdAt: t.createdAt || new Date().toISOString(),
+            };
+          }
+        }
+      });
+
       allDeletedTutorEmails.forEach((em) => {
         if (em !== 'adm.itissimple@gmail.com') {
           delete mergedUserProfiles[em];
@@ -559,6 +590,61 @@ async function initCloudPersistence() {
           studentMap.set(key, { ...existing, ...s });
         }
       });
+
+      // Reconcile students who have active routines or assignments stored in cloudState so they are never lost
+      const allActiveStudentEmails = new Set<string>();
+      Object.keys(cloudState.studentRoutinesMap || {}).forEach((k) => {
+        if (k && k.includes('@')) allActiveStudentEmails.add(k.toLowerCase().trim());
+      });
+      Object.keys(cloudState.studentVideoAssignments || {}).forEach((k) => {
+        if (k && k.includes('@')) allActiveStudentEmails.add(k.toLowerCase().trim());
+      });
+      Object.keys(cloudState.studentSpotifyAssignments || {}).forEach((k) => {
+        if (k && k.includes('@')) allActiveStudentEmails.add(k.toLowerCase().trim());
+      });
+      Object.keys(cloudState.studentWeeklyChecks || {}).forEach((k) => {
+        if (k && k.includes('@')) allActiveStudentEmails.add(k.toLowerCase().trim());
+      });
+
+      allActiveStudentEmails.forEach((cleanEmail) => {
+        if (!allDeletedStudentEmails.includes(cleanEmail)) {
+          const resolvedUid = `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+          if (!mergedUserProfiles[cleanEmail]) {
+            mergedUserProfiles[cleanEmail] = {
+              id: resolvedUid,
+              uid: resolvedUid,
+              name: cleanEmail.split('@')[0],
+              email: cleanEmail,
+              level: 'iniciante',
+              enrollmentStatus: 'active',
+              learningGoal: 'English for everyday life & work',
+              weeklyStudyDaysTarget: 7,
+              weeklyStudyDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+              createdAt: new Date().toISOString(),
+            };
+          }
+          if (!studentMap.has(cleanEmail)) {
+            studentMap.set(cleanEmail, {
+              id: resolvedUid,
+              studentUid: resolvedUid,
+              name: cleanEmail.split('@')[0],
+              studentName: cleanEmail.split('@')[0],
+              email: cleanEmail,
+              studentEmail: cleanEmail,
+              level: 'iniciante',
+              studentLevel: 'iniciante',
+              goal: 'English for everyday life & work',
+              learningGoal: 'English for everyday life & work',
+              contractedLessons: 5,
+              completedLessonsCount: 0,
+              status: 'active',
+              activeSince: new Date().toISOString().split('T')[0],
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      });
+
       const mergedStudents = Array.from(studentMap.values());
 
       // Merge liveLessons by id
@@ -793,26 +879,130 @@ app.post('/api/auth/login', async (req, res) => {
     await writeDbSync(db);
   }
 
-  // If an active user profile exists in db.userProfiles, restore authRecord so active students are never locked out
-  if (!authRecord && db.userProfiles?.[cleanEmail] && (db.userProfiles[cleanEmail].onboardingCompleted || db.userProfiles[cleanEmail].enrollmentStatus === 'active')) {
-    const prof = db.userProfiles[cleanEmail];
+  // Check if known student across any platform collection, profiles, routines, or assignments
+  const isKnownStudent =
+    (db.students || []).some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail) ||
+    Boolean(db.userProfiles?.[cleanEmail]) ||
+    Boolean(db.studentRoutinesMap?.[cleanEmail]) ||
+    Boolean(uid && db.studentRoutinesMap?.[uid]) ||
+    Boolean(db.studentVideoAssignments?.[cleanEmail]) ||
+    Boolean(uid && db.studentVideoAssignments?.[uid]) ||
+    Boolean(db.studentSpotifyAssignments?.[cleanEmail]) ||
+    Boolean(uid && db.studentSpotifyAssignments?.[uid]) ||
+    Boolean(db.studentWeeklyChecks?.[cleanEmail]) ||
+    Boolean(uid && db.studentWeeklyChecks?.[uid]);
+
+  // If student profile or routine/assignment records exist, restore authRecord so registered students are never locked out
+  if (!authRecord && isKnownStudent) {
+    const prof = db.userProfiles?.[cleanEmail];
+    const resolvedUid =
+      prof?.uid ||
+      prof?.id ||
+      uid ||
+      (db.students || []).find((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail)?.id ||
+      (db.studentVideoAssignments?.[cleanEmail]?.[0]?.studentUid) ||
+      `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
     authRecord = {
-      uid: prof.uid || prof.id || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+      uid: resolvedUid,
       email: cleanEmail,
-      name: prof.name || cleanEmail.split('@')[0],
+      name: prof?.name || cleanEmail.split('@')[0],
       password: password || '',
       role: 'student',
-      createdAt: prof.createdAt || new Date().toISOString(),
+      createdAt: prof?.createdAt || new Date().toISOString(),
     };
     if (!db.authUsers) db.authUsers = {};
     db.authUsers[cleanEmail] = authRecord;
+
+    if (!db.userProfiles) db.userProfiles = {};
+    if (!db.userProfiles[cleanEmail]) {
+      db.userProfiles[cleanEmail] = {
+        id: resolvedUid,
+        uid: resolvedUid,
+        name: authRecord.name,
+        email: cleanEmail,
+        level: 'iniciante',
+        enrollmentStatus: 'active',
+        learningGoal: 'English for everyday life & work',
+        weeklyStudyDaysTarget: 7,
+        weeklyStudyDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+        streakDays: 0,
+        streakCount: 0,
+        points: 0,
+        dailyGoalMinutes: 30,
+        completedTodayMinutes: 0,
+        contractedLessons: 5,
+        completedLessonsCount: 0,
+        createdAt: new Date().toISOString(),
+      };
+    }
+    if (!db.students) db.students = [];
+    const hasStudent = db.students.some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
+    if (!hasStudent) {
+      db.students.push({
+        id: resolvedUid,
+        studentUid: resolvedUid,
+        name: authRecord.name,
+        studentName: authRecord.name,
+        email: cleanEmail,
+        studentEmail: cleanEmail,
+        level: 'iniciante',
+        studentLevel: 'iniciante',
+        goal: 'English for everyday life & work',
+        learningGoal: 'English for everyday life & work',
+        contractedLessons: 5,
+        completedLessonsCount: 0,
+        status: 'active',
+        activeSince: new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+      });
+    }
+    await writeDbSync(db);
+    saveUserToFirestore({
+      uid: resolvedUid,
+      id: resolvedUid,
+      email: cleanEmail,
+      name: authRecord.name,
+      role: 'student',
+      password: password || '',
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
+
+  const matchingTutor = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase() === cleanEmail);
+  const isKnownTeacher = Boolean(matchingTutor);
+
+  if (!authRecord && isKnownTeacher && matchingTutor) {
+    const tutorId = matchingTutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    authRecord = {
+      uid: tutorId,
+      id: tutorId,
+      email: cleanEmail,
+      name: matchingTutor.name || cleanEmail.split('@')[0],
+      password: matchingTutor.password || password || '',
+      role: 'teacher',
+      createdAt: matchingTutor.createdAt || new Date().toISOString(),
+    };
+    if (!db.authUsers) db.authUsers = {};
+    db.authUsers[cleanEmail] = authRecord;
+    if (!db.userProfiles) db.userProfiles = {};
+    if (!db.userProfiles[cleanEmail]) {
+      db.userProfiles[cleanEmail] = {
+        id: tutorId,
+        uid: tutorId,
+        name: matchingTutor.name || cleanEmail.split('@')[0],
+        email: cleanEmail,
+        role: 'teacher',
+        picture: matchingTutor.avatar || '',
+        avatar: matchingTutor.avatar || '',
+        createdAt: new Date().toISOString(),
+      };
+    }
     await writeDbSync(db);
   }
 
   // Strictly require existing registered account (no auto-creating unregistered accounts on login)
   if (!authRecord && cleanEmail !== 'adm.itissimple@gmail.com') {
-    const isKnownTeacher = (db.tutorsList || []).some((t: any) => (t.email || '').toLowerCase() === cleanEmail);
-    const isKnownStudent = (db.students || []).some((s: any) => (s.email || s.studentEmail || '').toLowerCase() === cleanEmail);
     if (!isKnownTeacher && !isKnownStudent) {
       return res.status(401).json({
         error: 'Conta não encontrada. Por favor, crie seu cadastro antes de fazer login.',
@@ -835,6 +1025,17 @@ app.post('/api/auth/login', async (req, res) => {
     } else if (authRecord.password !== password) {
       return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
     }
+  } else if (authRecord && !authRecord.password && password) {
+    // If authRecord was restored without password, bind the entered password now
+    authRecord.password = password;
+    writeDb(db);
+    saveUserToFirestore({
+      uid: authRecord.uid,
+      id: authRecord.uid,
+      email: cleanEmail,
+      password,
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
   } else if (!authRecord && cleanEmail === 'adm.itissimple@gmail.com' && password) {
     if (password !== 'Makeiteasy2026*' && password !== 'admin') {
       return res.status(401).json({ error: 'Senha incorreta. Por favor, verifique a senha digitada.' });
@@ -1663,7 +1864,7 @@ const handleRegistration = async (req: any, res: any) => {
   db.studentWatchedVideos[cleanEmail] = [];
   db.studentWatchedVideos[userUid] = [];
 
-  writeDb(db);
+  await writeDbSync(db);
 
   // Persist 100% of student profile settings to Firestore in background
   const fullProfileToSave = {
@@ -1689,7 +1890,7 @@ const handleRegistration = async (req: any, res: any) => {
     createdAt: new Date().toISOString(),
   };
 
-  saveUserToFirestore(fullProfileToSave).catch(() => {});
+  await saveUserToFirestore(fullProfileToSave).catch(() => {});
   saveStudentAssignmentsByUid(userUid, {
     uid: userUid,
     email: cleanEmail,

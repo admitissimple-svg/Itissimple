@@ -41,10 +41,21 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
   isRefreshing = false,
   currentLanguage,
 }) => {
-  const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const pendingCount = tutors.filter((t) => (t.approvalStatus || 'approved') === 'pending').length;
+  const approvedCount = tutors.filter((t) => (t.approvalStatus || 'approved') === 'approved').length;
+  const rejectedCount = tutors.filter((t) => t.approvalStatus === 'rejected').length;
+
+  const [filter, setFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('all');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionNotification, setActionNotification] = useState<string | null>(null);
+
+  // When modal opens, default to pending if any are waiting for review, otherwise show all
+  useEffect(() => {
+    if (isOpen) {
+      setFilter(pendingCount > 0 ? 'pending' : 'all');
+    }
+  }, [isOpen]);
 
   // Support ESC key to easily dismiss modal
   useEffect(() => {
@@ -67,8 +78,6 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
     if (filter === 'all') return true;
     return status === filter;
   });
-
-  const pendingCount = tutors.filter((t) => (t.approvalStatus || 'approved') === 'pending').length;
 
   return (
     <div
@@ -131,10 +140,10 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
         {/* Filter bar */}
         <div className="flex items-center gap-2 p-4 bg-slate-50 border-b border-slate-200 shrink-0 overflow-x-auto">
           {[
+            { id: 'all', label: isEn ? 'All Applications' : 'Todos', badge: tutors.length },
+            { id: 'approved', label: isEn ? 'Approved Friends' : 'Aprovados', badge: approvedCount },
             { id: 'pending', label: isEn ? 'Pending Review' : 'Pendentes de Análise', badge: pendingCount },
-            { id: 'approved', label: isEn ? 'Approved Friends' : 'Aprovados' },
-            { id: 'rejected', label: isEn ? 'Rejected' : 'Recusados' },
-            { id: 'all', label: isEn ? 'All Applications' : 'Todos' },
+            { id: 'rejected', label: isEn ? 'Rejected' : 'Recusados', badge: rejectedCount },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -147,8 +156,10 @@ export const AdminApprovalsModal: React.FC<AdminApprovalsModalProps> = ({
               }`}
             >
               <span>{tab.label}</span>
-              {tab.badge !== undefined && tab.badge > 0 && (
-                <span className="w-5 h-5 rounded-full bg-[#F4CA54] text-[#000035] text-[10px] font-black flex items-center justify-center">
+              {tab.badge !== undefined && (
+                <span className={`w-5 h-5 rounded-full text-[10px] font-black flex items-center justify-center ${
+                  filter === tab.id ? 'bg-[#F4CA54] text-[#000035]' : 'bg-slate-200 text-slate-700'
+                }`}>
                   {tab.badge}
                 </span>
               )}
