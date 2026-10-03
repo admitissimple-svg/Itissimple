@@ -169,6 +169,13 @@ export const BecomeTutorModal: React.FC<BecomeTutorModalProps> = ({
         const cleanTutorId = createdTutor.id || `tutor-${tutorPayload.email.replace(/[^a-zA-Z0-9]/g, '-')}`;
         const cleanDocEmail = tutorPayload.email.replace(/[^a-zA-Z0-9]/g, '-');
         await Promise.all([
+          setDoc(doc(firestore, 'users', cleanTutorId), {
+            ...createdTutor,
+            id: cleanTutorId,
+            email: tutorPayload.email,
+            role: 'teacher',
+            updatedAt: new Date().toISOString(),
+          }, { merge: true }),
           setDoc(doc(firestore, 'tutors', cleanTutorId), {
             ...createdTutor,
             id: cleanTutorId,

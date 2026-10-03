@@ -87,7 +87,17 @@ export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
       updatedAt: new Date().toISOString(),
     }));
 
-    const savePromise = setDoc(doc(db, 'tutors', tutorId), sanitized, { merge: true }).then(() => true);
+    // Primary: Write to unified 'users' collection with role: 'teacher'
+    const saveToUsers = setDoc(doc(db, 'users', tutorId), sanitized, { merge: true });
+    // Also save under clean email doc ID in users if different
+    const cleanEmailDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+    const saveToUsersEmail = cleanEmailDocId !== tutorId
+      ? setDoc(doc(db, 'users', cleanEmailDocId), sanitized, { merge: true }).catch(() => null)
+      : Promise.resolve();
+    // Backward compatibility: also sync to legacy 'tutors' collection
+    const saveToTutors = setDoc(doc(db, 'tutors', tutorId), sanitized, { merge: true }).catch(() => null);
+
+    const savePromise = Promise.all([saveToUsers, saveToUsersEmail, saveToTutors]).then(() => true);
     const result = await withTimeout(savePromise, 8000);
     return !!result;
   } catch (err) {
@@ -97,25 +107,43 @@ export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
 }
 
 /**
- * Fetch all Native Friend / Tutor profiles directly from /tutors collection
+ * Fetch all Native Friend / Teacher profiles directly from unified /users collection (role == 'teacher')
+ * with fallback to legacy /tutors collection
  */
 export async function fetchTutorsFromFirestore(): Promise<any[]> {
   const db = getFirestoreDb();
   if (!db) return [];
   try {
     const fetchPromise = async () => {
-      const snap = await getDocs(collection(db, 'tutors'));
-      const list: any[] = [];
-      snap.forEach((d) => {
-        const data = d.data();
-        if (data && data.email && d.id !== 'test_tutor_id') {
-          list.push({
-            id: d.id,
-            ...data,
-          });
-        }
-      });
-      return list;
+      // Primary: query unified 'users' collection where role == 'teacher'
+      const teachersQuery = query(collection(db, 'users'), where('role', '==', 'teacher'));
+      const [usersSnap, legacySnap] = await Promise.all([
+        getDocs(teachersQuery).catch(() => null),
+        getDocs(collection(db, 'tutors')).catch(() => null),
+      ]);
+
+      const listMap = new Map<string, any>();
+      if (usersSnap) {
+        usersSnap.forEach((d) => {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_tutor_id') {
+            const key = (data.email || d.id).toLowerCase().trim();
+            listMap.set(key, { id: d.id, ...data, role: 'teacher' });
+          }
+        });
+      }
+      if (legacySnap) {
+        legacySnap.forEach((d) => {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_tutor_id') {
+            const key = (data.email || d.id).toLowerCase().trim();
+            if (!listMap.has(key)) {
+              listMap.set(key, { id: d.id, ...data, role: 'teacher' });
+            }
+          }
+        });
+      }
+      return Array.from(listMap.values());
     };
     const result = await withTimeout(fetchPromise(), 10000);
     return Array.isArray(result) ? result : [];
@@ -126,13 +154,15 @@ export async function fetchTutorsFromFirestore(): Promise<any[]> {
 }
 
 /**
- * Delete a tutor profile from /tutors/{tutorId}
+ * Delete a tutor profile from /users/{tutorId} and /tutors/{tutorId}
  */
 export async function deleteTutorFromFirestore(tutorId: string): Promise<boolean> {
   const db = getFirestoreDb();
   if (!db || !tutorId) return false;
   try {
-    const delPromise = deleteDoc(doc(db, 'tutors', tutorId)).then(() => true);
+    const delFromUsers = deleteDoc(doc(db, 'users', tutorId)).catch(() => null);
+    const delFromTutors = deleteDoc(doc(db, 'tutors', tutorId)).catch(() => null);
+    const delPromise = Promise.all([delFromUsers, delFromTutors]).then(() => true);
     const result = await withTimeout(delPromise, 6000);
     return !!result;
   } catch (err) {
@@ -410,15 +440,16 @@ export async function saveAppStateToFirestore(data: any): Promise<boolean> {
       if (tut && (tut.id || tut.email)) {
         const cEmail = (tut.email || '').toLowerCase().trim();
         const tId = tut.id || `tutor-${cEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
-        return setDoc(doc(db, 'tutors', tId), {
+        const teacherData = {
           ...tut,
           id: tId,
           email: cEmail,
           role: 'teacher',
           updatedAt: tut.updatedAt || new Date().toISOString(),
-        }, { merge: true }).catch((err) => {
-          console.warn(`Could not save individual tutor ${tId} to /tutors/ collection:`, err);
-        });
+        };
+        const p1 = setDoc(doc(db, 'users', tId), teacherData, { merge: true }).catch(() => null);
+        const p2 = setDoc(doc(db, 'tutors', tId), teacherData, { merge: true }).catch(() => null);
+        return Promise.all([p1, p2]);
       }
       return Promise.resolve();
     });

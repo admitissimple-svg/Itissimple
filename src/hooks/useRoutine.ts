@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { doc, setDoc, getDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, arrayUnion, onSnapshot, collection } from 'firebase/firestore';
 import { getDb, auth } from '../firebase';
 import { DayOfWeek, TeacherOverrideTrack } from '../types';
 import { normalizeStudentIdForPath, handleFirestoreError, OperationType, withFirestoreTimeout } from '../utils/routineSync';
@@ -797,29 +797,29 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
       );
     } catch {}
 
-    // Subscribe in real-time to each day of the week to mirror teacher updates instantly
-    const unsubs = ALL_DAYS_OF_WEEK.map((day) => {
-      try {
-        const dayRef = doc(db, 'users', effectiveUid, 'routines', day);
-        return onSnapshot(
-          dayRef,
-          (snap) => {
-            if (snap.exists() && isMounted) {
-              const data = snap.data() as SavedRoutineVideo;
-              setRoutinesByDay((prev) => ({ ...prev, [day]: data }));
-            }
-          },
-          () => {}
-        );
-      } catch {
-        return () => {};
-      }
-    });
+    // Subscribe in real-time to the routines subcollection to mirror teacher updates instantly
+    let routinesUnsub = () => {};
+    try {
+      const routinesCol = collection(db, 'users', effectiveUid, 'routines');
+      routinesUnsub = onSnapshot(
+        routinesCol,
+        (snap) => {
+          if (isMounted) {
+            const updated: Partial<Record<DayOfWeek, SavedRoutineVideo>> = {};
+            snap.forEach((docSnap) => {
+              updated[docSnap.id as DayOfWeek] = docSnap.data() as SavedRoutineVideo;
+            });
+            setRoutinesByDay((prev) => ({ ...prev, ...updated }));
+          }
+        },
+        () => {}
+      );
+    } catch {}
 
     return () => {
       isMounted = false;
       userUnsub();
-      unsubs.forEach((u) => u());
+      routinesUnsub();
     };
   }, [effectiveUid]);
 

@@ -284,7 +284,7 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
 
   const effectiveTeacherUid = useMemo(() => {
     if ((selectedTeacherObj as any)?.uid) return (selectedTeacherObj as any).uid;
-    if (selectedTeacherObj?.id && !selectedTeacherObj.id.startsWith('teacher-')) return selectedTeacherObj.id;
+    if ((selectedTeacherObj as any)?.id && !(selectedTeacherObj as any).id.startsWith('teacher-')) return (selectedTeacherObj as any).id;
     if (selectedTeacherEmail) {
       return `usr-${selectedTeacherEmail.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-')}`;
     }

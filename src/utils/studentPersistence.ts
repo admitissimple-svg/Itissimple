@@ -8,6 +8,7 @@ import {
   where,
   deleteDoc,
   onSnapshot,
+  runTransaction,
 } from 'firebase/firestore';
 import { getDb, auth } from '../firebase';
 import {
@@ -19,6 +20,7 @@ import {
   DayOfWeek,
   WeeklyHomeworkData,
   UserProfile,
+  NativeFriendTutor,
 } from '../types';
 import { handleFirestoreError, OperationType, withFirestoreTimeout } from './routineSync';
 import { DAYS_OF_WEEK, getTodayDayOfWeek } from './notifications';
@@ -837,6 +839,500 @@ export async function saveLiveLessonToFirestore(lesson: LiveLesson): Promise<boo
   }
 }
 
+export interface ScheduleLessonTransactionParams {
+  lesson: LiveLesson;
+  isTrialLesson?: boolean;
+}
+
+/**
+ * ATOMIC FIRESTORE TRANSACTION FOR LESSON SCHEDULING (TRIAL & PACKAGE LESSONS)
+ * Guarantees that:
+ * 1. Lesson booking in root `lessons` and student/teacher subcollections occurs atomically.
+ * 2. Balance decrement (or trial lesson allocation) happens synchronously with zero discrepancy.
+ * 3. Exact student-teacher IDs (`teacherUid`, `studentUid`, `assignedNativeFriendUID`) are linked safely.
+ * 4. Reverts completely in case of conflict or network error.
+ */
+export async function scheduleLessonWithTransaction(params: ScheduleLessonTransactionParams): Promise<{
+  success: boolean;
+  lesson?: LiveLesson;
+  remainingLessons?: number;
+  contractedLessons?: number;
+  error?: string;
+}> {
+  const db = getDb();
+  if (!db || !params.lesson?.id) {
+    return { success: false, error: 'Database or lesson ID missing' };
+  }
+
+  const { lesson, isTrialLesson } = params;
+  const cleanStudentEmail = (lesson.studentEmail || '').toLowerCase().trim();
+  const cleanTeacherEmail = (lesson.teacherEmail || '').toLowerCase().trim();
+  const studentUid = normalizeUid(lesson.studentUid, cleanStudentEmail);
+  const teacherUid =
+    normalizeUid(lesson.teacherUid, cleanTeacherEmail) ||
+    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+
+  if (!studentUid) {
+    return { success: false, error: 'Student UID missing' };
+  }
+
+  const nowIso = new Date().toISOString();
+  const lessonRef = doc(db, 'lessons', lesson.id);
+  const studentRef = doc(db, 'users', studentUid);
+  const teacherRef = teacherUid ? doc(db, 'users', teacherUid) : null;
+  const studentSubLessonRef = doc(db, 'users', studentUid, 'lessons', lesson.id);
+
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      // 1. All transaction reads first
+      const studentSnap = await transaction.get(studentRef);
+      const teacherSnap = teacherRef ? await transaction.get(teacherRef) : null;
+      const lessonSnap = await transaction.get(lessonRef);
+
+      const studentData = studentSnap.exists() ? (studentSnap.data() as Partial<UserProfile>) : {};
+      const currentContracted = Number(studentData.contractedLessons ?? 0);
+      const currentAvailable =
+        studentData.availableLessons !== undefined ? Number(studentData.availableLessons) : currentContracted;
+
+      let newContracted = currentContracted;
+      let newAvailable = currentAvailable;
+
+      if (isTrialLesson) {
+        // Trial lesson grant: ensure at least 1 contracted lesson and mark trial completed/booked
+        newContracted = Math.max(currentContracted, 1);
+        newAvailable = Math.max(0, currentAvailable);
+      } else {
+        // Decrement available lesson balance atomically
+        newContracted = currentContracted;
+        newAvailable = Math.max(0, currentAvailable - 1);
+      }
+
+      // Resolve authoritative teacher details from teacher user document if available
+      const teacherData = teacherSnap && teacherSnap.exists() ? teacherSnap.data() : null;
+      const effectiveTeacherName = lesson.teacherName || teacherData?.name || studentData.teacherName || null;
+      const effectiveTeacherEmail = cleanTeacherEmail || teacherData?.email || studentData.teacherEmail || null;
+      const effectiveTeacherMeet = lesson.meetLink || teacherData?.meetUrl || teacherData?.meetLink || '';
+
+      const sanitizedLesson: LiveLesson = stampSchemaVersion({
+        ...lesson,
+        id: lesson.id,
+        studentUid,
+        studentEmail: cleanStudentEmail,
+        studentName: lesson.studentName || studentData.name || cleanStudentEmail.split('@')[0],
+        teacherUid: teacherUid || null,
+        teacherEmail: effectiveTeacherEmail,
+        teacherName: effectiveTeacherName,
+        meetLink: effectiveTeacherMeet || lesson.meetLink || '',
+        status: 'scheduled',
+        isTrialLesson: Boolean(isTrialLesson),
+        createdAt: lesson.createdAt || nowIso,
+        updatedAt: nowIso,
+      });
+
+      // 2. Transaction writes
+      transaction.set(lessonRef, sanitizedLesson, { merge: true });
+      transaction.set(studentSubLessonRef, sanitizedLesson, { merge: true });
+
+      // Student main document update with decremented balance and exact teacher ID binding
+      const studentUpdate: Record<string, any> = stampSchemaVersion({
+        contractedLessons: newContracted,
+        availableLessons: newAvailable,
+        teacherUid: teacherUid || null,
+        teacherEmail: effectiveTeacherEmail,
+        teacherName: effectiveTeacherName,
+        teacherMeetUrl: effectiveTeacherMeet,
+        assignedNativeFriendUID: teacherUid || null,
+        nativeFriendUID: teacherUid || null,
+        enrollmentStatus: 'active',
+        hasCompletedTrialLesson: isTrialLesson ? true : (studentData.hasCompletedTrialLesson ?? false),
+        updatedAt: nowIso,
+      });
+      transaction.set(studentRef, studentUpdate, { merge: true });
+
+      // Teacher user doc update if teacher doc exists in `users`
+      if (teacherRef && teacherSnap && teacherSnap.exists()) {
+        const teacherSubLessonRef = doc(db, 'users', teacherUid, 'lessons', lesson.id);
+        transaction.set(teacherSubLessonRef, sanitizedLesson, { merge: true });
+        transaction.set(teacherRef, { updatedAt: nowIso }, { merge: true });
+      }
+
+      return {
+        lesson: sanitizedLesson,
+        contractedLessons: newContracted,
+        remainingLessons: newAvailable,
+      };
+    });
+
+    return {
+      success: true,
+      lesson: result.lesson,
+      contractedLessons: result.contractedLessons,
+      remainingLessons: result.remainingLessons,
+    };
+  } catch (error) {
+    console.error('Error in scheduleLessonWithTransaction:', error);
+    handleFirestoreError(error, OperationType.WRITE, `lessons/${lesson.id}`);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export interface PurchasePackageTransactionParams {
+  studentUid: string;
+  studentEmail: string;
+  teacherEmail: string;
+  teacherName: string;
+  teacherUid?: string | null;
+  packageLessons: number;
+}
+
+/**
+ * ATOMIC FIRESTORE TRANSACTION FOR LESSON PACKAGE PURCHASES
+ * Safely adds package lessons to contracted and available balances, and binds teacher ID.
+ */
+export async function purchasePackageWithTransaction(params: PurchasePackageTransactionParams): Promise<{
+  success: boolean;
+  contractedLessons?: number;
+  availableLessons?: number;
+  error?: string;
+}> {
+  const db = getDb();
+  if (!db || !params.studentUid) {
+    return { success: false, error: 'Database or student UID missing' };
+  }
+
+  const cleanStudentEmail = (params.studentEmail || '').toLowerCase().trim();
+  const cleanTeacherEmail = (params.teacherEmail || '').toLowerCase().trim();
+  const studentUid = normalizeUid(params.studentUid, cleanStudentEmail);
+  const teacherUid =
+    params.teacherUid ||
+    normalizeUid(null, cleanTeacherEmail) ||
+    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+
+  const studentRef = doc(db, 'users', studentUid);
+  const teacherRef = teacherUid ? doc(db, 'users', teacherUid) : null;
+  const nowIso = new Date().toISOString();
+
+  // Align weekly live lesson target with purchased frequency (4 -> 1x, 8 -> 2x, 12 -> 3x)
+  let newWeeklyTarget = 1;
+  if (params.packageLessons === 4) newWeeklyTarget = 1;
+  else if (params.packageLessons === 8) newWeeklyTarget = 2;
+  else if (params.packageLessons === 12) newWeeklyTarget = 3;
+  else if (params.packageLessons > 0) newWeeklyTarget = Math.min(7, Math.ceil(params.packageLessons / 4));
+
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      const studentSnap = await transaction.get(studentRef);
+      const teacherSnap = teacherRef ? await transaction.get(teacherRef) : null;
+
+      const studentData = studentSnap.exists() ? (studentSnap.data() as Partial<UserProfile>) : {};
+      const currentContracted = Number(studentData.contractedLessons ?? 0);
+      const currentAvailable =
+        studentData.availableLessons !== undefined ? Number(studentData.availableLessons) : currentContracted;
+
+      const newContracted = currentContracted + params.packageLessons;
+      const newAvailable = currentAvailable + params.packageLessons;
+
+      const studentUpdate: Record<string, any> = stampSchemaVersion({
+        contractedLessons: newContracted,
+        availableLessons: newAvailable,
+        teacherUid: teacherUid || studentData.teacherUid || null,
+        teacherEmail: cleanTeacherEmail,
+        teacherName: params.teacherName,
+        assignedNativeFriendUID: teacherUid || studentData.assignedNativeFriendUID || null,
+        nativeFriendUID: teacherUid || studentData.nativeFriendUID || null,
+        enrollmentStatus: 'active',
+        weeklyNativeLessonsTarget: newWeeklyTarget,
+        subscriptionType: 'package',
+        updatedAt: nowIso,
+      });
+
+      transaction.set(studentRef, studentUpdate, { merge: true });
+
+      if (teacherRef && teacherSnap && teacherSnap.exists()) {
+        transaction.set(teacherRef, { updatedAt: nowIso }, { merge: true });
+      }
+
+      return {
+        contractedLessons: newContracted,
+        availableLessons: newAvailable,
+      };
+    });
+
+    return {
+      success: true,
+      contractedLessons: result.contractedLessons,
+      availableLessons: result.availableLessons,
+    };
+  } catch (error) {
+    console.error('Error in purchasePackageWithTransaction:', error);
+    handleFirestoreError(error, OperationType.WRITE, `users/${studentUid}`);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export interface CancelLessonTransactionParams {
+  lessonId: string;
+  studentUid?: string;
+  studentEmail?: string;
+  cancelledBy?: 'student' | 'teacher' | 'admin';
+  cancellationReason?: string;
+}
+
+/**
+ * ATOMIC FIRESTORE TRANSACTION FOR LESSON CANCELLATION
+ * Cancels lesson across collections and restores balance if cancelled by teacher or admin.
+ */
+export async function cancelLessonWithTransaction(params: CancelLessonTransactionParams): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  const db = getDb();
+  if (!db || !params.lessonId) return { success: false, error: 'Lesson ID missing' };
+
+  const lessonRef = doc(db, 'lessons', params.lessonId);
+  const nowIso = new Date().toISOString();
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const lessonSnap = await transaction.get(lessonRef);
+      if (!lessonSnap.exists()) {
+        throw new Error('Lesson document not found');
+      }
+
+      const lessonData = lessonSnap.data() as LiveLesson;
+      const studentUid = normalizeUid(
+        params.studentUid || lessonData.studentUid,
+        params.studentEmail || lessonData.studentEmail
+      );
+      const studentRef = studentUid ? doc(db, 'users', studentUid) : null;
+      const studentSnap = studentRef ? await transaction.get(studentRef) : null;
+
+      const cancelledLesson: LiveLesson = {
+        ...lessonData,
+        status: 'cancelled',
+        cancelledAt: nowIso,
+        cancelledBy: params.cancelledBy || 'student',
+        cancellationReason: params.cancellationReason || 'Cancelled',
+        updatedAt: nowIso,
+      };
+
+      transaction.set(lessonRef, cancelledLesson, { merge: true });
+
+      if (studentRef && studentSnap && studentSnap.exists()) {
+        const studentData = studentSnap.data();
+        const studentSubLessonRef = doc(db, 'users', studentUid, 'lessons', params.lessonId);
+        transaction.set(studentSubLessonRef, cancelledLesson, { merge: true });
+
+        // If cancelled by teacher/admin, restore the student's lesson balance
+        const shouldRestoreBalance = params.cancelledBy === 'teacher' || params.cancelledBy === 'admin';
+        if (shouldRestoreBalance) {
+          const curAvail =
+            studentData.availableLessons !== undefined
+              ? Number(studentData.availableLessons)
+              : Number(studentData.contractedLessons || 0);
+          transaction.set(
+            studentRef,
+            {
+              availableLessons: curAvail + 1,
+              updatedAt: nowIso,
+            },
+            { merge: true }
+          );
+        }
+      }
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error in cancelLessonWithTransaction:', error);
+    handleFirestoreError(error, OperationType.UPDATE, `lessons/${params.lessonId}`);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Fetch all Native Friend / Teacher profiles directly from the unified `users` collection
+ * filtering by role == 'teacher'.
+ * Also migrates any legacy documents from `tutors` into `users` to guarantee zero reference loss.
+ */
+export async function fetchTeachersFromFirestore(): Promise<NativeFriendTutor[]> {
+  const db = getDb();
+  if (!db) return [];
+
+  try {
+    const teachersMap = new Map<string, NativeFriendTutor>();
+
+    // 1. Query unified users collection where role == 'teacher'
+    try {
+      const qTeachers = query(collection(db, 'users'), where('role', '==', 'teacher'));
+      const snap = await withFirestoreTimeout(getDocs(qTeachers), 3500, null);
+      if (snap && !snap.empty) {
+        snap.forEach((d) => {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_user_id') {
+            const key = (data.email || d.id).toLowerCase().trim();
+            teachersMap.set(key, {
+              id: d.id,
+              uid: data.uid || d.id,
+              name: data.name || key.split('@')[0],
+              email: data.email,
+              avatar: data.avatar || data.picture || '',
+              picture: data.picture || data.avatar || '',
+              country: data.country || 'Global',
+              headline: data.headline || '',
+              bio: data.bio || '',
+              accent: data.accent || '',
+              specialties: Array.isArray(data.specialties) ? data.specialties : [],
+              videoUrl: data.videoUrl || '',
+              youtubeVideoId: data.youtubeVideoId || '',
+              meetUrl: data.meetUrl || data.meetLink || '',
+              meetLink: data.meetLink || data.meetUrl || '',
+              rating: typeof data.rating === 'number' ? data.rating : 5.0,
+              reviewsCount: typeof data.reviewsCount === 'number' ? data.reviewsCount : 0,
+              hourlyRate: typeof data.hourlyRate === 'number' ? data.hourlyRate : 0,
+              approvalStatus: data.approvalStatus || 'approved',
+              isAvailable: data.isAvailable !== undefined ? data.isAvailable : true,
+              availableDays: Array.isArray(data.availableDays)
+                ? data.availableDays
+                : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+              timezone: data.timezone || 'America/Sao_Paulo',
+              role: 'teacher',
+            } as unknown as NativeFriendTutor);
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('fetchTeachersFromFirestore users query notice:', err);
+    }
+
+    // 2. Migration check: If tutors collection has entries not in users, migrate them to users
+    try {
+      const snapTutors = await withFirestoreTimeout(getDocs(collection(db, 'tutors')), 2500, null);
+      if (snapTutors && !snapTutors.empty) {
+        for (const d of snapTutors.docs) {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_tutor_id') {
+            const key = data.email.toLowerCase().trim();
+            if (!teachersMap.has(key)) {
+              const teacherObj: NativeFriendTutor = {
+                id: d.id,
+                uid: data.uid || d.id,
+                name: data.name || key.split('@')[0],
+                email: data.email,
+                avatar: data.avatar || data.picture || '',
+                picture: data.picture || data.avatar || '',
+                country: data.country || 'Global',
+                headline: data.headline || '',
+                bio: data.bio || '',
+                accent: data.accent || '',
+                specialties: Array.isArray(data.specialties) ? data.specialties : [],
+                videoUrl: data.videoUrl || '',
+                youtubeVideoId: data.youtubeVideoId || '',
+                meetUrl: data.meetUrl || data.meetLink || '',
+                meetLink: data.meetLink || data.meetUrl || '',
+                rating: typeof data.rating === 'number' ? data.rating : 5.0,
+                reviewsCount: typeof data.reviewsCount === 'number' ? data.reviewsCount : 0,
+                hourlyRate: typeof data.hourlyRate === 'number' ? data.hourlyRate : 0,
+                approvalStatus: data.approvalStatus || 'approved',
+                isAvailable: data.isAvailable !== undefined ? data.isAvailable : true,
+                availableDays: Array.isArray(data.availableDays)
+                  ? data.availableDays
+                  : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+                timezone: data.timezone || 'America/Sao_Paulo',
+                role: 'teacher',
+              } as unknown as NativeFriendTutor;
+              teachersMap.set(key, teacherObj);
+
+              // Seamless one-time write to users collection to unify
+              const targetDocId = d.id;
+              setDoc(
+                doc(db, 'users', targetDocId),
+                {
+                  ...teacherObj,
+                  role: 'teacher',
+                  updatedAt: new Date().toISOString(),
+                },
+                { merge: true }
+              ).catch(() => {});
+            }
+          }
+        }
+      }
+    } catch {}
+
+    return Array.from(teachersMap.values());
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'users');
+    return [];
+  }
+}
+
+/**
+ * Real-time subscription to Native Friends / Teachers from the unified `users` collection.
+ * Listens strictly to `users` where `role == 'teacher'`.
+ */
+export function subscribeToTeachers(callback: (teachers: NativeFriendTutor[]) => void): () => void {
+  const db = getDb();
+  if (!db) return () => {};
+
+  try {
+    const qTeachers = query(collection(db, 'users'), where('role', '==', 'teacher'));
+    const unsub = onSnapshot(
+      qTeachers,
+      (snapshot) => {
+        const teachersList: NativeFriendTutor[] = [];
+        snapshot.forEach((d) => {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_user_id') {
+            teachersList.push({
+              id: d.id,
+              uid: data.uid || d.id,
+              name: data.name || (data.email || '').split('@')[0],
+              email: data.email,
+              avatar: data.avatar || data.picture || '',
+              picture: data.picture || data.avatar || '',
+              country: data.country || 'Global',
+              headline: data.headline || '',
+              bio: data.bio || '',
+              accent: data.accent || '',
+              specialties: Array.isArray(data.specialties) ? data.specialties : [],
+              videoUrl: data.videoUrl || '',
+              youtubeVideoId: data.youtubeVideoId || '',
+              meetUrl: data.meetUrl || data.meetLink || '',
+              meetLink: data.meetLink || data.meetUrl || '',
+              rating: typeof data.rating === 'number' ? data.rating : 5.0,
+              reviewsCount: typeof data.reviewsCount === 'number' ? data.reviewsCount : 0,
+              hourlyRate: typeof data.hourlyRate === 'number' ? data.hourlyRate : 0,
+              approvalStatus: data.approvalStatus || 'approved',
+              isAvailable: data.isAvailable !== undefined ? data.isAvailable : true,
+              availableDays: Array.isArray(data.availableDays)
+                ? data.availableDays
+                : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
+              timezone: data.timezone || 'America/Sao_Paulo',
+              role: 'teacher',
+            } as unknown as NativeFriendTutor);
+          }
+        });
+        callback(teachersList);
+      },
+      (err) => {
+        console.warn('Real-time teachers subscription notice:', err);
+      }
+    );
+
+    return () => unsub();
+  } catch (err) {
+    console.warn('Error initiating subscribeToTeachers:', err);
+    return () => {};
+  }
+}
+
 /**
  * Persist student's assigned Native Friend and enrollment status directly to Firestore.
  * Updates all canonical user doc representations (UID, cleanEmail, emailDocId, hyphenDocId, usrDocId),
@@ -1448,71 +1944,85 @@ export function subscribeToStudentLessons(
 
   const unsubscribers: (() => void)[] = [];
   const queryDocsMap = new Map<string, Map<string, LiveLesson>>();
+  let notifyTimer: any = null;
 
   const rebuildAndNotify = () => {
-    const consolidatedMap = new Map<string, LiveLesson>();
+    if (notifyTimer) clearTimeout(notifyTimer);
+    notifyTimer = setTimeout(() => {
+      const consolidatedMap = new Map<string, LiveLesson>();
 
-    // Merge docs across all active query snapshots, respecting latest updatedAt and strictly preserving cancelled state
-    queryDocsMap.forEach((docsMap) => {
-      docsMap.forEach((item, id) => {
-        if (!item || !id) return;
-        const isItemCancelled = item.status === 'cancelled' || (item.status as string) === 'canceled' || Boolean(item.cancelledAt);
-        const normalizedItem: LiveLesson = {
-          ...item,
-          id,
-          ...(isItemCancelled ? { status: 'cancelled', cancelledAt: item.cancelledAt || new Date().toISOString() } : {}),
-        };
-        const existing = consolidatedMap.get(id);
-        if (existing) {
-          const isCancelled = existing.status === 'cancelled' || normalizedItem.status === 'cancelled' || Boolean(existing.cancelledAt) || Boolean(normalizedItem.cancelledAt);
-          const cancelledAt = existing.cancelledAt || normalizedItem.cancelledAt;
-          const cancelledBy = existing.cancelledBy || normalizedItem.cancelledBy;
-          const cancellationReason = existing.cancellationReason || normalizedItem.cancellationReason;
-          const timeExisting = new Date(existing.updatedAt || existing.startDateTime || 0).getTime();
-          const timeItem = new Date(normalizedItem.updatedAt || normalizedItem.startDateTime || 0).getTime();
-          const latest = timeItem >= timeExisting ? { ...existing, ...normalizedItem } : { ...normalizedItem, ...existing };
-          if (isCancelled) {
-            latest.status = 'cancelled';
-            latest.cancelledAt = cancelledAt || new Date().toISOString();
-            if (cancelledBy) latest.cancelledBy = cancelledBy;
-            if (cancellationReason) latest.cancellationReason = cancellationReason;
+      // Merge docs across all active query snapshots, respecting latest updatedAt and strictly preserving cancelled state
+      queryDocsMap.forEach((docsMap) => {
+        docsMap.forEach((item, id) => {
+          if (!item || !id) return;
+          const isItemCancelled =
+            item.status === 'cancelled' ||
+            (item.status as string) === 'canceled' ||
+            Boolean(item.cancelledAt);
+          const normalizedItem: LiveLesson = {
+            ...item,
+            id,
+            ...(isItemCancelled
+              ? { status: 'cancelled', cancelledAt: item.cancelledAt || new Date().toISOString() }
+              : {}),
+          };
+          const existing = consolidatedMap.get(id);
+          if (existing) {
+            const isCancelled =
+              existing.status === 'cancelled' ||
+              normalizedItem.status === 'cancelled' ||
+              Boolean(existing.cancelledAt) ||
+              Boolean(normalizedItem.cancelledAt);
+            const cancelledAt = existing.cancelledAt || normalizedItem.cancelledAt;
+            const cancelledBy = existing.cancelledBy || normalizedItem.cancelledBy;
+            const cancellationReason = existing.cancellationReason || normalizedItem.cancellationReason;
+            const timeExisting = new Date(existing.updatedAt || existing.startDateTime || 0).getTime();
+            const timeItem = new Date(normalizedItem.updatedAt || normalizedItem.startDateTime || 0).getTime();
+            const latest =
+              timeItem >= timeExisting ? { ...existing, ...normalizedItem } : { ...normalizedItem, ...existing };
+            if (isCancelled) {
+              latest.status = 'cancelled';
+              latest.cancelledAt = cancelledAt || new Date().toISOString();
+              if (cancelledBy) latest.cancelledBy = cancelledBy;
+              if (cancellationReason) latest.cancellationReason = cancellationReason;
+            }
+            consolidatedMap.set(id, latest);
+          } else {
+            consolidatedMap.set(id, normalizedItem);
           }
-          consolidatedMap.set(id, latest);
-        } else {
-          consolidatedMap.set(id, normalizedItem);
+        });
+      });
+
+      // Invariant: If a student has a cancelled lesson at a specific startDateTime,
+      // any duplicate active lesson at that startDateTime must also be marked cancelled
+      const cancelledSlots = new Set<string>();
+      consolidatedMap.forEach((l) => {
+        if (l.status === 'cancelled' || l.cancelledAt) {
+          const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
+          cancelledSlots.add(slotKey);
         }
       });
-    });
 
-    // Invariant: If a student has a cancelled lesson at a specific startDateTime,
-    // any duplicate active lesson at that startDateTime must also be marked cancelled!
-    const cancelledSlots = new Set<string>();
-    consolidatedMap.forEach((l) => {
-      if (l.status === 'cancelled' || l.cancelledAt) {
+      consolidatedMap.forEach((l, id) => {
         const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
-        cancelledSlots.add(slotKey);
-      }
-    });
+        if (cancelledSlots.has(slotKey) && l.status !== 'cancelled') {
+          consolidatedMap.set(id, {
+            ...l,
+            status: 'cancelled',
+            cancelledAt: l.cancelledAt || new Date().toISOString(),
+          });
+        }
+      });
 
-    consolidatedMap.forEach((l, id) => {
-      const slotKey = `${(l.studentEmail || '').toLowerCase().trim()}_${l.startDateTime}`;
-      if (cancelledSlots.has(slotKey) && l.status !== 'cancelled') {
-        consolidatedMap.set(id, {
-          ...l,
-          status: 'cancelled',
-          cancelledAt: l.cancelledAt || new Date().toISOString(),
-        });
-      }
-    });
+      const list = Array.from(consolidatedMap.values());
+      list.sort((a, b) => {
+        const tA = new Date(a.startDateTime).getTime();
+        const tB = new Date(b.startDateTime).getTime();
+        return tB - tA;
+      });
 
-    const list = Array.from(consolidatedMap.values());
-    list.sort((a, b) => {
-      const tA = new Date(a.startDateTime).getTime();
-      const tB = new Date(b.startDateTime).getTime();
-      return tB - tA;
-    });
-
-    callback(list);
+      callback(list);
+    }, 50);
   };
 
   const handleQuerySnap = (queryKey: string, snap: any) => {
@@ -1528,74 +2038,44 @@ export function subscribeToStudentLessons(
 
   try {
     if (isTeacher) {
-      if (cleanEmail) {
-        const qEmail = query(collection(db, 'lessons'), where('teacherEmail', '==', cleanEmail));
-        unsubscribers.push(onSnapshot(qEmail, (snap) => handleQuerySnap('t_email', snap), (err) => console.warn('Teacher lessons snapshot notice:', err)));
-      }
       if (cleanUid) {
         const qUid = query(collection(db, 'lessons'), where('teacherUid', '==', cleanUid));
-        unsubscribers.push(onSnapshot(qUid, (snap) => handleQuerySnap('t_uid', snap), (err) => console.warn('Teacher UID lessons snapshot notice:', err)));
-      }
-      if (hyphenUid && hyphenUid !== cleanUid) {
-        const qHyphen = query(collection(db, 'lessons'), where('teacherUid', '==', hyphenUid));
-        unsubscribers.push(onSnapshot(qHyphen, (snap) => handleQuerySnap('t_hyphen', snap), (err) => console.warn('Teacher hyphen lessons snapshot notice:', err)));
-      }
-      if (cleanUid) {
-        const subCol = collection(db, 'users', cleanUid, 'lessons');
-        unsubscribers.push(onSnapshot(subCol, (snap) => handleQuerySnap('t_subcol', snap), () => {}));
-        const userDocRef = doc(db, 'users', cleanUid);
         unsubscribers.push(
           onSnapshot(
-            userDocRef,
-            (snap) => {
-              if (snap.exists()) {
-                const data = snap.data();
-                const scheduled = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
-                const schedMap = new Map<string, LiveLesson>();
-                scheduled.forEach((l: LiveLesson) => {
-                  if (l?.id) schedMap.set(l.id, l);
-                });
-                queryDocsMap.set('t_scheduled_arr', schedMap);
-                rebuildAndNotify();
-              }
-            },
-            () => {}
+            qUid,
+            (snap) => handleQuerySnap('t_uid', snap),
+            (err) => console.warn('Teacher UID lessons snapshot notice:', err)
+          )
+        );
+      }
+      if (cleanEmail && cleanEmail !== cleanUid) {
+        const qEmail = query(collection(db, 'lessons'), where('teacherEmail', '==', cleanEmail));
+        unsubscribers.push(
+          onSnapshot(
+            qEmail,
+            (snap) => handleQuerySnap('t_email', snap),
+            (err) => console.warn('Teacher email lessons snapshot notice:', err)
           )
         );
       }
     } else {
-      if (cleanEmail) {
-        const qEmail = query(collection(db, 'lessons'), where('studentEmail', '==', cleanEmail));
-        unsubscribers.push(onSnapshot(qEmail, (snap) => handleQuerySnap('s_email', snap), (err) => console.warn('Student email lessons snapshot notice:', err)));
-      }
       if (cleanUid) {
         const qUid = query(collection(db, 'lessons'), where('studentUid', '==', cleanUid));
-        unsubscribers.push(onSnapshot(qUid, (snap) => handleQuerySnap('s_uid', snap), (err) => console.warn('Student UID lessons snapshot notice:', err)));
-      }
-      if (hyphenUid && hyphenUid !== cleanUid) {
-        const qHyphen = query(collection(db, 'lessons'), where('studentUid', '==', hyphenUid));
-        unsubscribers.push(onSnapshot(qHyphen, (snap) => handleQuerySnap('s_hyphen', snap), (err) => console.warn('Student hyphen lessons snapshot notice:', err)));
-      }
-      if (cleanUid) {
-        const subCol = collection(db, 'users', cleanUid, 'lessons');
-        unsubscribers.push(onSnapshot(subCol, (snap) => handleQuerySnap('s_subcol', snap), () => {}));
-        const userDocRef = doc(db, 'users', cleanUid);
         unsubscribers.push(
           onSnapshot(
-            userDocRef,
-            (snap) => {
-              if (snap.exists()) {
-                const data = snap.data();
-                const scheduled = Array.isArray(data?.scheduledLessons) ? data.scheduledLessons : [];
-                const schedMap = new Map<string, LiveLesson>();
-                scheduled.forEach((l: LiveLesson) => {
-                  if (l?.id) schedMap.set(l.id, l);
-                });
-                queryDocsMap.set('s_scheduled_arr', schedMap);
-                rebuildAndNotify();
-              }
-            },
-            () => {}
+            qUid,
+            (snap) => handleQuerySnap('s_uid', snap),
+            (err) => console.warn('Student UID lessons snapshot notice:', err)
+          )
+        );
+      }
+      if (cleanEmail && cleanEmail !== cleanUid) {
+        const qEmail = query(collection(db, 'lessons'), where('studentEmail', '==', cleanEmail));
+        unsubscribers.push(
+          onSnapshot(
+            qEmail,
+            (snap) => handleQuerySnap('s_email', snap),
+            (err) => console.warn('Student email lessons snapshot notice:', err)
           )
         );
       }
@@ -1605,6 +2085,7 @@ export function subscribeToStudentLessons(
   }
 
   return () => {
+    if (notifyTimer) clearTimeout(notifyTimer);
     unsubscribers.forEach((unsub) => unsub());
   };
 }
@@ -2957,33 +3438,24 @@ export function subscribeToStudentDailyRoutines(
   const cleanUid = normalizeUid(studentUid);
   if (!db || !cleanUid) return () => {};
 
-  const unsubs: (() => void)[] = [];
-  const routinesMap: Partial<Record<DayOfWeek, any>> = {};
-
-  const ALL_DAYS: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-
-  ALL_DAYS.forEach((day) => {
-    try {
-      const dayRef = doc(db, 'users', cleanUid, 'routines', day);
-      unsubs.push(
-        onSnapshot(
-          dayRef,
-          (snap) => {
-            if (snap.exists()) {
-              const data = snap.data();
-              routinesMap[day] = data;
-              callback({ ...routinesMap });
-            }
-          },
-          () => {}
-        )
-      );
-    } catch {}
-  });
-
-  return () => {
-    unsubs.forEach((u) => u());
-  };
+  try {
+    const routinesCol = collection(db, 'users', cleanUid, 'routines');
+    const unsub = onSnapshot(
+      routinesCol,
+      (snapshot) => {
+        const routinesMap: Partial<Record<DayOfWeek, any>> = {};
+        snapshot.forEach((docSnap) => {
+          routinesMap[docSnap.id as DayOfWeek] = docSnap.data();
+        });
+        callback(routinesMap);
+      },
+      (err) => console.warn('Real-time student routines subscription notice:', err)
+    );
+    return unsub;
+  } catch (err) {
+    console.warn('subscribeToStudentDailyRoutines error:', err);
+    return () => {};
+  }
 }
 
 

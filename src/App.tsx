@@ -46,7 +46,7 @@ import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
 import { getInstantOrCachedWord } from './utils/dictionaryService';
 import { auth, getDb } from './firebase';
 import { onAuthStateChanged, signOut as firebaseSignOutAuth } from 'firebase/auth';
-import { doc, getDoc, collection, getDocs, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, onSnapshot, setDoc, query, where } from 'firebase/firestore';
 
 // Components
 import { Navbar } from './components/Navbar';
@@ -124,6 +124,9 @@ import {
   mapStepIdToJournalType,
   deriveWeeklyChecksFromJournal,
   migrateLegacyLocalStorageToFirestore,
+  scheduleLessonWithTransaction,
+  purchasePackageWithTransaction,
+  cancelLessonWithTransaction,
 } from './utils/studentPersistence';
 import { FirestoreSchemaAlertBanner } from './components/FirestoreSchemaAlertBanner';
 import { StudentJournalEntry } from './types';
@@ -516,16 +519,31 @@ export default function App() {
             });
           }
         }
-        // Direct Cloud Firestore /tutors collection fetch for 100% cloud persistence & zero data loss
+        // Direct Cloud Firestore unified /users collection fetch where role == 'teacher'
         try {
-          const fsTutorsSnap = await getDocs(collection(getDb(), 'tutors'));
+          const teachersQuery = query(collection(getDb(), 'users'), where('role', '==', 'teacher'));
+          const fsTutorsSnap = await getDocs(teachersQuery).catch(() => null);
           const fsTutorsList: NativeFriendTutor[] = [];
-          fsTutorsSnap.forEach((d) => {
-            const data = d.data();
-            if (data && data.email && d.id !== 'test_tutor_id') {
-              fsTutorsList.push({ id: d.id, ...data } as any);
+          if (fsTutorsSnap) {
+            fsTutorsSnap.forEach((d) => {
+              const data = d.data();
+              if (data && data.email && d.id !== 'test_tutor_id') {
+                fsTutorsList.push({ id: d.id, ...data, role: 'teacher' } as any);
+              }
+            });
+          }
+          // Also check legacy tutors collection for backward compatibility if empty
+          if (fsTutorsList.length === 0) {
+            const legacySnap = await getDocs(collection(getDb(), 'tutors')).catch(() => null);
+            if (legacySnap) {
+              legacySnap.forEach((d) => {
+                const data = d.data();
+                if (data && data.email && d.id !== 'test_tutor_id') {
+                  fsTutorsList.push({ id: d.id, ...data, role: 'teacher' } as any);
+                }
+              });
             }
-          });
+          }
           if (fsTutorsList.length > 0) {
             setTutors((prev) => {
               const map = new Map<string, NativeFriendTutor>();
@@ -556,7 +574,7 @@ export default function App() {
             });
           }
         } catch (fsErr) {
-          console.warn('Direct Firestore tutors fetch notice:', fsErr);
+          console.warn('Direct Firestore teachers fetch notice:', fsErr);
         }
       } catch (err) {
         console.warn('Using local default state:', err);
@@ -565,30 +583,58 @@ export default function App() {
 
     loadInitialData();
 
-    // Attach real-time Firestore listener for tutors collection to ensure instantaneous sync
-    let unsubTutors: (() => void) | undefined;
+    // Attach real-time Firestore listeners for teachers in users collection and legacy tutors
+    let unsubUsersTeachers: (() => void) | undefined;
+    let unsubLegacyTutors: (() => void) | undefined;
     try {
-      unsubTutors = onSnapshot(collection(getDb(), 'tutors'), (snapshot) => {
+      const teachersQuery = query(collection(getDb(), 'users'), where('role', '==', 'teacher'));
+      unsubUsersTeachers = onSnapshot(teachersQuery, (snapshot) => {
         const liveTutors: NativeFriendTutor[] = [];
         snapshot.forEach((d) => {
           const data = d.data();
           if (data && data.email && d.id !== 'test_tutor_id') {
-            liveTutors.push({ id: d.id, ...data } as any);
+            liveTutors.push({ id: d.id, ...data, role: 'teacher' } as any);
           }
         });
-        setTutors((prev) => {
-          if (liveTutors.length === 0) return [];
-          const map = new Map<string, NativeFriendTutor>();
-          liveTutors.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
-          return Array.from(map.values());
-        });
+        if (liveTutors.length > 0) {
+          setTutors((prev) => {
+            const map = new Map<string, NativeFriendTutor>();
+            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+            liveTutors.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+            return Array.from(map.values());
+          });
+        }
       }, (err) => {
-        console.warn('Realtime tutors subscription notice:', err);
+        console.warn('Realtime teachers subscription notice:', err);
       });
     } catch {}
 
+    try {
+      unsubLegacyTutors = onSnapshot(collection(getDb(), 'tutors'), (snapshot) => {
+        const liveTutors: NativeFriendTutor[] = [];
+        snapshot.forEach((d) => {
+          const data = d.data();
+          if (data && data.email && d.id !== 'test_tutor_id') {
+            liveTutors.push({ id: d.id, ...data, role: 'teacher' } as any);
+          }
+        });
+        if (liveTutors.length > 0) {
+          setTutors((prev) => {
+            const map = new Map<string, NativeFriendTutor>();
+            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+            liveTutors.forEach((t) => {
+              const k = (t.email || t.id).toLowerCase().trim();
+              if (!map.has(k)) map.set(k, t);
+            });
+            return Array.from(map.values());
+          });
+        }
+      }, () => {});
+    } catch {}
+
     return () => {
-      if (unsubTutors) unsubTutors();
+      if (unsubUsersTeachers) unsubUsersTeachers();
+      if (unsubLegacyTutors) unsubLegacyTutors();
     };
   }, []);
 
@@ -1360,6 +1406,12 @@ export default function App() {
           nativeFriendUID: updated.nativeFriendUID !== undefined ? updated.nativeFriendUID : prev.nativeFriendUID,
           enrollmentStatus: updated.enrollmentStatus || prev.enrollmentStatus,
         }));
+        if (typeof updated.contractedLessons === 'number' && email) {
+          setContractedLessons((prev) => ({
+            ...prev,
+            [email.toLowerCase().trim()]: updated.contractedLessons as number,
+          }));
+        }
       }
     });
 
@@ -1658,7 +1710,7 @@ export default function App() {
             teacherName: cleanTeacherName || '',
             teacherUid: resolvedTeacherUid || '',
             status: newEnrollmentStatus,
-            level: userProfile.level || 'iniciante',
+            level: userProfile.level || EnglishLevel.BEGINNER,
           },
         ];
       });
@@ -1952,6 +2004,16 @@ export default function App() {
         const matchedTutor = tutors.find((t) => (t.email || '').toLowerCase().trim() === cleanTeacherEmail);
         const resolvedTeacherUid = matchedTutor?.uid || (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : null);
 
+        // Atomic Firestore transaction: updates user package and locks student-teacher UID link atomically
+        await purchasePackageWithTransaction({
+          studentUid: stUid,
+          studentEmail: cleanStEmail,
+          teacherEmail: cleanTeacherEmail || '',
+          teacherName: cleanTeacherName || '',
+          teacherUid: resolvedTeacherUid,
+          packageLessons: params.packageLessons,
+        }).catch((err) => console.warn('purchasePackageWithTransaction notice:', err));
+
         saveStudentNativeFriendToFirestore(stUid, cleanStEmail, {
           teacherEmail: cleanTeacherEmail,
           teacherName: cleanTeacherName,
@@ -2014,7 +2076,7 @@ export default function App() {
               contractedLessons: newCount,
               weeklyNativeLessonsTarget: newWeeklyTarget,
               status: 'active',
-              level: userProfile.level || 'iniciante',
+              level: userProfile.level || EnglishLevel.BEGINNER,
             },
           ];
         });
@@ -3158,9 +3220,26 @@ export default function App() {
 
     setLessons((prev) => [newLesson, ...prev]);
 
-    // Direct Firestore and Server persistence with fast safety race (never blocks UI)
-    const fsPersistPromise = saveLiveLessonToFirestore(newLesson).catch((err) => {
-      console.warn('Background Firestore save notice:', err);
+    // Direct Firestore atomic transaction: decrements balance and saves lesson atomically across student & teacher
+    const isTrialBooking = Boolean((scheduleStudentInfo as any)?.isTrialLesson || userProfile?.subscriptionType === 'trial');
+    const fsPersistPromise = scheduleLessonWithTransaction({
+      lesson: newLesson,
+      isTrialLesson: isTrialBooking,
+    }).then((res) => {
+      if (res.success) {
+        if (res.remainingLessons !== undefined) {
+          setUserProfile((prev) => ({
+            ...prev,
+            availableLessons: res.remainingLessons,
+            contractedLessons: res.contractedLessons ?? prev.contractedLessons,
+          }));
+        }
+      } else {
+        return saveLiveLessonToFirestore(newLesson);
+      }
+    }).catch((err) => {
+      console.warn('Atomic lesson transaction notice:', err);
+      return saveLiveLessonToFirestore(newLesson);
     });
 
     const apiPersistPromise = fetch('/api/lessons', {
@@ -3193,7 +3272,7 @@ export default function App() {
           teacherEmail: lessonData.teacherEmail,
           teacherName: lessonData.teacherName,
           status: 'active',
-          level: 'iniciante',
+          level: EnglishLevel.BEGINNER,
         },
       ];
     });
@@ -3359,6 +3438,15 @@ export default function App() {
       );
     });
 
+    // Atomic Firestore transaction: cancels lesson across root & subcollections and restores balance if teacher/admin
+    await cancelLessonWithTransaction({
+      lessonId,
+      studentUid: targetStudentUid,
+      studentEmail: targetStudentEmail,
+      cancelledBy: finalCancelledBy,
+      cancellationReason: finalReason,
+    }).catch((err) => console.warn('cancelLessonWithTransaction notice:', err));
+
     // Persist cancellation in Firestore with complete lesson metadata
     await updateLiveLessonInFirestore(
       lessonId,
@@ -3390,6 +3478,7 @@ export default function App() {
     setNotifications((prev) => [
       {
         id: `cancel-${Date.now()}`,
+        title: currentLanguage === 'en' ? 'Lesson Cancelled' : 'Aula Cancelada',
         message:
           currentLanguage === 'en'
             ? finalCancelledBy === 'teacher'
@@ -3642,6 +3731,7 @@ export default function App() {
           studentName: foundStudent?.name || (foundStudent as any)?.studentName || studentClean.split('@')[0] || 'Student',
           teacherEmail: currentAccount?.email || '',
           teacherName: currentAccount?.name || 'Native Friend',
+          meetLink: (notes as any)?.meetUrl || '',
           status: 'completed',
           liveNotes: notes.liveNotes || notes.sessionNotesDocument,
           recommendations: notes.recommendations || notes.sessionNotesDocument,
@@ -3790,7 +3880,7 @@ export default function App() {
   const handleAddWordsToWeeklyActivity = async (newWords: string[], studentEmail?: string) => {
     if (!newWords || newWords.length === 0) return;
     setRoutinesByDay((prev) => {
-      const updated = { ...(prev || {}) };
+      const updated: Record<DayOfWeek, RoutineItem[]> = { ...prev };
       (Object.keys(updated) as DayOfWeek[]).forEach((day) => {
         if (Array.isArray(updated[day])) {
           updated[day] = updated[day].map((item) => {
@@ -3888,7 +3978,18 @@ export default function App() {
     try {
       const cleanDocEmail = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
       const cleanTutorId = `tutor-${cleanDocEmail}`;
+      const teacherSettingsUpdate = {
+        role: 'teacher',
+        meetUrl: settings.meetLink,
+        teacherMeetUrl: settings.meetLink,
+        timezone: settings.timezone,
+        availableDays: settings.availableDays,
+        availability: settings.availability || settings.availableHoursByDay,
+        updatedAt: new Date().toISOString(),
+      };
       await Promise.all([
+        setDoc(doc(getDb(), 'users', cleanTutorId), teacherSettingsUpdate, { merge: true }),
+        setDoc(doc(getDb(), 'users', cleanDocEmail), teacherSettingsUpdate, { merge: true }),
         setDoc(doc(getDb(), 'teacher_availability', cleanDocEmail), {
           ...merged,
           updatedAt: new Date().toISOString(),
@@ -3956,11 +4057,12 @@ export default function App() {
 
   useEffect(() => {
     fetchLatestTutors();
-    if (isAdminApprovalsOpen || currentAccount?.role === 'admin') {
-      const interval = setInterval(fetchLatestTutors, 3000);
+    // Only poll when the admin approvals modal is actively open
+    if (isAdminApprovalsOpen) {
+      const interval = setInterval(fetchLatestTutors, 15000);
       return () => clearInterval(interval);
     }
-  }, [isAdminApprovalsOpen, currentAccount?.role, currentAccount?.email]);
+  }, [isAdminApprovalsOpen]);
 
   // Handler: Admin Approve Tutor
   const handleApproveTutor = async (tutorId: string) => {
@@ -4121,16 +4223,22 @@ export default function App() {
       });
     }
 
-    // Direct Firestore persistence for instant consistency
+    // Direct Firestore persistence for instant consistency across unified users collection
     try {
       const cleanDocId = mergedTutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
-      await setDoc(doc(getDb(), 'tutors', cleanDocId), {
+      const cleanEmailId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+      const teacherPayload = {
         ...mergedTutor,
         id: cleanDocId,
         email: cleanEmail,
         role: 'teacher',
         updatedAt: new Date().toISOString(),
-      }, { merge: true });
+      };
+      await Promise.all([
+        setDoc(doc(getDb(), 'users', cleanDocId), teacherPayload, { merge: true }),
+        setDoc(doc(getDb(), 'users', cleanEmailId), teacherPayload, { merge: true }),
+        setDoc(doc(getDb(), 'tutors', cleanDocId), teacherPayload, { merge: true }),
+      ]);
     } catch (fsErr) {
       console.warn('Direct Firestore tutor update notice:', fsErr);
     }
@@ -4580,8 +4688,8 @@ export default function App() {
         email,
         studentEmail: email,
         role: 'student',
-        level: s.level || s.studentLevel || 'iniciante',
-        studentLevel: s.level || s.studentLevel || 'iniciante',
+        level: s.level || s.studentLevel || EnglishLevel.BEGINNER,
+        studentLevel: s.level || s.studentLevel || EnglishLevel.BEGINNER,
         teacherEmail: s.teacherEmail || '',
         teacherName: s.teacherName || '',
         teacherUid: sTeacherUid || teacherUid,
@@ -4605,8 +4713,8 @@ export default function App() {
               email,
               studentEmail: email,
               role: 'student',
-              level: (a as any).level || (existing as any).level || 'iniciante',
-              studentLevel: (a as any).level || (existing as any).studentLevel || 'iniciante',
+              level: (a as any).level || (existing as any).level || EnglishLevel.BEGINNER,
+              studentLevel: (a as any).level || (existing as any).studentLevel || EnglishLevel.BEGINNER,
             } as any);
           }
         }

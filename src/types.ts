@@ -33,31 +33,32 @@ export type UserRole = 'student' | 'teacher' | 'admin';
 
 export interface NativeFriendTutor {
   id: string;
+  uid?: string;
   name: string;
   email: string;
   avatar: string;
   country: string;
-  countryCode: string;
-  flag: string;
-  accent: string;
-  rating: number;
-  reviewsCount: number;
-  activeStudents: number;
-  lessonsTaught: number;
-  pricePerSessionUsd: number;
-  pricePerSessionBrl: number;
+  countryCode?: string;
+  flag?: string;
+  accent?: string;
+  rating?: number;
+  reviewsCount?: number;
+  activeStudents?: number;
+  lessonsTaught?: number;
+  pricePerSessionUsd?: number;
+  pricePerSessionBrl?: number;
   headline: string;
   bio: string;
   specialties: string[];
-  videoIntroUrl: string;
+  videoIntroUrl?: string;
   youtubeEmbedId?: string;
   introVideoUrl?: string;
   videoUrl?: string;
   youtubeUrl?: string;
-  availableDays: DayOfWeek[];
-  availableHours: string[];
+  availableDays?: DayOfWeek[];
+  availableHours?: string[];
   isSuperTutor?: boolean;
-  languagesSpoken: string[];
+  languagesSpoken?: string[];
   approvalStatus?: 'approved' | 'pending' | 'rejected';
   appliedAt?: string;
   meetUrl?: string;
@@ -66,6 +67,7 @@ export interface NativeFriendTutor {
   timezone?: string;
   availability?: Record<string, string[]>;
   availableHoursByDay?: Record<string, string[]>;
+  role?: 'teacher' | 'student' | 'admin' | string;
 }
 
 export interface AdminLandingContent {
@@ -205,7 +207,7 @@ export interface DailyJournalEntry {
   studentEmail?: string;
 }
 
-export type StudentJournalActivityType = 'video' | 'audio' | 'memorization' | 'lesson' | 'sentence';
+export type StudentJournalActivityType = 'video' | 'audio' | 'memorization' | 'lesson' | 'sentence' | 'tutor_live';
 
 export interface StudentJournalEntry {
   id: string;
@@ -266,11 +268,13 @@ export interface UserProfile {
   completedTodayMinutes?: number;
   targetAudienceCategory?: string;
   contractedLessons?: number;
+  availableLessons?: number;
   completedLessonsCount?: number;
   totalVideosWatched?: number;
   totalWordsLearned?: number;
   lastActiveDate?: string;
   languagePreference?: Language;
+  studentTimezone?: string;
   weeklyNativeLessonsTarget?: number;
   weeklyStudyDaysTarget?: number;
   weeklyStudyDays?: DayOfWeek[];
@@ -281,8 +285,11 @@ export interface UserProfile {
   hasCompletedTrialLesson?: boolean;
   dailyJournalEntries?: DailyJournalEntry[];
   dailyJournalSentence?: string;
+  dailySentences?: any[];
   dailyJournal?: Array<{ id: string; date: string; sentence: string; wordsUsed?: string[] }>;
   studentJournal?: StudentJournalEntry[];
+  watchedVideosHistory?: any[];
+  listenedTracksHistory?: any[];
 }
 
 export interface StudentProfile {
@@ -291,7 +298,10 @@ export interface StudentProfile {
   name: string;
   email: string;
   studentEmail?: string;
+  studentName?: string;
   level: EnglishLevel;
+  studentLevel?: EnglishLevel;
+  status?: string;
   contractedLessons?: number;
   completedLessonsCount?: number;
   goal?: string;
@@ -299,11 +309,17 @@ export interface StudentProfile {
   nativeFriendUID?: string;
   teacherEmail?: string;
   teacherName?: string;
+  teacherUid?: string;
+  routineVideoTime?: string;
+  routineAudioTime?: string;
+  dailyPhraseTime?: string;
   weeklyCycle?: number;
   weeklyStudyDaysTarget?: number;
   weeklyStudyDays?: DayOfWeek[];
   activeSince?: string;
   createdAt?: string;
+  watchedVideosHistory?: any[];
+  listenedTracksHistory?: any[];
 }
 
 export interface ConsumedVideoItem {
@@ -404,6 +420,7 @@ export interface LiveLessonVocabNote {
   phonetic?: string;
   audioUrl?: string;
   source?: 'api' | 'offline_dict' | 'fallback' | 'custom' | string;
+  notes?: string;
 }
 
 export interface LiveLessonNote {
@@ -445,10 +462,10 @@ export interface LiveLesson {
   status: 'scheduled' | 'completed' | 'not_completed' | 'cancelled';
   completedAt?: string;
   cancelledAt?: string;
-  cancelledBy?: 'student' | 'teacher';
+  cancelledBy?: 'student' | 'teacher' | 'admin' | string;
   cancellationReason?: string;
   notCompletedAt?: string;
-  notCompletedResponsible?: 'student' | 'teacher';
+  notCompletedResponsible?: 'student' | 'teacher' | 'admin' | string;
   notCompletedReason?: string;
   deductedFromContract?: boolean;
   proposalStatus?:
@@ -461,14 +478,14 @@ export interface LiveLesson {
     | 'pending_teacher_reschedule'
     | 'pending_student_cancellation'
     | 'pending_teacher_cancellation';
-  proposedBy?: 'student' | 'teacher';
+  proposedBy?: 'student' | 'teacher' | 'admin';
   proposedAt?: string;
   proposedReason?: string;
   proposedNewStartDateTime?: string;
   proposedNewEndDateTime?: string;
   rescheduleNotes?: string;
   rescheduledReason?: string;
-  rescheduledBy?: 'student' | 'teacher';
+  rescheduledBy?: 'student' | 'teacher' | 'admin' | string;
   rescheduledAt?: string;
   rescheduledFrom?: {
     startDateTime: string;

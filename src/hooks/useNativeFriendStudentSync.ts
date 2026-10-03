@@ -197,7 +197,7 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
       selectedDay: todayInStudentTz,
       activeStudyDays: effectiveStudyDays,
       weeklyCycle: weeklyCycle || 5,
-      studentJournal: studentJournal.length > 0 ? studentJournal : routineDoc?.studentJournal,
+      studentJournal: studentJournal.length > 0 ? studentJournal : ((routineDoc as any)?.studentJournal || []),
     });
 
     if (computed) {
@@ -267,6 +267,7 @@ export function useNativeFriendStudentSync(params: UseNativeFriendStudentSyncPar
               teacherFeedback: {
                 ...(base.teacherFeedback || {}),
                 [targetDay]: {
+                  studentUid: effectiveUid,
                   teacherUid: cleanTeacherUid,
                   teacherName,
                   teacherEmail,

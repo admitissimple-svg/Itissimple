@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { LiveLesson, EnglishLevel } from '../types';
 import { sanitizeTimeZone } from '../utils/timezone';
 import {
@@ -65,6 +65,8 @@ export function useNativeFriendsNotesReminder({
 
   const resolvedUid = useMemo(() => (studentUid || '').trim(), [studentUid]);
   const resolvedEmail = useMemo(() => (studentEmail || '').toLowerCase().trim(), [studentEmail]);
+  const lessonsRef = useRef<LiveLesson[]>(lessons || []);
+  lessonsRef.current = lessons || [];
 
   const [sessions, setSessions] = useState<SessionNoteSummary[]>([]);
   const [latestTransformation, setLatestTransformation] = useState<PedagogicalLessonTransformation | null>(null);
@@ -79,8 +81,9 @@ export function useNativeFriendsNotesReminder({
 
     try {
       // 1a. In-memory lessons passed via props
-      if (Array.isArray(lessons)) {
-        lessons.forEach((l) => {
+      const curLessons = lessonsRef.current;
+      if (Array.isArray(curLessons)) {
+        curLessons.forEach((l) => {
           if (!l) return;
           const lStudentUid = l.studentUid || (l as any)?.studentId || '';
           const lStudentEmail = (l.studentEmail || '').toLowerCase().trim();
@@ -197,7 +200,7 @@ export function useNativeFriendsNotesReminder({
     } finally {
       setIsLoading(false);
     }
-  }, [resolvedUid, resolvedEmail, lessons]);
+  }, [resolvedUid, resolvedEmail]);
 
   // 2. Fetch stored progress from Firestore / Server (NO localStorage)
   const loadStoredProgress = useCallback(async () => {
@@ -284,6 +287,11 @@ export function useNativeFriendsNotesReminder({
       unsubNotes();
     };
   }, [resolvedUid, loadSessions, loadStoredProgress]);
+
+  // Update sessions when lessons count changes without resetting listeners
+  useEffect(() => {
+    loadSessions();
+  }, [lessons?.length, loadSessions]);
 
   // 3. Transform latest session notes
   const latestSession = useMemo(() => sessions[0] || null, [sessions]);

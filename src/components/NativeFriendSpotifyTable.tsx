@@ -17,7 +17,7 @@ import {
   AlertCircle,
   Loader2
 } from 'lucide-react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, collection } from 'firebase/firestore';
 import { getDb } from '../firebase';
 import { DayOfWeek, EnglishLevel, Language, TeacherOverrideTrack } from '../types';
 import {
@@ -161,9 +161,9 @@ export const NativeFriendSpotifyTable: React.FC<NativeFriendSpotifyTableProps> =
   // Normalized level
   const normalizedLevel = useMemo<EnglishLevel>(() => {
     const raw = (studentLevel || '').toLowerCase();
-    if (raw.includes('adv') || raw.includes('c1') || raw.includes('c2')) return 'advanced';
-    if (raw.includes('int') || raw.includes('b1') || raw.includes('b2')) return 'intermediate';
-    return 'beginner';
+    if (raw.includes('adv') || raw.includes('c1') || raw.includes('c2')) return EnglishLevel.ADVANCED;
+    if (raw.includes('int') || raw.includes('b1') || raw.includes('b2')) return EnglishLevel.INTERMEDIATE;
+    return EnglishLevel.BEGINNER;
   }, [studentLevel]);
 
   const playlistConfig = useMemo(() => getSpotifyPlaylistForLevel(normalizedLevel), [normalizedLevel]);
@@ -196,34 +196,38 @@ export const NativeFriendSpotifyTable: React.FC<NativeFriendSpotifyTableProps> =
 
     setIsLoadingSync(true);
     const db = getDb();
-    const unsubs = ALL_DAYS.map((day) => {
-      try {
-        const dayRef = doc(db, 'users', cleanStudentUid, 'routines', day);
-        return onSnapshot(
-          dayRef,
-          (snapshot) => {
-            if (snapshot.exists()) {
-              const data = snapshot.data();
-              const override = data?.teacherOverrideTrack as TeacherOverrideTrack | undefined;
-              setDayOverrides((prev) => ({ ...prev, [day]: override || null }));
-            } else {
-              setDayOverrides((prev) => ({ ...prev, [day]: null }));
-            }
-          },
-          (err) => {
-            console.warn(`Firestore sync error on day ${day}:`, err);
-          }
-        );
-      } catch (err) {
-        console.warn(`Error setting up onSnapshot for ${day}:`, err);
-        return () => {};
-      }
-    });
+    let unsub = () => {};
 
-    setIsLoadingSync(false);
+    try {
+      const routinesCol = collection(db, 'users', cleanStudentUid, 'routines');
+      unsub = onSnapshot(
+        routinesCol,
+        (snapshot) => {
+          const updated: Partial<Record<DayOfWeek, TeacherOverrideTrack | null>> = {};
+          ALL_DAYS.forEach((d) => {
+            updated[d] = null;
+          });
+          snapshot.forEach((docSnap) => {
+            const day = docSnap.id as DayOfWeek;
+            const data = docSnap.data();
+            const override = data?.teacherOverrideTrack as TeacherOverrideTrack | undefined;
+            updated[day] = override || null;
+          });
+          setDayOverrides((prev) => ({ ...prev, ...updated }));
+          setIsLoadingSync(false);
+        },
+        (err) => {
+          console.warn('NativeFriendSpotifyTable routines listener notice:', err);
+          setIsLoadingSync(false);
+        }
+      );
+    } catch (err) {
+      console.warn('Error setting up onSnapshot for routines:', err);
+      setIsLoadingSync(false);
+    }
 
     return () => {
-      unsubs.forEach((u) => u());
+      unsub();
     };
   }, [cleanStudentUid]);
 

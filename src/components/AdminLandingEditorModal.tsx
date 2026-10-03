@@ -17,7 +17,8 @@ interface AdminLandingEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentContent: AdminLandingContent;
-  onSaveContent: (updated: AdminLandingContent) => void;
+  onSaveContent?: (updated: AdminLandingContent) => void;
+  onSave?: (updated: AdminLandingContent) => void;
   currentLanguage: Language;
 }
 
@@ -26,6 +27,7 @@ export const AdminLandingEditorModal: React.FC<AdminLandingEditorModalProps> = (
   onClose,
   currentContent,
   onSaveContent,
+  onSave,
   currentLanguage,
 }) => {
   const [formData, setFormData] = useState<AdminLandingContent>({ ...currentContent });
@@ -42,7 +44,8 @@ export const AdminLandingEditorModal: React.FC<AdminLandingEditorModalProps> = (
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveContent(formData);
+    if (onSave) onSave(formData);
+    else if (onSaveContent) onSaveContent(formData);
 
     try {
       await fetch('/api/landing-content', {

@@ -145,6 +145,8 @@ interface AppDb {
   spotifyPlaylists?: Record<string, any>;
   studentHomeworkMap?: Record<string, any>;
   sessionNotesMap?: Record<string, any>;
+  sessionNotesProgressMap?: Record<string, any>;
+  pedagogicalTransformationsMap?: Record<string, any>;
 }
 
 const DEFAULT_LANDING_CONTENT = {
@@ -976,7 +978,6 @@ app.post('/api/auth/login', async (req, res) => {
     const tutorId = matchingTutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
     authRecord = {
       uid: tutorId,
-      id: tutorId,
       email: cleanEmail,
       name: matchingTutor.name || cleanEmail.split('@')[0],
       password: matchingTutor.password || password || '',
@@ -4526,6 +4527,7 @@ app.get('/api/student-routines', (req, res) => {
   const hasRepeatingSpotifyBug = spotifyAssigns.length > 1 && uniqueTrackIds.size === 1;
 
   let dbChanged = false;
+  let isAwaitingTopicSelection = false;
   if (resolved.email || resolved.uid) {
     const studentLevel = normalizeStudentLevel(resolveStudentLevel(db, resolved.email, resolved.uid)).key;
     const studentPlanDays: string[] =
@@ -4541,7 +4543,7 @@ app.get('/api/student-routines', (req, res) => {
     const expectedDaysCount = Math.max(1, studentPlanDays.length);
 
     const hasVoluntaryVideoAssignments = videoAssigns.length > 0;
-    const isAwaitingTopicSelection = Boolean(
+    isAwaitingTopicSelection = Boolean(
       (resolved.email && db.studentAwaitingTopicSelection?.[resolved.email]) ||
       (resolved.uid && db.studentAwaitingTopicSelection?.[resolved.uid]) ||
       !hasVoluntaryVideoAssignments
@@ -6678,7 +6680,7 @@ app.post('/api/student-journal', async (req, res) => {
   // Direct atomic write to Cloud Firestore by UID
   const firestore = getFirestoreDb();
   if (firestore) {
-    const docId = cleanUid || cleanEmail;
+    const docId = studentUid || cleanEmail;
     if (docId) {
       setDoc(
         doc(firestore, 'users', docId),

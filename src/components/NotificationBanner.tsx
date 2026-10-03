@@ -11,10 +11,12 @@ export interface ActiveNotificationData {
 }
 
 interface NotificationBannerProps {
-  activeNotification: ActiveNotificationData | null;
-  onClose: () => void;
-  onOpenLesson: (item: RoutineItem) => void;
-  onOpenEndOfDay: () => void;
+  activeNotification?: ActiveNotificationData | null;
+  onClose?: () => void;
+  onOpenLesson?: (item: RoutineItem) => void;
+  onOpenEndOfDay?: () => void;
+  notifications?: Array<{ id: string; title: string; message: string; type?: string }>;
+  onDismiss?: (id: string) => void;
 }
 
 export const NotificationBanner: React.FC<NotificationBannerProps> = ({
@@ -22,7 +24,38 @@ export const NotificationBanner: React.FC<NotificationBannerProps> = ({
   onClose,
   onOpenLesson,
   onOpenEndOfDay,
+  notifications,
+  onDismiss,
 }) => {
+  if (notifications && notifications.length > 0) {
+    const latest = notifications[0];
+    return (
+      <div className="fixed bottom-4 right-4 z-50 max-w-md w-full animate-in slide-in-from-bottom-5 duration-300 p-2 sm:p-0">
+        <div className="bg-[#000035] text-white rounded-3xl p-4 sm:p-5 shadow-2xl border-2 border-[#1C4C96] flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-[#1C4C96] text-white flex items-center justify-center font-bold shrink-0 border border-[#607EC9]">
+                <Bell className="w-4 h-4 text-[#9AB4FF]" />
+              </div>
+              <div>
+                <h4 className="text-sm font-black text-white leading-tight">{latest.title}</h4>
+              </div>
+            </div>
+            {onDismiss && (
+              <button
+                onClick={() => onDismiss(latest.id)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-300">{latest.message}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!activeNotification) return null;
 
   const { type, item, title, message, leadTimeBadge } = activeNotification;
