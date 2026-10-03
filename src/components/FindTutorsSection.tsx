@@ -16,6 +16,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { NativeFriendTutor, INITIAL_NATIVE_FRIENDS } from '../data/tutors';
+import { isTutorApproved, isTeacherRole } from '../hooks/useNativeFriends';
 import { Language } from '../types';
 import { getTranslations } from '../utils/i18n';
 import { extractYouTubeVideoId } from '../utils/youtube';
@@ -40,29 +41,16 @@ export const FindTutorsSection: React.FC<FindTutorsSectionProps> = ({
   const t = getTranslations(currentLanguage);
   const tutors = useMemo(() => {
     const list = passedTutors && passedTutors.length > 0 ? passedTutors : INITIAL_NATIVE_FRIENDS;
-    // O Amigo Nativo só deve aparecer listado como disponível após a aprovação do Admin e com role == 'teacher'
+    // Approved Native Friends list for public directory
     const approvedList = list.filter((t) => {
-      const isApproved =
-        t.approvalStatus === 'approved' ||
-        t.isApproved === true ||
-        (t as any).status === 'approved' ||
-        (t as any).approved === true;
-      const isTeacherRole = !t.role || t.role === 'teacher' || (t as any).role === 'native_friend';
-      return isApproved && isTeacherRole;
+      return isTutorApproved(t) && isTeacherRole(t);
     });
 
-    console.log('[NativeFriends Public Directory] Rendered public tutors:', {
-      totalInputTutors: list.length,
-      approvedCount: approvedList.length,
-      approvedTutors: approvedList.map((t) => ({
-        id: t.id,
-        name: t.name,
-        email: t.email,
-        approvalStatus: t.approvalStatus,
-        isApproved: t.isApproved,
-        status: (t as any).status,
-      })),
-    });
+    // Required simple console.log to list retrieved Firestore IDs on the public page for production validation
+    console.log(
+      '[NativeFriends Directory] Retrieved Firestore tutor IDs:',
+      approvedList.map((t) => t.id || t.email)
+    );
 
     return approvedList;
   }, [passedTutors]);

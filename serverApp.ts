@@ -596,16 +596,18 @@ async function initCloudPersistence() {
       const allDeletedStudentEmails = Array.from(new Set([...localDeletedStudents, ...cloudDeletedStudents, ...PURGED_OBSOLETE_STUDENTS]));
       inMemoryDb.deletedStudentEmails = allDeletedStudentEmails;
 
-      // Purge non-production user profiles and auth users
+      // Purge non-production user profiles and auth users (never purge teachers/tutors)
       Object.keys(mergedUserProfiles).forEach((em) => {
         const cleanEm = em.toLowerCase().trim();
-        if (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm)) {
+        const isTeacher = mergedUserProfiles[em]?.role === 'teacher';
+        if (!isTeacher && (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm))) {
           delete mergedUserProfiles[em];
         }
       });
       Object.keys(mergedAuthUsers).forEach((em) => {
         const cleanEm = em.toLowerCase().trim();
-        if (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm)) {
+        const isTeacher = mergedAuthUsers[em]?.role === 'teacher';
+        if (!isTeacher && (!ACTIVE_PRODUCTION_USERS.has(cleanEm) || allDeletedStudentEmails.includes(cleanEm))) {
           delete mergedAuthUsers[em];
         }
       });
@@ -2263,16 +2265,39 @@ app.get('/api/tutors', async (req, res) => {
   res.setHeader('Expires', '0');
 
   const db = readDb();
-  // Ensure tutors are loaded from Firestore collection if in-memory list is empty
-  if (!db.tutorsList || db.tutorsList.length === 0) {
-    try {
-      const directTutors = await fetchTutorsFromFirestore();
-      if (directTutors && directTutors.length > 0) {
-        db.tutorsList = directTutors;
-      }
-    } catch (err) {
-      console.warn('Error fetching tutors from Firestore in GET /api/tutors:', err);
+  // Continuously synchronize tutors with Firestore so remotely created profiles (e.g. Charles) appear immediately
+  try {
+    const directTutors = await fetchTutorsFromFirestore();
+    if (directTutors && directTutors.length > 0) {
+      const map = new Map<string, any>();
+      (db.tutorsList || []).forEach((t: any) => {
+        const k = (t.email || t.id || '').toLowerCase().trim();
+        if (k) map.set(k, t);
+      });
+      directTutors.forEach((t: any) => {
+        const k = (t.email || t.id || '').toLowerCase().trim();
+        if (k) {
+          const existing = map.get(k) || {};
+          const isApproved =
+            t.approvalStatus === 'approved' ||
+            t.isApproved === true ||
+            t.status === 'approved' ||
+            t.approved === true ||
+            existing.isApproved;
+          map.set(k, {
+            ...existing,
+            ...t,
+            role: 'teacher',
+            approvalStatus: isApproved ? 'approved' : t.approvalStatus,
+            isApproved: isApproved,
+            status: isApproved ? 'approved' : t.status,
+          });
+        }
+      });
+      db.tutorsList = Array.from(map.values());
     }
+  } catch (err) {
+    console.warn('Error fetching tutors from Firestore in GET /api/tutors:', err);
   }
 
   const requesterEmail = ((req.query.email as string) || '').toLowerCase().trim();

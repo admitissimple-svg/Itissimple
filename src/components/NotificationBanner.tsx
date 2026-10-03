@@ -27,8 +27,25 @@ export const NotificationBanner: React.FC<NotificationBannerProps> = ({
   notifications,
   onDismiss,
 }) => {
-  if (notifications && notifications.length > 0) {
-    const latest = notifications[0];
+  const filteredNotifications = (notifications || []).filter((n) => {
+    const id = (n.id || '').toLowerCase();
+    const title = (n.title || '').toLowerCase();
+    // Exclude login/welcome and logout banners
+    if (id.startsWith('login-') || id.startsWith('logout-')) return false;
+    if (
+      title.includes('welcome') ||
+      title.includes('bem-vindo') ||
+      title.includes('logged out') ||
+      title.includes('sessão encerrada') ||
+      title.includes('sessao encerrada')
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  if (filteredNotifications && filteredNotifications.length > 0) {
+    const latest = filteredNotifications[0];
     return (
       <div className="fixed bottom-4 right-4 z-50 max-w-md w-full animate-in slide-in-from-bottom-5 duration-300 p-2 sm:p-0">
         <div className="bg-[#000035] text-white rounded-3xl p-4 sm:p-5 shadow-2xl border-2 border-[#1C4C96] flex flex-col gap-3">

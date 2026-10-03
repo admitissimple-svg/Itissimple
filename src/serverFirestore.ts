@@ -12,16 +12,38 @@ export const ACTIVE_FIREBASE_PROJECT_ID = 'itissimple-8663d';
 export const ACTIVE_PROJECT_NUMBER = '245342369537';
 export const ACTIVE_FIREBASE_AUTH_DOMAIN = `${ACTIVE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
 export const ACTIVE_FIREBASE_STORAGE_BUCKET = `${ACTIVE_FIREBASE_PROJECT_ID}.firebasestorage.app`;
-export const ACTIVE_OAUTH_CLIENT_ID = '245342369537-9e4gb0lshgsacvt7dkd66d64orr20fn6.apps.googleusercontent.com';
-export const ACTIVE_FIREBASE_APP_ID = '1:245342369537:web:7c8551e8eeb3933ed68d00';
+export const ACTIVE_OAUTH_CLIENT_ID = '245342369537-9e4gb01shgsacvt7dkd66d64orr20fn6.apps.googleusercontent.com';
+export const ACTIVE_FIREBASE_APP_ID = '1:245342369537:web:9ef6a4347068d358d68d00';
 export const ACTIVE_APP_ID = ACTIVE_FIREBASE_APP_ID;
-export const ACTIVE_FIREBASE_DATABASE_ID =
-  (process.env.FIREBASE_DATABASE_ID && process.env.FIREBASE_DATABASE_ID !== '(default)')
+export const ACTIVE_FIREBASE_DATABASE_ID = 
+  (typeof process !== 'undefined' && process.env && process.env.FIREBASE_DATABASE_ID && process.env.FIREBASE_DATABASE_ID !== '(default)')
     ? process.env.FIREBASE_DATABASE_ID
-    : 'ai-studio-itissimple-e32d4304-3e35-441e-a910-7af9cbdeb03e';
+    : '(default)';
 export const ACTIVE_FIRESTORE_DATABASE_ID = ACTIVE_FIREBASE_DATABASE_ID;
 
 let dbInstance: any = null;
+let defaultDbInstance: any = null;
+
+export function getDefaultFirestoreDb() {
+  if (defaultDbInstance) return defaultDbInstance;
+  try {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      config.projectId = ACTIVE_FIREBASE_PROJECT_ID;
+      config.appId = config.appId || ACTIVE_FIREBASE_APP_ID;
+      config.apiKey = process.env.FIREBASE_API_KEY || config.apiKey || 'AIzaSyBDgPCPMD5wd36mSX0lkkyECz6-rHJdBqk';
+      config.authDomain = ACTIVE_FIREBASE_AUTH_DOMAIN;
+      config.storageBucket = config.storageBucket || ACTIVE_FIREBASE_STORAGE_BUCKET;
+      const app = getApps().length === 0 ? initializeApp(config) : getApp();
+      defaultDbInstance = getFirestore(app);
+      return defaultDbInstance;
+    }
+  } catch (err) {
+    console.warn('Could not initialize default Firebase Firestore SDK:', err);
+  }
+  return null;
+}
 
 export function getFirestoreDb() {
   if (dbInstance) return dbInstance;
@@ -55,6 +77,15 @@ export function getFirestoreDb() {
   return null;
 }
 
+export function getAllServerFirestoreDbs(): any[] {
+  const list: any[] = [];
+  const def = getDefaultFirestoreDb();
+  if (def) list.push(def);
+  const custom = getFirestoreDb();
+  if (custom && !list.includes(custom)) list.push(custom);
+  return list;
+}
+
 // Timeout helper so remote Firestore never blocks an Express API response
 function withTimeout<T>(promise: Promise<T>, ms: number = 12000): Promise<T | null> {
   let timer: NodeJS.Timeout;
@@ -74,8 +105,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number = 12000): Promise<T | nu
  * Direct persistence for individual Native Friend / Tutor profiles in /tutors/{tutorId}
  */
 export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
-  const db = getFirestoreDb();
-  if (!db || !tutor) return false;
+  const dbs = getAllServerFirestoreDbs();
+  if (dbs.length === 0 || !tutor) return false;
   try {
     const cleanEmail = (tutor.email || '').toLowerCase().trim();
     const tutorId = tutor.id || `tutor-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
@@ -94,17 +125,19 @@ export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
       updatedAt: new Date().toISOString(),
     }));
 
-    // Primary: Write to unified 'users' collection with role: 'teacher'
-    const saveToUsers = setDoc(doc(db, 'users', tutorId), sanitized, { merge: true });
-    // Also save under clean email doc ID in users if different
     const cleanEmailDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
-    const saveToUsersEmail = cleanEmailDocId !== tutorId
-      ? setDoc(doc(db, 'users', cleanEmailDocId), sanitized, { merge: true }).catch(() => null)
-      : Promise.resolve();
-    // Backward compatibility: also sync to legacy 'tutors' collection
-    const saveToTutors = setDoc(doc(db, 'tutors', tutorId), sanitized, { merge: true }).catch(() => null);
+    const writePromises: Promise<any>[] = [];
 
-    const savePromise = Promise.all([saveToUsers, saveToUsersEmail, saveToTutors]).then(() => true);
+    for (const db of dbs) {
+      writePromises.push(setDoc(doc(db, 'users', tutorId), sanitized, { merge: true }).catch(() => null));
+      writePromises.push(setDoc(doc(db, 'tutors', tutorId), sanitized, { merge: true }).catch(() => null));
+      if (cleanEmailDocId !== tutorId) {
+        writePromises.push(setDoc(doc(db, 'users', cleanEmailDocId), sanitized, { merge: true }).catch(() => null));
+        writePromises.push(setDoc(doc(db, 'tutors', cleanEmailDocId), sanitized, { merge: true }).catch(() => null));
+      }
+    }
+
+    const savePromise = Promise.all(writePromises).then(() => true);
     const result = await withTimeout(savePromise, 8000);
     return !!result;
   } catch (err) {
@@ -115,49 +148,83 @@ export async function saveTutorToFirestore(tutor: any): Promise<boolean> {
 
 /**
  * Fetch all Native Friend / Teacher profiles directly from unified /users collection (role == 'teacher')
- * with fallback to legacy /tutors collection
+ * with fallback to legacy /tutors collection across production and custom databases.
  */
 export async function fetchTutorsFromFirestore(): Promise<any[]> {
-  const db = getFirestoreDb();
-  if (!db) return [];
+  const dbs = getAllServerFirestoreDbs();
+  if (dbs.length === 0) return [];
   try {
     const fetchPromise = async () => {
-      // Primary: query unified 'users' collection where role == 'teacher'
-      const teachersQuery = query(collection(db, 'users'), where('role', '==', 'teacher'));
-      const [usersSnap, legacySnap] = await Promise.all([
-        getDocs(teachersQuery).catch(() => null),
-        getDocs(collection(db, 'tutors')).catch(() => null),
-      ]);
-
       const listMap = new Map<string, any>();
-      if (usersSnap) {
-        usersSnap.forEach((d) => {
-          const data = d.data();
-          if (data && data.email && d.id !== 'test_tutor_id') {
-            const key = (data.email || d.id).toLowerCase().trim();
-            listMap.set(key, { id: d.id, ...data, role: 'teacher' });
+
+      for (const db of dbs) {
+        try {
+          // Primary: query unified 'users' collection where role == 'teacher'
+          const teachersQuery = query(collection(db, 'users'), where('role', '==', 'teacher'));
+          const [usersSnap, legacySnap] = await Promise.all([
+            getDocs(teachersQuery).catch(() => null),
+            getDocs(collection(db, 'tutors')).catch(() => null),
+          ]);
+
+          if (usersSnap) {
+            usersSnap.forEach((d) => {
+              const data = d.data();
+              if (data && (data.email || data.name)) {
+                const key = (data.email || d.id).toLowerCase().trim();
+                const existing = listMap.get(key) || {};
+                const isApproved =
+                  data.approvalStatus === 'approved' ||
+                  data.isApproved === true ||
+                  data.status === 'approved' ||
+                  data.approved === true ||
+                  existing.isApproved;
+                listMap.set(key, {
+                  ...existing,
+                  id: d.id,
+                  ...data,
+                  role: 'teacher',
+                  ...(isApproved ? { approvalStatus: 'approved', isApproved: true, status: 'approved', approved: true } : {}),
+                });
+              }
+            });
           }
-        });
-      }
-      if (legacySnap) {
-        legacySnap.forEach((d) => {
-          const data = d.data();
-          if (data && data.email && d.id !== 'test_tutor_id') {
-            const key = (data.email || d.id).toLowerCase().trim();
-            const existing = listMap.get(key) || {};
-            // If existing is already approved or legacy is approved, preserve approval
-            const merged = { ...data, ...existing, id: existing.id || d.id, role: 'teacher' };
-            if (data.approvalStatus === 'approved' || data.isApproved || data.status === 'approved') {
-              merged.approvalStatus = 'approved';
-              merged.isApproved = true;
-              merged.status = 'approved';
-            }
-            listMap.set(key, merged);
+
+          if (legacySnap) {
+            legacySnap.forEach((d) => {
+              const data = d.data();
+              if (data && (data.email || data.name)) {
+                const key = (data.email || d.id).toLowerCase().trim();
+                const existing = listMap.get(key) || {};
+                const isApproved =
+                  data.approvalStatus === 'approved' ||
+                  data.isApproved === true ||
+                  data.status === 'approved' ||
+                  data.approved === true ||
+                  existing.isApproved;
+                const merged = { ...data, ...existing, id: existing.id || d.id, role: 'teacher' };
+                if (isApproved) {
+                  merged.approvalStatus = 'approved';
+                  merged.isApproved = true;
+                  merged.status = 'approved';
+                  merged.approved = true;
+                }
+                listMap.set(key, merged);
+              }
+            });
           }
-        });
+        } catch (dbErr) {
+          console.warn('Error reading tutors from one database instance:', dbErr);
+        }
       }
-      return Array.from(listMap.values());
+
+      const results = Array.from(listMap.values());
+      const approvedIds = results
+        .filter((t) => t.approvalStatus === 'approved' || t.isApproved === true)
+        .map((t) => t.id || t.email);
+      console.log('[NativeFriends Server] Retrieved Firestore tutor IDs:', approvedIds);
+      return results;
     };
+
     const result = await withTimeout(fetchPromise(), 10000);
     return Array.isArray(result) ? result : [];
   } catch (err) {

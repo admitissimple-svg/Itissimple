@@ -44,7 +44,8 @@ import {
 import { recordConsumedVideo, recordConsumedTrack } from './hooks/useStudentHistory';
 import { extractYouTubeVideoId, getYouTubeWatchUrl } from './utils/youtube';
 import { getInstantOrCachedWord } from './utils/dictionaryService';
-import { auth, getDb } from './firebase';
+import { auth, getDb, getAllFirestoreDbs } from './firebase';
+import { useNativeFriends, isTutorApproved, isTeacherRole } from './hooks/useNativeFriends';
 import { onAuthStateChanged, signOut as firebaseSignOutAuth } from 'firebase/auth';
 import { doc, getDoc, collection, getDocs, onSnapshot, setDoc, deleteDoc, query, where } from 'firebase/firestore';
 
@@ -242,7 +243,20 @@ export default function App() {
   // 2. Authentication & Accounts - 100% managed in Cloud Firestore and Firebase Auth (ZERO localStorage dependency)
   const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(null);
   const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>([]);
-  const [tutors, setTutors] = useState<NativeFriendTutor[]>(INITIAL_NATIVE_FRIENDS);
+
+  // Authoritative Native Friends hook syncing with Firestore unified collections across production and preview
+  const {
+    tutors,
+    setTutors,
+    publicTutors,
+    allTutors,
+    refresh: refreshNativeFriends,
+  } = useNativeFriends({
+    userEmail: currentAccount?.email,
+    userRole: currentAccount?.role,
+    uid: currentAccount?.uid,
+    initialData: INITIAL_NATIVE_FRIENDS,
+  });
 
   // Startup hook: Permanently purge any legacy browser localStorage keys to enforce strict Firestore exclusivity
   useEffect(() => {
@@ -588,199 +602,14 @@ export default function App() {
             });
           }
         }
-        // Direct Cloud Firestore unified /users collection fetch where role == 'teacher'
-        try {
-          const teachersQuery = query(collection(getDb(), 'users'), where('role', '==', 'teacher'));
-          const fsTutorsSnap = await getDocs(teachersQuery).catch(() => null);
-          const fsTutorsList: NativeFriendTutor[] = [];
-          if (fsTutorsSnap) {
-            fsTutorsSnap.forEach((d) => {
-              const data = d.data();
-              if (data && data.email && d.id !== 'test_tutor_id') {
-                const isApprv =
-                  data.approvalStatus === 'approved' ||
-                  data.isApproved === true ||
-                  data.status === 'approved' ||
-                  data.approved === true;
-                fsTutorsList.push({
-                  id: d.id,
-                  ...data,
-                  role: 'teacher',
-                  ...(isApprv ? { approvalStatus: 'approved', isApproved: true, status: 'approved' } : {}),
-                } as any);
-              }
-            });
-          }
-          // Also fetch legacy tutors collection and merge
-          const legacySnap = await getDocs(collection(getDb(), 'tutors')).catch(() => null);
-          if (legacySnap) {
-            legacySnap.forEach((d) => {
-              const data = d.data();
-              if (data && data.email && d.id !== 'test_tutor_id') {
-                const isApprv =
-                  data.approvalStatus === 'approved' ||
-                  data.isApproved === true ||
-                  data.status === 'approved' ||
-                  data.approved === true;
-                fsTutorsList.push({
-                  id: d.id,
-                  ...data,
-                  role: 'teacher',
-                  ...(isApprv ? { approvalStatus: 'approved', isApproved: true, status: 'approved' } : {}),
-                } as any);
-              }
-            });
-          }
-          if (fsTutorsList.length > 0) {
-            setTutors((prev) => {
-              const map = new Map<string, NativeFriendTutor>();
-              prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
-              fsTutorsList.forEach((t) => {
-                const k = (t.email || t.id).toLowerCase().trim();
-                const existing = map.get(k);
-                const isExistingApproved = existing?.approvalStatus === 'approved' || existing?.isApproved === true;
-                const isNewApproved = t.approvalStatus === 'approved' || t.isApproved === true;
-                const merged = { ...existing, ...t };
-                if (isExistingApproved || isNewApproved) {
-                  merged.approvalStatus = 'approved';
-                  merged.isApproved = true;
-                  merged.status = 'approved';
-                }
-                map.set(k, merged);
-              });
-              const consolidated = Array.from(map.values());
-              console.log('[NativeFriends Client] Hydrated tutors on mount:', {
-                total: consolidated.length,
-                approved: consolidated.filter((t) => t.approvalStatus === 'approved' || t.isApproved).length,
-              });
-              return consolidated;
-            });
-            setTeacherMeetSettings((prev) => {
-              const updated = { ...prev };
-              fsTutorsList.forEach((tut: any) => {
-                const email = (tut.email || '').toLowerCase().trim();
-                const mUrl = (tut.meetUrl || tut.meetLink || '').trim();
-                if (email && mUrl) {
-                  updated[email] = {
-                    ...(updated[email] || {
-                      workingHoursStart: '08:00',
-                      workingHoursEnd: '18:00',
-                      slotDurationMinutes: 30,
-                      availableDays: tut.availableDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'],
-                      timezone: tut.timezone || 'America/Toronto',
-                    }),
-                    teacherEmail: email,
-                    meetLink: mUrl,
-                  };
-                }
-              });
-              return updated;
-            });
-          }
-        } catch (fsErr) {
-          console.warn('Direct Firestore teachers fetch notice:', fsErr);
-        }
+        // Authoritative Native Friends hydration from Firestore handled by useNativeFriends hook
+        await refreshNativeFriends().catch(() => null);
       } catch (err) {
         console.warn('Using local default state:', err);
       }
     }
 
     loadInitialData();
-
-    // Attach real-time Firestore listeners for teachers in users collection and legacy tutors
-    let unsubUsersTeachers: (() => void) | undefined;
-    let unsubLegacyTutors: (() => void) | undefined;
-    try {
-      const teachersQuery = query(collection(getDb(), 'users'), where('role', '==', 'teacher'));
-      unsubUsersTeachers = onSnapshot(teachersQuery, (snapshot) => {
-        const liveTutors: NativeFriendTutor[] = [];
-        snapshot.forEach((d) => {
-          const data = d.data();
-          if (data && data.email && d.id !== 'test_tutor_id') {
-            const isApprv =
-              data.approvalStatus === 'approved' ||
-              data.isApproved === true ||
-              data.status === 'approved' ||
-              data.approved === true;
-            liveTutors.push({
-              id: d.id,
-              ...data,
-              role: 'teacher',
-              ...(isApprv ? { approvalStatus: 'approved', isApproved: true, status: 'approved' } : {}),
-            } as any);
-          }
-        });
-        if (liveTutors.length > 0) {
-          setTutors((prev) => {
-            const map = new Map<string, NativeFriendTutor>();
-            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
-            liveTutors.forEach((t) => {
-              const k = (t.email || t.id).toLowerCase().trim();
-              const existing = map.get(k);
-              const isExistingApproved = existing?.approvalStatus === 'approved' || existing?.isApproved === true;
-              const isNewApproved = t.approvalStatus === 'approved' || t.isApproved === true;
-              const merged = { ...existing, ...t };
-              if (isExistingApproved || isNewApproved) {
-                merged.approvalStatus = 'approved';
-                merged.isApproved = true;
-                merged.status = 'approved';
-              }
-              map.set(k, merged);
-            });
-            return Array.from(map.values());
-          });
-        }
-      }, (err) => {
-        console.warn('Realtime teachers subscription notice:', err);
-      });
-    } catch {}
-
-    try {
-      unsubLegacyTutors = onSnapshot(collection(getDb(), 'tutors'), (snapshot) => {
-        const liveTutors: NativeFriendTutor[] = [];
-        snapshot.forEach((d) => {
-          const data = d.data();
-          if (data && data.email && d.id !== 'test_tutor_id') {
-            const isApprv =
-              data.approvalStatus === 'approved' ||
-              data.isApproved === true ||
-              data.status === 'approved' ||
-              data.approved === true;
-            liveTutors.push({
-              id: d.id,
-              ...data,
-              role: 'teacher',
-              ...(isApprv ? { approvalStatus: 'approved', isApproved: true, status: 'approved' } : {}),
-            } as any);
-          }
-        });
-        if (liveTutors.length > 0) {
-          setTutors((prev) => {
-            const map = new Map<string, NativeFriendTutor>();
-            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
-            liveTutors.forEach((t) => {
-              const k = (t.email || t.id).toLowerCase().trim();
-              const existing = map.get(k);
-              const isExistingApproved = existing?.approvalStatus === 'approved' || existing?.isApproved === true;
-              const isNewApproved = t.approvalStatus === 'approved' || t.isApproved === true;
-              const merged = { ...existing, ...t };
-              if (isExistingApproved || isNewApproved) {
-                merged.approvalStatus = 'approved';
-                merged.isApproved = true;
-                merged.status = 'approved';
-              }
-              map.set(k, merged);
-            });
-            return Array.from(map.values());
-          });
-        }
-      }, () => {});
-    } catch {}
-
-    return () => {
-      if (unsubUsersTeachers) unsubUsersTeachers();
-      if (unsubLegacyTutors) unsubLegacyTutors();
-    };
   }, []);
 
   // Check for direct /admin, #admin, /teacher, or #teacher URL triggers with strict RBAC enforcement
@@ -2381,19 +2210,6 @@ export default function App() {
     } else {
       setViewMode('dashboard');
     }
-    setNotifications((prev) => [
-      {
-        id: `login-${Date.now()}`,
-        title: currentLanguage === 'en' ? `Welcome, ${account.name}!` : `Bem-vindo(a), ${account.name}!`,
-        message: currentLanguage === 'en'
-          ? 'You are ready to live your English today.'
-          : 'Seu painel de rotinas está pronto para você viver em inglês hoje.',
-        type: 'success',
-        timestamp: new Date().toISOString(),
-        read: false,
-      },
-      ...prev,
-    ]);
   };
 
   // Handler: Logout
@@ -2405,25 +2221,13 @@ export default function App() {
     setUserProfile(createDefaultStudentProfile(null));
     setLessons([]);
     setStudents([]);
+    setNotifications([]);
     setViewMode('landing');
     if (typeof window !== 'undefined') {
       try {
         window.history.replaceState({}, '', '/');
       } catch {}
     }
-    setNotifications((prev) => [
-      {
-        id: `logout-${Date.now()}`,
-        title: currentLanguage === 'en' ? 'Logged out' : 'Sessão encerrada',
-        message: currentLanguage === 'en'
-          ? 'See you soon! Your journey, step by step!'
-          : 'Até logo! Sua jornada, passo a passo!',
-        type: 'info',
-        timestamp: new Date().toISOString(),
-        read: false,
-      },
-      ...prev,
-    ]);
   };
 
   // Handler: Update student English level
@@ -4192,6 +3996,7 @@ export default function App() {
   const fetchLatestTutors = async () => {
     setIsRefreshingTutors(true);
     try {
+      await refreshNativeFriends().catch(() => null);
       const email = currentAccount?.email || '';
       const role = currentAccount?.role || '';
       const uid = currentAccount?.uid || '';
@@ -4201,7 +4006,23 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          setTutors(data);
+          setTutors((prev) => {
+            const map = new Map<string, NativeFriendTutor>();
+            prev.forEach((t) => map.set((t.email || t.id).toLowerCase().trim(), t));
+            data.forEach((t: NativeFriendTutor) => {
+              const k = (t.email || t.id).toLowerCase().trim();
+              const existing = map.get(k);
+              const approved = isTutorApproved(t) || (existing && isTutorApproved(existing));
+              map.set(k, {
+                ...existing,
+                ...t,
+                isApproved: approved,
+                approvalStatus: approved ? 'approved' : t.approvalStatus,
+                status: approved ? 'approved' : t.status,
+              });
+            });
+            return Array.from(map.values());
+          });
         }
       }
     } catch {
@@ -4243,9 +4064,9 @@ export default function App() {
       )
     );
 
-    // Direct Cloud Firestore write with { merge: true } across collections
+    // Direct Cloud Firestore write with { merge: true } across collections and databases
     try {
-      const db = getDb();
+      const dbs = getAllFirestoreDbs();
       const cleanTutorId = tutorToApprove?.id || tutorId;
       const cleanEmailDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
       const approvalPayload = {
@@ -4260,20 +4081,18 @@ export default function App() {
         updatedAt: new Date().toISOString(),
       };
 
-      const firestorePromises = [
-        setDoc(doc(db, 'users', cleanTutorId), approvalPayload, { merge: true }).catch(() => null),
-        setDoc(doc(db, 'tutors', cleanTutorId), approvalPayload, { merge: true }).catch(() => null),
-      ];
-
-      if (cleanEmailDocId && cleanEmailDocId !== cleanTutorId) {
-        firestorePromises.push(
-          setDoc(doc(db, 'users', cleanEmailDocId), approvalPayload, { merge: true }).catch(() => null),
-          setDoc(doc(db, 'tutors', cleanEmailDocId), approvalPayload, { merge: true }).catch(() => null)
-        );
+      const firestorePromises: Promise<any>[] = [];
+      for (const dbInstance of dbs) {
+        firestorePromises.push(setDoc(doc(dbInstance, 'users', cleanTutorId), approvalPayload, { merge: true }).catch(() => null));
+        firestorePromises.push(setDoc(doc(dbInstance, 'tutors', cleanTutorId), approvalPayload, { merge: true }).catch(() => null));
+        if (cleanEmailDocId && cleanEmailDocId !== cleanTutorId) {
+          firestorePromises.push(setDoc(doc(dbInstance, 'users', cleanEmailDocId), approvalPayload, { merge: true }).catch(() => null));
+          firestorePromises.push(setDoc(doc(dbInstance, 'tutors', cleanEmailDocId), approvalPayload, { merge: true }).catch(() => null));
+        }
       }
 
       await Promise.all(firestorePromises);
-      console.log('[NativeFriend Approval] Successfully persisted approved tutor to Firestore:', cleanTutorId, cleanEmail);
+      console.log('[NativeFriend Approval] Successfully persisted approved tutor across databases:', cleanTutorId, cleanEmail);
     } catch (fsErr) {
       console.warn('[NativeFriend Approval] Firestore direct setDoc error:', fsErr);
     }
@@ -6172,7 +5991,7 @@ export default function App() {
       <AdminApprovalsModal
         isOpen={isAdminApprovalsOpen}
         onClose={() => setIsAdminApprovalsOpen(false)}
-        tutors={tutors}
+        tutors={allTutors}
         onApproveTutor={handleApproveTutor}
         onRejectTutor={handleRejectTutor}
         onDeleteTutor={handleDeleteTutor}
