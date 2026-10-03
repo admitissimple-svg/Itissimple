@@ -214,7 +214,26 @@ const applyProfileTimesToRoutines = (
 
 export default function App() {
   // 0. View mode: 'landing' | 'dashboard' | 'find-tutors'
-  const [viewMode, setViewMode] = useState<'landing' | 'dashboard' | 'find-tutors'>('landing');
+  const [viewMode, setViewMode] = useState<'landing' | 'dashboard' | 'find-tutors'>(() => {
+    if (typeof window !== 'undefined') {
+      const p = window.location.pathname;
+      const h = window.location.hash;
+      if (
+        p === '/teacher' ||
+        p === '/admin' ||
+        p === '/dashboard' ||
+        h === '#teacher' ||
+        h === '#admin' ||
+        h === '#dashboard'
+      ) {
+        return 'dashboard';
+      }
+      if (p === '/find-tutors' || h === '#find-tutors') {
+        return 'find-tutors';
+      }
+    }
+    return 'landing';
+  });
 
   // 1. Language & i18n
   const [currentLanguage, setCurrentLanguage] = useState<Language>('en');
@@ -223,6 +242,7 @@ export default function App() {
   // 2. Authentication & Accounts - 100% managed in Cloud Firestore and Firebase Auth (ZERO localStorage dependency)
   const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(null);
   const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>([]);
+  const [tutors, setTutors] = useState<NativeFriendTutor[]>(INITIAL_NATIVE_FRIENDS);
 
   // Startup hook: Permanently purge any legacy browser localStorage keys to enforce strict Firestore exclusivity
   useEffect(() => {
@@ -258,7 +278,9 @@ export default function App() {
 
         // Check if currentAccount matches the active Firebase Auth user and has the verified UID
         if (!currentAccount || currentAccount.email.toLowerCase() !== cleanEmail || currentAccount.uid !== fbUser.uid) {
-          let resolvedRole: UserRole = isMasterAdmin ? 'admin' : 'student';
+          // If currentAccount already knows this user is a teacher, keep it as high priority default
+          const existingRole = currentAccount?.email?.toLowerCase() === cleanEmail ? currentAccount.role : undefined;
+          let resolvedRole: UserRole = isMasterAdmin ? 'admin' : (existingRole === 'teacher' ? 'teacher' : 'student');
           let firestoreDoc: any = null;
           try {
             const db = getDb();
@@ -271,50 +293,83 @@ export default function App() {
               const r = (firestoreDoc.role || firestoreDoc.userRole || '').toLowerCase();
               if (r === 'admin' || isMasterAdmin) resolvedRole = isMasterAdmin ? 'admin' : 'student';
               else if (r === 'teacher' || r === 'native_friend' || r === 'tutor') resolvedRole = 'teacher';
-              else resolvedRole = 'student';
-            } else if (cleanEmail) {
-              const cleanDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+            }
+
+            const cleanDocId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '-');
+            // If role is still not teacher or admin, check email doc ID and tutor collections in Firestore
+            if (resolvedRole !== 'teacher' && !isMasterAdmin && cleanEmail) {
               const snapEmail = await Promise.race([
                 getDoc(doc(db, 'users', cleanDocId)),
                 new Promise<null>((r) => setTimeout(() => r(null), 2500)),
               ]);
               if (snapEmail && snapEmail.exists()) {
-                firestoreDoc = snapEmail.data();
-                const r = (firestoreDoc.role || firestoreDoc.userRole || '').toLowerCase();
-                if (r === 'admin' || isMasterAdmin) resolvedRole = isMasterAdmin ? 'admin' : 'student';
-                else if (r === 'teacher' || r === 'native_friend' || r === 'tutor') resolvedRole = 'teacher';
-                else resolvedRole = 'student';
-              } else {
-                // Check in tutors collection
+                const emailData = snapEmail.data();
+                const r = (emailData.role || emailData.userRole || '').toLowerCase();
+                if (r === 'teacher' || r === 'native_friend' || r === 'tutor') {
+                  firestoreDoc = { ...(firestoreDoc || {}), ...emailData };
+                  resolvedRole = 'teacher';
+                }
+              }
+
+              if (resolvedRole !== 'teacher') {
                 const cleanTutorId = `tutor-${cleanDocId}`;
                 const [tutorSnap, userTutorSnap] = await Promise.all([
                   getDoc(doc(db, 'tutors', cleanTutorId)).catch(() => null),
                   getDoc(doc(db, 'users', cleanTutorId)).catch(() => null),
                 ]);
                 if (tutorSnap && tutorSnap.exists()) {
-                  firestoreDoc = { ...tutorSnap.data(), role: 'teacher' };
+                  firestoreDoc = { ...(firestoreDoc || {}), ...tutorSnap.data(), role: 'teacher' };
                   resolvedRole = 'teacher';
                 } else if (userTutorSnap && userTutorSnap.exists()) {
-                  firestoreDoc = { ...userTutorSnap.data(), role: 'teacher' };
+                  firestoreDoc = { ...(firestoreDoc || {}), ...userTutorSnap.data(), role: 'teacher' };
                   resolvedRole = 'teacher';
                 }
+              }
+
+              // Also check memory tutors list
+              if (resolvedRole !== 'teacher') {
+                const inMemoryTutor = tutors.find((t) => (t.email || '').toLowerCase().trim() === cleanEmail);
+                if (inMemoryTutor) {
+                  firestoreDoc = { ...(firestoreDoc || {}), ...inMemoryTutor, role: 'teacher' };
+                  resolvedRole = 'teacher';
+                }
+              }
+
+              // Also check backend user profile to confirm role
+              if (resolvedRole !== 'teacher') {
+                try {
+                  const profRes = await fetch(`/api/user-profile?email=${encodeURIComponent(cleanEmail)}&uid=${encodeURIComponent(fbUser.uid)}`);
+                  if (profRes.ok) {
+                    const profData = await profRes.json();
+                    if (profData?.isTeacher || profData?.role === 'teacher') {
+                      firestoreDoc = { ...(firestoreDoc || {}), ...(profData.tutor || {}), role: 'teacher' };
+                      resolvedRole = 'teacher';
+                    }
+                  }
+                } catch {}
               }
             }
           } catch (e) {
             console.warn('Notice hydrating Firebase Auth user in App:', e);
           }
 
-          if (resolvedRole === 'teacher' && typeof window !== 'undefined') {
-            try {
-              window.history.replaceState({ page: 'teacher' }, '', '/teacher');
-            } catch {}
-          } else if (resolvedRole === 'admin' && typeof window !== 'undefined') {
-            try {
-              window.history.replaceState({ page: 'admin' }, '', '/admin');
-            } catch {}
-          } else if (resolvedRole === 'student' && typeof window !== 'undefined') {
-            const p = window.location.pathname;
-            const h = window.location.hash;
+          if (resolvedRole === 'teacher') {
+            setViewMode('dashboard');
+            if (typeof window !== 'undefined') {
+              try {
+                window.history.replaceState({ page: 'teacher' }, '', '/teacher');
+              } catch {}
+            }
+          } else if (resolvedRole === 'admin') {
+            setViewMode('dashboard');
+            if (typeof window !== 'undefined') {
+              try {
+                window.history.replaceState({ page: 'admin' }, '', '/admin');
+              } catch {}
+            }
+          } else if (resolvedRole === 'student') {
+            const p = typeof window !== 'undefined' ? window.location.pathname : '';
+            const h = typeof window !== 'undefined' ? window.location.hash : '';
             if (p === '/admin' || p === '/teacher' || h === '#admin' || h === '#teacher') {
               try {
                 window.history.replaceState({ page: 'dashboard' }, '', '/dashboard');
@@ -351,23 +406,15 @@ export default function App() {
             }),
           }).catch(() => {});
         }
-      } else {
-        // If Firebase Auth is signed out, clear currentAccount if it was tied to Firebase Auth
-        if (currentAccount && auth.currentUser === null) {
-          if (currentAccount.uid && !currentAccount.uid.startsWith('usr-') && currentAccount.uid !== 'user-default') {
-            setCurrentAccount(null);
-          }
-        }
       }
     });
 
     return () => unsubscribe();
-  }, [currentAccount]);
+  }, [currentAccount, tutors]);
 
   const isTeacher = currentAccount ? (currentAccount.role === 'teacher' || currentAccount.role === 'admin') : false;
 
   // 2.1 Tutors & Admin Content State
-  const [tutors, setTutors] = useState<NativeFriendTutor[]>(INITIAL_NATIVE_FRIENDS);
   const [landingContent, setLandingContent] = useState<AdminLandingContent | null>(null);
 
   // 3. Student Profile & Level - strictly isolated per account
@@ -746,6 +793,7 @@ export default function App() {
         // 1. Guard Administrator route (/admin or #admin)
         if (path === '/admin' || hash === '#admin') {
           if (currentAccount?.role === 'admin') {
+            setViewMode('dashboard');
             setIsAdminApprovalsOpen(true);
           } else if (currentAccount?.role === 'student') {
             // STRICT RBAC: Block registered student from accessing Admin space
@@ -770,6 +818,7 @@ export default function App() {
           } else if (currentAccount?.role === 'teacher') {
             setIsAdminApprovalsOpen(false);
             setIsAdminLandingEditorOpen(false);
+            setViewMode('dashboard');
             try {
               window.history.replaceState({ page: 'teacher' }, '', '/teacher');
             } catch {}
@@ -782,7 +831,9 @@ export default function App() {
 
         // 2. Guard Native Friend / Teacher route (/teacher or #teacher)
         if (path === '/teacher' || hash === '#teacher') {
-          if (currentAccount?.role === 'student') {
+          if (currentAccount?.role === 'teacher' || currentAccount?.role === 'admin') {
+            setViewMode('dashboard');
+          } else if (currentAccount?.role === 'student') {
             // STRICT RBAC: Block registered student from accessing Native Friend space
             setIsEditTutorProfileOpen(false);
             try {
@@ -805,6 +856,13 @@ export default function App() {
             setAuthModalMode('login');
             setAuthModalRole('teacher');
             setIsAuthModalOpen(true);
+          }
+        }
+
+        // 3. Guard Dashboard route (/dashboard or #dashboard)
+        if (path === '/dashboard' || hash === '#dashboard') {
+          if (currentAccount) {
+            setViewMode('dashboard');
           }
         }
       }

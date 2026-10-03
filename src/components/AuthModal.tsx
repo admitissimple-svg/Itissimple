@@ -583,17 +583,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           const authResult = await firebaseSignInWithEmail(cleanEmail, password);
           firebaseUid = authResult?.user?.uid;
         } catch (authErr: any) {
-          console.warn('Firebase Auth sign-in notice in AuthModal:', authErr?.code || authErr?.message);
-          const code = authErr?.code || '';
-          if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/user-not-found') {
-            const msg = isEn ? 'Invalid email or password.' : 'E-mail ou senha incorretos.';
-            setErrorMsg(msg);
-            if (onShowToast) {
-              onShowToast(isEn ? 'Invalid credentials' : 'Credenciais inválidas', msg, 'error');
-            }
-            setIsLoading(false);
-            return;
-          }
+          console.warn('Firebase Auth sign-in notice in AuthModal (will fallback to backend DB check):', authErr?.code || authErr?.message);
         }
 
         // 2. Query user document in 'users' collection in Firestore using the authenticated UID
@@ -693,6 +683,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         if (res.ok) {
           const data = await res.json();
+          const serverRole = (data.account?.role || (data.isTeacher ? 'teacher' : '') || '').toLowerCase();
+          if (serverRole === 'teacher' || serverRole === 'admin') {
+            verifiedRole = serverRole as UserRole;
+            setRole(verifiedRole);
+          }
+
           const account: GoogleAccount = data.account || {
             uid: firebaseUid || firestoreUserDoc?.uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
             email: cleanEmail,
