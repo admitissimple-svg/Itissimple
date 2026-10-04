@@ -363,6 +363,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     resetRepeatFlags,
     resetRoutinesForNewWeek,
     selectNextUnwatchedVideo: pickNextUnwatched,
+    isLoading: isRoutineLoading,
   } = useRoutine(effectiveStudentUid, selectedDay);
 
   // Sync saved topic and video from Firestore so refreshing the page preserves the selection
@@ -387,7 +388,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     }
   }, [persistedRoutinesByDay]);
 
-  // Reset selected topics and day-specific state when student identity changes or weekly cycle updates
+  // Reset day-specific ephemeral input state only when student identity actually switches
   useEffect(() => {
     setSelectedTopicByDay({});
     setCustomSuggestionActivities({});
@@ -396,10 +397,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
     setSentenceInput('');
     setSentenceSavedSuccess(false);
     setSentenceEvaluation(null);
-    if (typeof resetRoutinesForNewWeek === 'function') {
-      resetRoutinesForNewWeek().catch(() => {});
-    }
-  }, [effectiveStudentUid, weeklyCycle, resetRoutinesForNewWeek]);
+  }, [effectiveStudentUid]);
 
   // Quick jump helpers
   const activeStudyDays: DayOfWeek[] = useMemo(() => {
@@ -753,7 +751,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
   const validVidId = hasAssignedVideo
     ? (extractYouTubeVideoId(rawVideoUrl) || assignedVideo?.videoId || '')
     : '';
-  const defaultVideoTitle = hasAssignedVideo
+  const defaultVideoTitle = isRoutineLoading
+    ? (isEn ? 'Loading video...' : 'Carregando vídeo...')
+    : hasAssignedVideo
     ? (assignedVideo?.title || 'Daily Video Practice')
     : (isEn ? 'Choose Video' : 'Escolher Vídeo');
   const embedUrl = validVidId ? getYouTubeEmbedUrl(validVidId) : '';
@@ -1711,7 +1711,14 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
           {/* Activities list/timeline */}
           <div className="space-y-2 overflow-y-auto max-h-[190px] pr-1">
-            {sortedActivities.length === 0 ? (
+            {isRoutineLoading && sortedActivities.length === 0 ? (
+              <div className="py-6 px-4 bg-[#9AB4FF]/5 rounded-2xl border border-dashed border-[#607EC9]/40 text-center flex flex-col items-center justify-center space-y-2">
+                <Loader2 className="w-5 h-5 text-[#1C4C96] animate-spin" />
+                <span className="text-xs font-semibold text-[#000035]">
+                  {isEn ? 'Loading activities...' : 'Carregando atividades...'}
+                </span>
+              </div>
+            ) : sortedActivities.length === 0 ? (
               <div className="py-5 px-4 bg-[#9AB4FF]/5 rounded-2xl border border-dashed border-[#607EC9]/40 text-center space-y-2">
                 <div className="flex items-center justify-center gap-2 text-xs font-bold text-[#000035]">
                   <Clock className="w-4 h-4 text-[#1C4C96]" />
@@ -1803,7 +1810,15 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
 
                 if (isRepeatVideo || persistedDay?.isRepeatVideo) {
                   currentPlaylistId = 'repeat_previous_video';
-                } else if (dayTopicSelection === 'custom_suggestion' || isCustomSuggestion || persistedDay?.playlistId === 'custom_suggestion') {
+                } else if (
+                  dayTopicSelection === 'custom_suggestion' ||
+                  isCustomSuggestion ||
+                  persistedDay?.playlistId === 'custom_suggestion' ||
+                  persistedDay?.title === 'Your Suggestion' ||
+                  persistedDay?.title === 'Sua Sugestão' ||
+                  persistedDay?.playlistTitle === 'Your Suggestion' ||
+                  persistedDay?.playlistTitle === 'Sua Sugestão'
+                ) {
                   currentPlaylistId = 'custom_suggestion';
                 } else if (dayTopicSelection) {
                   currentPlaylistId = dayTopicSelection;
@@ -1813,6 +1828,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                   currentPlaylistId = (assignedVid as any).playlistId;
                 } else if (hasPersistedVideoId && (assignedVid as any)?.playlistTitle) {
                   const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === (assignedVid as any).playlistTitle?.toLowerCase());
+                  if (matched) currentPlaylistId = matched.id;
+                } else if (persistedDay?.playlistTitle) {
+                  const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === persistedDay.playlistTitle?.toLowerCase());
                   if (matched) currentPlaylistId = matched.id;
                 } else if (userChosenTopicForDay && act.activityName && act.activityName !== 'Video of the Day' && act.activityName !== 'Vídeo do Dia') {
                   const matched = sortedPlaylists.find((pl) => pl.title?.toLowerCase() === act.activityName?.toLowerCase());
@@ -1946,7 +1964,7 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                             <select
                               value={isRepeatVideo ? '' : safePlaylistValue}
                               onChange={(e) => handleSelectPlaylistForActivity(act.id, e.target.value)}
-                              disabled={isRepeatVideo || loadingPlaylistAssignId === act.id || isLoadingPlaylists}
+                              disabled={isRepeatVideo || loadingPlaylistAssignId === act.id || isLoadingPlaylists || isRoutineLoading}
                               aria-label={isEn ? 'Playlist Topic / Routine name' : 'Tópico da Playlist / Nome da Rotina'}
                               className={`text-xs font-bold py-1 pl-2.5 pr-7 rounded-xl border appearance-none transition focus:outline-hidden max-w-[180px] sm:max-w-[240px] truncate shadow-2xs ${
                                 isRepeatVideo
@@ -1968,7 +1986,9 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                               }
                             >
                               <option value="" className="text-slate-600 bg-white font-medium">
-                                {isLoadingPlaylists
+                                {isRoutineLoading
+                                  ? (isEn ? '⏳ Loading routine...' : '⏳ Carregando rotina...')
+                                  : isLoadingPlaylists
                                   ? (isEn ? '⏳ Loading videos...' : '⏳ Carregando vídeos...')
                                   : loadingPlaylistAssignId === act.id
                                   ? (isEn ? '⏳ Assigning Video...' : '⏳ Injetando Vídeo...')
@@ -2306,6 +2326,13 @@ export const StudentRoutineGuideSection: React.FC<StudentRoutineGuideSectionProp
                 allowFullScreen
                 onLoad={handleVideoIframeLoad}
               />
+            ) : isRoutineLoading ? (
+              <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-3 p-6 text-center bg-gradient-to-b from-[#062863]/60 to-[#000035]">
+                <Loader2 className="w-8 h-8 text-[#9AB4FF] animate-spin" />
+                <p className="text-xs font-bold text-slate-200">
+                  {isEn ? 'Loading your routine video...' : 'Carregando o vídeo da sua rotina...'}
+                </p>
+              </div>
             ) : isCustomWithoutVideo ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-white space-y-2 p-6 text-center">
                 <div className="w-12 h-12 rounded-2xl bg-red-500/20 text-red-400 flex items-center justify-center mb-1">

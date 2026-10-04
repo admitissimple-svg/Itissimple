@@ -748,14 +748,17 @@ export function selectNextUnwatchedVideo<T extends { videoId?: string; id?: stri
  * Manages daily video persistence, global watched history, and new week resets.
  */
 export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
-  const [routinesByDay, setRoutinesByDay] = useState<Partial<Record<DayOfWeek, SavedRoutineVideo>>>({});
-  const [watchedHistory, setWatchedHistory] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [lastSavedDay, setLastSavedDay] = useState<DayOfWeek | null>(null);
-
   const effectiveUid = studentUid
     ? normalizeStudentIdForPath(studentUid)
     : (auth?.currentUser?.uid || '');
+
+  const [routinesByDay, setRoutinesByDay] = useState<Partial<Record<DayOfWeek, SavedRoutineVideo>>>({});
+  const [watchedHistory, setWatchedHistory] = useState<string[]>([]);
+  const [loadedUid, setLoadedUid] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(() => Boolean(effectiveUid));
+  const [lastSavedDay, setLastSavedDay] = useState<DayOfWeek | null>(null);
+
+  const isRoutineLoading = Boolean(effectiveUid && loadedUid !== effectiveUid) || isLoading;
 
   // Load routines and watched history on mount / studentUid change + real-time onSnapshot sync
   useEffect(() => {
@@ -765,6 +768,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
 
     if (!effectiveUid) {
       setIsLoading(false);
+      setLoadedUid(null);
       return;
     }
 
@@ -779,6 +783,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
         if (!isMounted) return;
         setRoutinesByDay(routines);
         setWatchedHistory(history);
+        setLoadedUid(effectiveUid);
       })
       .catch((err) => {
         console.error('[Firestore Error] Error loading routine data:', err);
@@ -983,7 +988,7 @@ export function useRoutine(studentUid?: string, selectedDay?: DayOfWeek) {
     routinesByDay,
     currentDayRoutine,
     watchedHistory,
-    isLoading,
+    isLoading: isRoutineLoading,
     lastSavedDay,
     saveVideoForDay,
     markVideoAsWatched,

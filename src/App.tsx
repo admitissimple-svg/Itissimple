@@ -1124,58 +1124,55 @@ export default function App() {
           }
 
           // Hydrate daily routines directly from Firestore first (source of truth per student UID)
-          fetchAllRoutineVideosFromFirestore(effectiveStudentUid)
-            .then((cloudVideos) => {
-              if (cloudVideos && Object.keys(cloudVideos).length > 0) {
-                setRoutinesByDay((prev) => {
-                  const merged = { ...prev };
-                  (Object.keys(cloudVideos) as DayOfWeek[]).forEach((day) => {
-                    const v = cloudVideos[day];
-                    const cleanVidId = v && v.videoId ? v.videoId.trim() : '';
-                    if (cleanVidId) {
-                      const dayList = merged[day] || defaultRoutinesByDay[day] || [];
-                      merged[day] = dayList.map((item, idx) => {
-                        if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
-                          return {
-                            ...item,
-                            activityName: v.playlistTitle || v.title || v.videoTitle || item.activityName,
-                            playlistId: v.playlistId || '',
-                            playlistTitle: v.playlistTitle || '',
-                            teacherVideos: [{
-                              id: cleanVidId,
-                              videoId: cleanVidId,
-                              title: v.title || v.videoTitle || 'Daily Video Practice',
-                              url: v.url || `https://www.youtube.com/watch?v=${cleanVidId}`,
-                              playlistId: v.playlistId || '',
-                              isRepeatVideo: Boolean(v.isRepeatVideo),
-                            }],
-                            completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
-                          };
-                        }
-                        return item;
-                      });
-                    } else if (v && v.videoId === '') {
-                      const dayList = merged[day] || defaultRoutinesByDay[day] || [];
-                      merged[day] = dayList.map((item, idx) => {
-                        if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
-                          return {
-                            ...item,
-                            activityName: 'Video of the Day',
-                            playlistId: '',
-                            playlistTitle: '',
-                            teacherVideos: [],
-                            completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
-                          };
-                        }
-                        return item;
-                      });
+          try {
+            const cloudVideos = await fetchAllRoutineVideosFromFirestore(effectiveStudentUid);
+            if (cloudVideos && Object.keys(cloudVideos).length > 0) {
+              (Object.keys(cloudVideos) as DayOfWeek[]).forEach((day) => {
+                const v = cloudVideos[day];
+                const cleanVidId = v && v.videoId ? v.videoId.trim() : '';
+                if (cleanVidId) {
+                  const dayList = baseRoutines[day] || defaultRoutinesByDay[day] || [];
+                  baseRoutines[day] = dayList.map((item, idx) => {
+                    if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
+                      return {
+                        ...item,
+                        activityName: v.playlistTitle || v.title || v.videoTitle || item.activityName,
+                        playlistId: v.playlistId || '',
+                        playlistTitle: v.playlistTitle || '',
+                        teacherVideos: [{
+                          id: cleanVidId,
+                          videoId: cleanVidId,
+                          title: v.title || v.videoTitle || 'Daily Video Practice',
+                          url: v.url || `https://www.youtube.com/watch?v=${cleanVidId}`,
+                          playlistId: v.playlistId || '',
+                          isRepeatVideo: Boolean(v.isRepeatVideo),
+                        }],
+                        completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
+                      };
                     }
+                    return item;
                   });
-                  return merged;
-                });
-              }
-            })
-            .catch(() => {});
+                } else if (v && v.videoId === '') {
+                  const dayList = baseRoutines[day] || defaultRoutinesByDay[day] || [];
+                  baseRoutines[day] = dayList.map((item, idx) => {
+                    if (idx === 0 || item.activityName?.toLowerCase().includes('video') || item.activityName?.toLowerCase().includes('vídeo')) {
+                      return {
+                        ...item,
+                        activityName: 'Video of the Day',
+                        playlistId: '',
+                        playlistTitle: '',
+                        teacherVideos: [],
+                        completedToday: v.completedToday !== undefined ? v.completedToday : item.completedToday,
+                      };
+                    }
+                    return item;
+                  });
+                }
+              });
+            }
+          } catch (e) {
+            console.warn('Notice hydrating routines from Firestore on login:', e);
+          }
 
           // Apply this specific student's registered routine times
           const vidTime = loadedProfile?.routineVideoTime;
