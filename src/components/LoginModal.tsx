@@ -14,7 +14,7 @@ import {
   Loader2,
   ShieldCheck,
 } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import {
   GoogleAccount,
   Language,
@@ -360,6 +360,22 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           routineAudioTime: firestoreUserDoc?.routineAudioTime || data.profile?.routineAudioTime || '14:00',
           dailyPhraseTime: firestoreUserDoc?.dailyPhraseTime || data.profile?.dailyPhraseTime || '20:00',
         };
+
+        const targetUid = account.uid || firebaseUid || '';
+        if (targetUid && db) {
+          setDoc(
+            doc(db, 'users', targetUid),
+            {
+              ...resolvedProfile,
+              id: targetUid,
+              uid: targetUid,
+              email: cleanEmail,
+              role: 'student',
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ).catch(() => null);
+        }
 
         if (typeof window !== 'undefined') {
           try {

@@ -31,7 +31,7 @@ import { BrandLogo } from './BrandLogo';
 import { GoogleSignInModal } from './GoogleSignInModal';
 import { ImageUploadInput } from './ImageUploadInput';
 import { firebaseSignInWithEmail, firebaseSignUpWithEmail } from '../utils/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { getDb } from '../firebase';
 
 const TIME_OPTIONS = [
@@ -550,6 +550,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               routineAudioTime,
               dailyPhraseTime,
             };
+
+            const targetStudentUid = firebaseUid || data.account?.uid || '';
+            if (targetStudentUid) {
+              const db = getDb();
+              if (db) {
+                setDoc(
+                  doc(db, 'users', targetStudentUid),
+                  {
+                    ...builtProfile,
+                    id: targetStudentUid,
+                    uid: targetStudentUid,
+                    email: cleanEmail,
+                    role: 'student',
+                    updatedAt: new Date().toISOString(),
+                  },
+                  { merge: true }
+                ).catch(() => null);
+              }
+            }
+
             setTimeout(() => {
               onLoginSuccess(data.account, builtProfile);
               onClose();
@@ -747,6 +767,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               weeklyStudyDaysTarget: firestoreUserDoc?.weeklyStudyDaysTarget ?? data.profile?.weeklyStudyDaysTarget ?? 7,
               weeklyStudyDays: firestoreUserDoc?.weeklyStudyDays || data.profile?.weeklyStudyDays,
             };
+
+            const targetStudentUid = account.uid || firebaseUid || '';
+            if (targetStudentUid) {
+              const db = getDb();
+              if (db) {
+                setDoc(
+                  doc(db, 'users', targetStudentUid),
+                  {
+                    ...resolvedProfile,
+                    id: targetStudentUid,
+                    uid: targetStudentUid,
+                    email: cleanEmail,
+                    role: 'student',
+                    updatedAt: new Date().toISOString(),
+                  },
+                  { merge: true }
+                ).catch(() => null);
+              }
+            }
 
             if (typeof window !== 'undefined') {
               try {

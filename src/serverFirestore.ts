@@ -565,17 +565,20 @@ export async function saveUserToFirestore(user: any): Promise<boolean> {
   if (!db || !user?.email) return false;
   try {
     const sanitized = JSON.parse(JSON.stringify(user));
-    const cleanDocId = user.email.toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '-');
-    const docId = user.uid || cleanDocId;
-
-    const savePromises = [
-      setDoc(doc(db, 'users', docId), sanitized, { merge: true }),
-    ];
-    if (docId !== cleanDocId) {
-      savePromises.push(setDoc(doc(db, 'users', cleanDocId), sanitized, { merge: true }));
+    const cleanEmail = user.email.toLowerCase().trim();
+    // Guarantee that documents in 'users' collection strictly use the Auth UID as document ID, not email or custom strings
+    const docId = user.uid || (user.id && !user.id.includes('@') && !user.id.startsWith('usr-') ? user.id : '');
+    if (!docId) {
+      console.warn('saveUserToFirestore skipped: user has no valid Auth UID');
+      return false;
     }
 
-    const result = await withTimeout(Promise.all(savePromises).then(() => true), 10000);
+    sanitized.email = cleanEmail;
+    sanitized.uid = docId;
+    sanitized.id = docId;
+
+    const savePromise = setDoc(doc(db, 'users', docId), sanitized, { merge: true });
+    const result = await withTimeout(savePromise.then(() => true), 10000);
     return !!result;
   } catch (err) {
     console.warn('Firestore saveUser error:', err);

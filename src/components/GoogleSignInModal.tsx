@@ -9,7 +9,7 @@ import {
   Check,
   Info,
 } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { getDb } from '../firebase';
 import { GoogleAccount, UserRole, Language } from '../types';
 import { googleSignIn } from '../utils/auth';
@@ -163,6 +163,27 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
         }
       } else {
         account.role = verifiedRole;
+      }
+
+      // Guarantee student profile is saved under doc(db, 'users', user.uid) with UID as document key
+      if (verifiedRole === 'student' && user.uid) {
+        const db = getDb();
+        if (db) {
+          const studentProfilePayload = {
+            id: user.uid,
+            uid: user.uid,
+            email: cleanEmail,
+            name: account.name || user.displayName || cleanEmail.split('@')[0],
+            role: 'student',
+            picture: account.picture || user.photoURL || '',
+            avatar: account.picture || user.photoURL || '',
+            level: firestoreUserDoc?.level || data?.profile?.level || 'iniciante',
+            ...(firestoreUserDoc || {}),
+            ...(data?.profile || {}),
+            updatedAt: new Date().toISOString(),
+          };
+          setDoc(doc(db, 'users', user.uid), studentProfilePayload, { merge: true }).catch(() => null);
+        }
       }
 
       // 3. Redirection

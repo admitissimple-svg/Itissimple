@@ -41,21 +41,11 @@ export { migrateLegacyLocalStorageToFirestore };
 
 export function normalizeUid(rawId?: string | null, email?: string | null): string {
   const cleanRawId = (rawId || '').trim();
-  const cleanEmail = (email || '').toLowerCase().trim();
   const rawIsEmail = cleanRawId.includes('@');
-  const effectiveEmail = cleanEmail || (rawIsEmail ? cleanRawId.toLowerCase() : '');
 
-  // 1. If active authenticated user matches the provided email or rawId, prioritize auth.currentUser.uid
+  // 1. Single source of truth: ALWAYS prioritize Firebase Auth UID (auth.currentUser.uid)
   if (auth?.currentUser?.uid) {
-    const authUid = auth.currentUser.uid;
-    const authEmail = (auth.currentUser.email || '').toLowerCase().trim();
-    if (
-      (effectiveEmail && authEmail && effectiveEmail === authEmail) ||
-      (cleanRawId && cleanRawId.toLowerCase() === authUid.toLowerCase()) ||
-      (!cleanRawId && !cleanEmail)
-    ) {
-      return authUid;
-    }
+    return auth.currentUser.uid;
   }
 
   // 2. If a valid, non-placeholder, non-email UID was provided, use it
@@ -71,17 +61,8 @@ export function normalizeUid(rawId?: string | null, email?: string | null): stri
     return cleanRawId;
   }
 
-  // 3. Fallback to normalized email token
-  if (effectiveEmail) {
-    return effectiveEmail.replace(/[^a-zA-Z0-9_-]/g, '_');
-  }
-
-  // 4. Default to auth.currentUser.uid if available
-  if (auth?.currentUser?.uid) {
-    return auth.currentUser.uid;
-  }
-
-  return cleanRawId;
+  // Never fall back to email as document ID in Firestore
+  return cleanRawId && !rawIsEmail ? cleanRawId : '';
 }
 
 export function getUserDocIds(rawId?: string | null, email?: string | null): string[] {
@@ -1418,7 +1399,7 @@ export async function saveStudentProfileToFirestore(
   const db = getDb();
   if (!db) return false;
   const cleanEmail = (profile.email || studentEmail || '').toLowerCase().trim();
-  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  const cleanUid = auth?.currentUser?.uid || normalizeUid(studentUid, cleanEmail);
   if (!cleanUid) return false;
 
   const cleanTeacherEmail = (profile.teacherEmail || '').toLowerCase().trim();
@@ -1436,8 +1417,8 @@ export async function saveStudentProfileToFirestore(
     updatedAt: new Date().toISOString(),
   };
 
-  if (cleanEmail) {
-    payload.email = cleanEmail;
+  if (cleanEmail || sanitized.email) {
+    payload.email = cleanEmail || sanitized.email;
   }
   if (profile.teacherEmail !== undefined) {
     payload.teacherEmail = profile.teacherEmail;
@@ -1490,7 +1471,7 @@ export async function fetchStudentProfileFromFirestore(
   const db = getDb();
   if (!db) return null;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
-  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  const cleanUid = auth?.currentUser?.uid || normalizeUid(studentUid, cleanEmail);
   if (!cleanUid) return null;
 
   try {
@@ -1506,6 +1487,7 @@ export async function fetchStudentProfileFromFirestore(
           ...data,
           id: cleanUid,
           uid: cleanUid,
+          email: cleanEmail || data.email,
         };
       }
     }

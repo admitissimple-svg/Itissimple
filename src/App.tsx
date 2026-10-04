@@ -323,6 +323,12 @@ export default function App() {
                   firestoreDoc = { ...(firestoreDoc || {}), ...emailData };
                   resolvedRole = 'teacher';
                 }
+                // Migrate to Auth UID document
+                setDoc(
+                  doc(db, 'users', fbUser.uid),
+                  { ...emailData, id: fbUser.uid, uid: fbUser.uid, email: cleanEmail, updatedAt: new Date().toISOString() },
+                  { merge: true }
+                ).catch(() => null);
               }
 
               if (resolvedRole !== 'teacher') {
@@ -398,6 +404,30 @@ export default function App() {
             role: resolvedRole,
             picture: firestoreDoc?.picture || firestoreDoc?.avatar || fbUser.photoURL || '',
           };
+
+          // Guarantee that student profile in Firestore is created/saved using doc(db, 'users', fbUser.uid)
+          if (resolvedRole === 'student') {
+            const db = getDb();
+            if (db && fbUser.uid) {
+              const studentPayload = {
+                id: fbUser.uid,
+                uid: fbUser.uid,
+                email: cleanEmail,
+                name: account.name,
+                role: 'student',
+                picture: account.picture,
+                avatar: account.picture,
+                level: firestoreDoc?.level || firestoreDoc?.englishLevel || EnglishLevel.BEGINNER,
+                learningGoal: firestoreDoc?.learningGoal || '',
+                routineVideoTime: firestoreDoc?.routineVideoTime || '09:00',
+                routineAudioTime: firestoreDoc?.routineAudioTime || '14:00',
+                dailyPhraseTime: firestoreDoc?.dailyPhraseTime || '20:00',
+                ...(firestoreDoc || {}),
+                updatedAt: new Date().toISOString(),
+              };
+              setDoc(doc(db, 'users', fbUser.uid), studentPayload, { merge: true }).catch(() => null);
+            }
+          }
 
           setCurrentAccount(account);
           setAvailableAccounts((prev) => {
@@ -1743,9 +1773,9 @@ export default function App() {
       const effectiveName = isRegisteringStudent
         ? (data.studentAccount!.name || data.studentAccount!.email.split('@')[0]).trim()
         : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile.name || currentAccount?.name || 'Aluno'));
-      const studentUid = (currentAccount?.role === 'student' && currentAccount.email?.toLowerCase() === cleanEmail && currentAccount.uid)
-        ? currentAccount.uid
-        : (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id ? userProfile.id : `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`);
+      const studentUid = auth.currentUser?.uid
+        || (currentAccount?.role === 'student' && currentAccount.email?.toLowerCase() === cleanEmail && currentAccount.uid ? currentAccount.uid : '')
+        || (userProfile.email?.toLowerCase() === cleanEmail && userProfile.id && !userProfile.id.includes('@') && !userProfile.id.startsWith('usr-') ? userProfile.id : (auth.currentUser?.uid || ''));
 
       const selectedLevel = (data.englishLevel || data.userLevel || data.level || EnglishLevel.BEGINNER) as EnglishLevel;
 
@@ -3132,11 +3162,11 @@ export default function App() {
       ? lessonData.studentName.trim()
       : (scheduleStudentInfo?.name ? scheduleStudentInfo.name.trim() : (currentAccount?.role === 'student' && currentAccount.name ? currentAccount.name.trim() : (userProfile?.name || 'Aluno')));
 
-    const finalStudentUid = lessonData.studentUid
+    const finalStudentUid = auth.currentUser?.uid
+      || lessonData.studentUid
       || scheduleStudentInfo?.uid
       || (currentAccount?.role === 'student' ? currentAccount.uid : '')
-      || (userProfile?.email?.toLowerCase() === finalStudentEmail && userProfile.id ? userProfile.id : '')
-      || (finalStudentEmail ? `usr-${finalStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+      || (userProfile?.email?.toLowerCase() === finalStudentEmail && userProfile.id && !userProfile.id.includes('@') && !userProfile.id.startsWith('usr-') ? userProfile.id : (auth.currentUser?.uid || ''));
 
     const finalTeacherUid = lessonData.teacherUid
       || (lessonData.teacherEmail ? `usr-${lessonData.teacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
@@ -4419,7 +4449,7 @@ export default function App() {
       );
     }
 
-    const studentUid = currentAccount?.uid || auth.currentUser?.uid || userProfile?.uid || userProfile?.id || '';
+    const studentUid = auth.currentUser?.uid || currentAccount?.uid || userProfile?.uid || userProfile?.id || '';
     if (studentUid) {
       const profileToSave: UserProfile = {
         ...cleanProfile,

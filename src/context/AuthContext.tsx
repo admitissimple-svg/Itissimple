@@ -130,7 +130,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const cleanDocId = email.toLowerCase().trim().replace(/[^a-zA-Z0-9]/g, '-');
         const snapEmail = await withTimeout(getDoc(doc(db, 'users', cleanDocId)), 3500);
         if (snapEmail && snapEmail.exists()) {
-          return snapEmail.data() as AuthUserDoc;
+          const emailData = snapEmail.data() as AuthUserDoc;
+          if (uid) {
+            await setDoc(
+              doc(db, 'users', uid),
+              {
+                ...emailData,
+                id: uid,
+                uid: uid,
+                email: (emailData.email || email).toLowerCase().trim(),
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            ).catch(() => null);
+          }
+          return emailData;
         }
       }
     } catch (err) {
@@ -155,15 +169,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const isMasterAdmin = cleanEmail === 'adm.itissimple@gmail.com';
 
         // 1. Initial hydration from Firestore
+        let resolvedRole: UserRole = isMasterAdmin ? 'admin' : 'student';
         try {
           const docData = await fetchFirestoreUser(user.uid, user.email || undefined);
-          const resolvedRole: UserRole = docData
+          resolvedRole = docData
             ? (docData.role === 'admin' || isMasterAdmin
                 ? 'admin'
                 : docData.role === 'teacher' || docData.role === 'native_friend'
                 ? 'teacher'
                 : 'student')
             : (isMasterAdmin ? 'admin' : 'student');
+
+          // Always ensure student profile is created/saved at doc(db, 'users', user.uid) with user.uid as document key
+          if (resolvedRole === 'student') {
+            const db = getDb();
+            if (db) {
+              const studentProfilePayload = {
+                id: user.uid,
+                uid: user.uid,
+                email: cleanEmail,
+                name: docData?.name || user.displayName || cleanEmail.split('@')[0],
+                role: 'student',
+                picture: docData?.picture || docData?.avatar || user.photoURL || '',
+                avatar: docData?.avatar || docData?.picture || user.photoURL || '',
+                level: docData?.level || EnglishLevel.BEGINNER,
+                ...(docData || {}),
+                updatedAt: new Date().toISOString(),
+              };
+              await setDoc(doc(db, 'users', user.uid), studentProfilePayload, { merge: true }).catch(() => null);
+            }
+          }
 
           const acc: GoogleAccount = {
             uid: user.uid,
@@ -373,6 +408,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           dailyPhraseTime: firestoreDoc?.dailyPhraseTime || data.profile?.dailyPhraseTime || '20:00',
         };
 
+        // Direct persistence to users/{studentUidToSave} ensuring Auth UID is the document ID
+        const studentUidToSave = authUid || account.uid;
+        if (studentUidToSave) {
+          const db = getDb();
+          if (db) {
+            const studentPayload = {
+              id: studentUidToSave,
+              uid: studentUidToSave,
+              email: cleanEmail,
+              name: account.name,
+              role: 'student',
+              ...(profile || {}),
+              updatedAt: new Date().toISOString(),
+            };
+            setDoc(doc(db, 'users', studentUidToSave), studentPayload, { merge: true }).catch(() => null);
+          }
+        }
+
         // Redirection INSTANTLY to Student Dashboard (/dashboard)
         if (typeof window !== 'undefined') {
           try {
@@ -500,6 +553,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         account.role = targetRole;
       }
       setCurrentAccount(account);
+
+      // Guarantee student profile in Firestore is created/saved strictly under doc(db, 'users', user.uid)
+      if (targetRole === 'student' && user.uid) {
+        const db = getDb();
+        if (db) {
+          const studentDoc = {
+            id: user.uid,
+            uid: user.uid,
+            email: cleanGoogleEmail,
+            name: account.name,
+            role: 'student',
+            picture: account.picture || '',
+            avatar: account.picture || '',
+            level: firestoreDoc?.level || data.profile?.level || EnglishLevel.BEGINNER,
+            ...(firestoreDoc || {}),
+            ...(data.profile || {}),
+            updatedAt: new Date().toISOString(),
+          };
+          setDoc(doc(db, 'users', user.uid), studentDoc, { merge: true }).catch(() => null);
+        }
+      }
 
       // Strict Redirection by verified role
       if (targetRole === 'student') {
