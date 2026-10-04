@@ -1050,7 +1050,7 @@
       "email": "adm.itissimple@gmail.com",
       "name": "Admin It's Simple",
       "role": "admin",
-      "password": "Makeiteasy2026*"
+      "password": ""
     },
     "laviniatilapiafc@gmail.com": {
       "uid": "usr-laviniatilapiafc-gmail-com",
@@ -1058,7 +1058,7 @@
       "email": "laviniatilapiafc@gmail.com",
       "name": "Lavinia",
       "role": "student",
-      "password": "5G19ViniLavi*",
+      "password": "",
       "createdAt": "2026-10-01T00:00:00.000Z"
     }
   },
