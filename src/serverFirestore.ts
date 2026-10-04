@@ -87,7 +87,7 @@ export function getAllServerFirestoreDbs(): any[] {
 }
 
 // Timeout helper so remote Firestore never blocks an Express API response
-function withTimeout<T>(promise: Promise<T>, ms: number = 12000): Promise<T | null> {
+function withTimeout<T>(promise: Promise<T>, ms: number = 1500): Promise<T | null> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), ms);

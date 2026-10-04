@@ -240,9 +240,32 @@ export default function App() {
   const [currentLanguage, setCurrentLanguage] = useState<Language>('en');
   const t = useMemo(() => getTranslations(currentLanguage), [currentLanguage]);
 
-  // 2. Authentication & Accounts - 100% managed in Cloud Firestore and Firebase Auth (ZERO localStorage dependency)
-  const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(null);
-  const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>([]);
+  // 2. Authentication & Accounts
+  const [currentAccount, setCurrentAccount] = useState<GoogleAccount | null>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const raw = localStorage.getItem('its_simple_current_account') || localStorage.getItem('currentUserAccount');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && (parsed.email || parsed.uid)) return parsed;
+        }
+      } catch {}
+    }
+    return null;
+  });
+
+  const [availableAccounts, setAvailableAccounts] = useState<GoogleAccount[]>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const raw = localStorage.getItem('its_simple_available_accounts');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch {}
+    }
+    return [];
+  });
 
   // Authoritative Native Friends hook syncing with Firestore unified collections across production and preview
   const {
@@ -258,23 +281,36 @@ export default function App() {
     initialData: INITIAL_NATIVE_FRIENDS,
   });
 
-  // Startup hook: Permanently purge any legacy browser localStorage keys to enforce strict Firestore exclusivity
+  // Synchronize active account session with local storage so user registration and login are never lost across refreshes
   useEffect(() => {
     if (typeof window !== 'undefined' && window.localStorage) {
-      const legacyKeys = [
-        'its_simple_current_account',
-        'currentUserAccount',
-        'its_simple_available_accounts',
-        'its_simple_vocabulary_master',
-        'its_simple_weekly_checks_default',
-      ];
-      legacyKeys.forEach((k) => {
-        try {
-          localStorage.removeItem(k);
-        } catch {}
-      });
+      try {
+        if (currentAccount && currentAccount.email) {
+          localStorage.setItem('its_simple_current_account', JSON.stringify(currentAccount));
+          localStorage.setItem('currentUserAccount', JSON.stringify(currentAccount));
+          setAvailableAccounts((prev) => {
+            const clean = currentAccount.email.toLowerCase().trim();
+            if (!prev.some((a) => a.email.toLowerCase().trim() === clean)) {
+              const updated = [...prev, currentAccount];
+              try {
+                localStorage.setItem('its_simple_available_accounts', JSON.stringify(updated));
+              } catch {}
+              return updated;
+            }
+            return prev;
+          });
+        }
+      } catch {}
     }
-  }, []);
+  }, [currentAccount]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.localStorage && availableAccounts.length > 0) {
+      try {
+        localStorage.setItem('its_simple_available_accounts', JSON.stringify(availableAccounts));
+      } catch {}
+    }
+  }, [availableAccounts]);
 
   // One-time automatic migration of any legacy data to Cloud Firestore
   useEffect(() => {
@@ -2244,6 +2280,12 @@ export default function App() {
     try {
       firebaseSignOutAuth(auth).catch(() => {});
     } catch {}
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.removeItem('its_simple_current_account');
+        localStorage.removeItem('currentUserAccount');
+      } catch {}
+    }
     setCurrentAccount(null);
     setUserProfile(createDefaultStudentProfile(null));
     setLessons([]);

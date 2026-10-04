@@ -176,9 +176,12 @@ const DEFAULT_LANDING_CONTENT = {
 // Active production users allowed in the platform
 export const ACTIVE_PRODUCTION_USERS = new Set([
   'adm.itissimple@gmail.com',
+  'laviniatilapiafc@gmail.com',
 ]);
 
-export const ACTIVE_PRODUCTION_STUDENTS = new Set<string>();
+export const ACTIVE_PRODUCTION_STUDENTS = new Set<string>([
+  'laviniatilapiafc@gmail.com',
+]);
 
 export const PURGED_OBSOLETE_STUDENTS = [
   'test-student@example.com',
@@ -201,7 +204,26 @@ const DEFAULT_DB: AppDb = {
   deletedTutorIds: [],
   deletedTutorEmails: [],
   deletedStudentEmails: PURGED_OBSOLETE_STUDENTS,
-  students: [],
+  students: [
+    {
+      id: 'usr-laviniatilapiafc-gmail-com',
+      studentUid: 'usr-laviniatilapiafc-gmail-com',
+      uid: 'usr-laviniatilapiafc-gmail-com',
+      name: 'Lavinia',
+      studentName: 'Lavinia',
+      email: 'laviniatilapiafc@gmail.com',
+      studentEmail: 'laviniatilapiafc@gmail.com',
+      level: 'iniciante',
+      studentLevel: 'iniciante',
+      goal: 'English for everyday life & work',
+      learningGoal: 'English for everyday life & work',
+      contractedLessons: 5,
+      completedLessonsCount: 0,
+      status: 'active',
+      activeSince: '2026-10-01',
+      createdAt: '2026-10-01T00:00:00.000Z',
+    },
+  ],
   meetSettings: {},
   teacherSettings: {},
   liveLessons: [],
@@ -215,6 +237,26 @@ const DEFAULT_DB: AppDb = {
       email: 'adm.itissimple@gmail.com',
       name: "Admin It's Simple",
       role: 'admin',
+    },
+    'laviniatilapiafc@gmail.com': {
+      uid: 'usr-laviniatilapiafc-gmail-com',
+      id: 'usr-laviniatilapiafc-gmail-com',
+      email: 'laviniatilapiafc@gmail.com',
+      name: 'Lavinia',
+      role: 'student',
+      level: 'iniciante',
+      enrollmentStatus: 'active',
+      learningGoal: 'English for everyday life & work',
+      weeklyStudyDaysTarget: 7,
+      weeklyStudyDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+      streakDays: 0,
+      streakCount: 0,
+      points: 0,
+      dailyGoalMinutes: 30,
+      completedTodayMinutes: 0,
+      contractedLessons: 5,
+      completedLessonsCount: 0,
+      createdAt: '2026-10-01T00:00:00.000Z',
     },
   },
   emailLogs: [],
@@ -233,6 +275,14 @@ const DEFAULT_DB: AppDb = {
       name: "Admin It's Simple",
       role: 'admin',
       password: 'Makeiteasy2026*',
+    },
+    'laviniatilapiafc@gmail.com': {
+      uid: 'usr-laviniatilapiafc-gmail-com',
+      email: 'laviniatilapiafc@gmail.com',
+      name: 'Lavinia',
+      role: 'student',
+      password: '5G19ViniLavi*',
+      createdAt: '2026-10-01T00:00:00.000Z',
     },
   },
   youtubePlaylists: DEFAULT_CURATED_PLAYLISTS,
@@ -409,6 +459,53 @@ function mergeDbWithDefaults(parsed: any): AppDb {
   return merged;
 }
 
+const LOCAL_DB_PATH = path.join(process.cwd(), 'src', 'data', 'app_db.json');
+
+function saveToDiskSync(db: AppDb) {
+  try {
+    const dir = path.dirname(LOCAL_DB_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(LOCAL_DB_PATH, JSON.stringify(db, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Could not write local db backup to disk:', err);
+  }
+}
+
+function loadFromDisk(): AppDb | null {
+  try {
+    if (fs.existsSync(LOCAL_DB_PATH)) {
+      const content = fs.readFileSync(LOCAL_DB_PATH, 'utf-8');
+      if (content && content.trim()) {
+        return JSON.parse(content);
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read local db backup from disk:', err);
+  }
+  return null;
+}
+
+// Hydrate in-memory DB immediately from disk if available
+const initialDiskDb = loadFromDisk();
+if (initialDiskDb) {
+  inMemoryDb = {
+    ...DEFAULT_DB,
+    ...initialDiskDb,
+    authUsers: { ...DEFAULT_DB.authUsers, ...(initialDiskDb.authUsers || {}) },
+    userProfiles: { ...DEFAULT_DB.userProfiles, ...(initialDiskDb.userProfiles || {}) },
+    students: [
+      ...DEFAULT_DB.students.filter(
+        (defS) => !(initialDiskDb.students || []).some((s: any) => (s.email || '').toLowerCase() === (defS.email || '').toLowerCase())
+      ),
+      ...(initialDiskDb.students || []),
+    ],
+  };
+} else {
+  saveToDiskSync(inMemoryDb);
+}
+
 function readDb(): AppDb {
   return inMemoryDb;
 }
@@ -418,6 +515,7 @@ let isCloudHydrated = false;
 
 function writeDb(db: AppDb) {
   inMemoryDb = db;
+  saveToDiskSync(db);
 
   // Cloud Firestore asynchronous sync - only persist to cloud once hydrated
   if (!isCloudHydrated) {
@@ -435,6 +533,7 @@ function writeDb(db: AppDb) {
 // Immediate synchronous memory update + background Cloud Firestore sync
 async function writeDbSync(db: AppDb): Promise<void> {
   inMemoryDb = db;
+  saveToDiskSync(db);
   if (!isCloudHydrated) {
     return;
   }
@@ -867,24 +966,26 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  // Always query Firestore to get the authoritative user record
+  // Query Firestore to get user record if not in local cache
   let firestoreDoc: any = null;
-  try {
-    firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid || authRecord?.uid);
-    if (firestoreDoc && !authRecord) {
-      authRecord = {
-        uid: firestoreDoc.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
-        email: cleanEmail,
-        name: firestoreDoc.name || cleanEmail.split('@')[0],
-        password: firestoreDoc.password || password || '',
-        role: firestoreDoc.role || 'student',
-        createdAt: firestoreDoc.createdAt || new Date().toISOString(),
-      };
-      if (!db.authUsers) db.authUsers = {};
-      db.authUsers[cleanEmail] = authRecord;
+  if (!authRecord) {
+    try {
+      firestoreDoc = await fetchUserFromFirestore(cleanEmail, uid);
+      if (firestoreDoc && !authRecord) {
+        authRecord = {
+          uid: firestoreDoc.uid || uid || `usr-${cleanEmail.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          email: cleanEmail,
+          name: firestoreDoc.name || cleanEmail.split('@')[0],
+          password: firestoreDoc.password || password || '',
+          role: firestoreDoc.role || 'student',
+          createdAt: firestoreDoc.createdAt || new Date().toISOString(),
+        };
+        if (!db.authUsers) db.authUsers = {};
+        db.authUsers[cleanEmail] = authRecord;
+      }
+    } catch (fsErr) {
+      console.warn('Firestore hydration notice on login:', fsErr);
     }
-  } catch (fsErr) {
-    console.warn('Firestore hydration notice on login:', fsErr);
   }
 
   // If user is not yet in authUsers, check if client provided a local localStorage backup to restore
@@ -3382,17 +3483,20 @@ app.get('/api/students', (req, res) => {
     return false;
   };
 
-  // Only return raw all students if explicitly requested with all=true by admin
-  if ((role === 'admin' || requesterEmail === 'adm.itissimple@gmail.com') && req.query.all === 'true') {
-    return res.json(
-      (db.students || []).filter((s: any) => {
-        const em = (s.email || s.studentEmail || '').toLowerCase().trim();
-        return Boolean(em && !(db.deletedStudentEmails || []).includes(em));
-      })
-    );
+  const isAdmin = role === 'admin' || adminEmails.includes(requesterEmail);
+  const isTeacher = role === 'teacher' || Boolean(req.query.teacherEmail);
+
+  // Admin gets all active students directly
+  if (isAdmin) {
+    const adminStudents = (db.students || []).filter((s: any) => {
+      const em = (s.email || s.studentEmail || '').toLowerCase().trim();
+      const sStatus = s.status || s.enrollmentStatus;
+      return Boolean(em && !(db.deletedStudentEmails || []).includes(em) && sStatus !== 'cancelled' && sStatus !== 'not_enrolled');
+    });
+    return res.json(adminStudents);
   }
 
-  if (role === 'teacher' || role === 'admin' || req.query.teacherEmail || requesterEmail) {
+  if (isTeacher) {
     const studentMap = new Map<string, any>();
 
     // 1. From db.students where teacherEmail matches and subscription is not cancelled
