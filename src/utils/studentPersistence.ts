@@ -272,6 +272,8 @@ export async function saveStudentVocabularyToFirestore(
         source: entry.source || existing?.source || 'api',
         learnedAt: entry.learnedAt || existing?.learnedAt || new Date().toISOString(),
         notFound: entry.notFound ?? existing?.notFound ?? false,
+        practiceCount: entry.practiceCount !== undefined ? entry.practiceCount : existing?.practiceCount,
+        lastPracticedAt: entry.lastPracticedAt || existing?.lastPracticedAt,
       };
 
       masterMap.set(key, mergedEntry);
@@ -336,6 +338,49 @@ export async function saveStudentVocabularyToFirestore(
     handleFirestoreError(error, OperationType.WRITE, `users/${cleanUid}/vocabulary`);
     return false;
   }
+}
+
+/**
+ * Phase 1B: Mark vocabulary words practiced upon successful completion of Daily Memorization Activity.
+ * Increments practiceCount (+1) and sets lastPracticedAt to current ISO timestamp for each word in the queue.
+ * Persists through the existing vocabulary persistence architecture.
+ */
+export async function markVocabularyWordsPracticedInFirestore(
+  studentUid: string,
+  words: string[],
+  studentEmail?: string
+): Promise<StudentDictionaryEntry[]> {
+  const cleanEmail = (studentEmail || '').toLowerCase().trim();
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
+  if (!cleanUid || !words || words.length === 0) {
+    return getCachedLocalVocabulary(cleanUid, cleanEmail);
+  }
+
+  const currentVocab = await fetchStudentVocabularyFromFirestore(cleanUid, cleanEmail);
+  const nowIso = new Date().toISOString();
+  const targetWordsSet = new Set(words.map((w) => (w || '').trim().toLowerCase()).filter(Boolean));
+
+  let modifiedCount = 0;
+  const updatedVocab = currentVocab.map((entry) => {
+    if (!entry || !entry.word) return entry;
+    const norm = entry.word.trim().toLowerCase();
+    if (targetWordsSet.has(norm)) {
+      modifiedCount++;
+      const currentCount = typeof entry.practiceCount === 'number' ? entry.practiceCount : 0;
+      return {
+        ...entry,
+        practiceCount: currentCount + 1,
+        lastPracticedAt: nowIso,
+      };
+    }
+    return entry;
+  });
+
+  if (modifiedCount > 0) {
+    await saveStudentVocabularyToFirestore(cleanUid, updatedVocab, cleanEmail);
+  }
+
+  return updatedVocab;
 }
 
 /**
