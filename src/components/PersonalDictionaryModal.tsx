@@ -11,6 +11,8 @@ import {
   AlertCircle,
   Sparkles,
   Trash2,
+  Users,
+  Bookmark,
 } from 'lucide-react';
 import { StudentDictionaryEntry, Language, DayOfWeek } from '../types';
 import { speakText } from '../utils/audio';
@@ -139,19 +141,55 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
     );
   }, [wordsFromRoutines, customSavedEntries, apiEnrichedEntries]);
 
-  // Filter entries by search term
-  const filteredEntries = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    if (!term) return allDictionaryEntries;
+  // Phase 1B: Classify Native Friend vs My Words
+  // Native Friend: source === 'live_lesson' OR sourceActivityName contains 'Native Friends Notes' or 'Live Session'
+  const isNativeFriend = (entry: StudentDictionaryEntry): boolean => {
+    if (entry.source === 'live_lesson') return true;
+    const act = entry.sourceActivityName || '';
+    if (act.includes('Native Friends Notes') || act.includes('Live Session')) {
+      return true;
+    }
+    return false;
+  };
 
-    return allDictionaryEntries.filter((item) => {
+  // Section 1: From My Native Friend
+  const nativeFriendEntries = useMemo(() => {
+    return allDictionaryEntries.filter((e) => isNativeFriend(e));
+  }, [allDictionaryEntries]);
+
+  // Section 2: My Words
+  const myWordsEntries = useMemo(() => {
+    return allDictionaryEntries.filter((e) => !isNativeFriend(e));
+  }, [allDictionaryEntries]);
+
+  // Filter entries by search term independently
+  const filteredNativeFriendEntries = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return nativeFriendEntries;
+
+    return nativeFriendEntries.filter((item) => {
       const w = (item.word || '').toLowerCase();
       const d = (item.definitionEn || '').toLowerCase();
       const e = (item.exampleSentenceEn || '').toLowerCase();
       const t = (item.translationPt || '').toLowerCase();
       return w.includes(term) || d.includes(term) || e.includes(term) || t.includes(term);
     });
-  }, [allDictionaryEntries, searchTerm]);
+  }, [nativeFriendEntries, searchTerm]);
+
+  const filteredMyWordsEntries = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return myWordsEntries;
+
+    return myWordsEntries.filter((item) => {
+      const w = (item.word || '').toLowerCase();
+      const d = (item.definitionEn || '').toLowerCase();
+      const e = (item.exampleSentenceEn || '').toLowerCase();
+      const t = (item.translationPt || '').toLowerCase();
+      return w.includes(term) || d.includes(term) || e.includes(term) || t.includes(term);
+    });
+  }, [myWordsEntries, searchTerm]);
+
+  const totalFilteredCount = filteredNativeFriendEntries.length + filteredMyWordsEntries.length;
 
   // Lookup word via external Free Dictionary API
   const handleLookupWordFromDictionary = async () => {
@@ -435,9 +473,9 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
           </form>
         )}
 
-        {/* Dictionary Table View (Organized by Ascending Order) */}
-        <div className="flex-1 overflow-auto">
-          {filteredEntries.length === 0 ? (
+        {/* Dictionary Table View (Organized into Two Sections) */}
+        <div className="flex-1 overflow-auto divide-y divide-slate-200">
+          {totalFilteredCount === 0 ? (
             <div className="text-center py-16 px-4 space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
                 <BookOpen className="w-7 h-7" />
@@ -456,118 +494,303 @@ export const PersonalDictionaryModal: React.FC<PersonalDictionaryModalProps> = (
               </p>
             </div>
           ) : (
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="bg-slate-100/80 border-b border-slate-200 text-[11px] font-black uppercase tracking-wider text-[#000035] sticky top-0 z-10 backdrop-blur-xs">
-                  <th className="py-3 px-4 sm:px-6 w-1/4">
-                    {isEn ? 'Word' : 'Palavra'}
-                  </th>
-                  <th className="py-3 px-4 sm:px-6 w-2/5">
-                    {isEn ? 'Meaning' : 'Significado'}
-                  </th>
-                  <th className="py-3 px-4 sm:px-6 w-1/3">
-                    {isEn ? 'Example in a Sentence' : 'Exemplo em uma Frase'}
-                  </th>
-                  <th className="py-3 px-3 text-right w-16">
-                    {isEn ? 'Audio' : 'Áudio'}
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs">
-                {filteredEntries.map((entry, index) => (
-                  <tr
-                    key={entry.id || `${entry.word}_${index}`}
-                    className="hover:bg-blue-50/50 transition-colors group"
-                  >
-                    {/* 1. Palavra / Word */}
-                    <td className="py-3.5 px-4 sm:px-6 align-top">
-                      <div className="flex flex-col items-start gap-1">
-                        <span className="text-sm font-bold text-[#000035] tracking-tight group-hover:text-[#1C4C96] transition-colors">
-                          {entry.word}
-                        </span>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {entry.cefrLevel && (
-                            <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                              {entry.cefrLevel}
-                            </span>
-                          )}
-                          {entry.partOfSpeech && (
-                            <span
-                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
-                                entry.partOfSpeech.toLowerCase().includes('pronounc')
-                                  ? 'text-purple-800 bg-purple-50 border-purple-200'
-                                  : 'text-[#1C4C96] bg-blue-50 border-blue-200'
-                              }`}
-                            >
-                              {entry.partOfSpeech.toLowerCase().includes('pronounc')
-                                ? '🎯 Pronounce'
-                                : entry.partOfSpeech}
-                            </span>
-                          )}
-                          {entry.phonetic && (
-                            <span className="text-[10px] font-mono text-slate-400">
-                              {entry.phonetic}
-                            </span>
-                          )}
-                        </div>
+            <div className="space-y-6 pb-6">
+              {/* SECTION 1: FROM MY NATIVE FRIEND */}
+              {(filteredNativeFriendEntries.length > 0 || !searchTerm) && (
+                <div className="space-y-0">
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50/80 px-4 sm:px-6 py-3 border-y border-blue-200/80 flex items-center justify-between sticky top-0 z-20 backdrop-blur-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-6 h-6 rounded-lg bg-[#1C4C96] text-white flex items-center justify-center shadow-2xs">
+                        <Users className="w-3.5 h-3.5" />
                       </div>
-                    </td>
+                      <h3 className="text-xs font-black text-[#000035] uppercase tracking-wider">
+                        {isEn ? 'From My Native Friend' : 'Do Meu Amigo Nativo'}
+                      </h3>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#1C4C96] text-white shadow-2xs">
+                        {filteredNativeFriendEntries.length}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-[#1C4C96] font-medium hidden sm:inline">
+                      {isEn ? 'Live coaching & session notes' : 'Anotações exclusivas de aulas ao vivo'}
+                    </span>
+                  </div>
 
-                    {/* 2. Significado / Meaning */}
-                    <td className="py-3.5 px-4 sm:px-6 align-top">
-                      {entry.notFound ? (
-                        <span className="text-xs text-amber-700 italic">
-                          {isEn ? 'Word not found in dictionary.' : 'Palavra não encontrada no dicionário.'}
-                        </span>
-                      ) : entry.definitionEn ? (
-                        <p className="text-xs text-slate-700 leading-relaxed">
-                          {entry.definitionEn}
-                        </p>
-                      ) : (
-                        <span className="text-xs text-slate-400 italic">
-                          {isEn ? 'Definition pending' : 'Definição pendente'}
-                        </span>
-                      )}
-                    </td>
-
-                    {/* 3. Exemplo / Example */}
-                    <td className="py-3.5 px-4 sm:px-6 align-top">
-                      {entry.exampleSentenceEn ? (
-                        <p className="text-xs text-slate-600 italic leading-relaxed">
-                          “{entry.exampleSentenceEn}”
-                        </p>
-                      ) : (
-                        <span className="text-xs text-slate-300 italic">—</span>
-                      )}
-                    </td>
-
-                    {/* 4. Audio Pronunciation & Delete Buttons */}
-                    <td className="py-3.5 px-3 align-top text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => speakText(entry.word)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-[#1C4C96] hover:bg-blue-50 transition cursor-pointer"
-                          title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
-                        {onDeleteEntry && (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteEntry(entry.word)}
-                            className="p-1.5 rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
-                            title={isEn ? 'Remove word' : 'Remover palavra'}
+                  {filteredNativeFriendEntries.length === 0 ? (
+                    <div className="p-6 text-center bg-blue-50/20 text-slate-400 text-xs italic">
+                      {isEn
+                        ? 'No vocabulary from your Native Friend recorded yet.'
+                        : 'Nenhum vocabulário do Amigo Nativo registrado ainda.'}
+                    </div>
+                  ) : (
+                    <table className="w-full border-collapse text-left">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                          <th className="py-2.5 px-4 sm:px-6 w-1/4">
+                            {isEn ? 'Word' : 'Palavra'}
+                          </th>
+                          <th className="py-2.5 px-4 sm:px-6 w-2/5">
+                            {isEn ? 'Meaning' : 'Significado'}
+                          </th>
+                          <th className="py-2.5 px-4 sm:px-6 w-1/3">
+                            {isEn ? 'Example in a Sentence' : 'Exemplo em uma Frase'}
+                          </th>
+                          <th className="py-2.5 px-3 text-right w-16">
+                            {isEn ? 'Audio' : 'Áudio'}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {filteredNativeFriendEntries.map((entry, index) => (
+                          <tr
+                            key={entry.id || `${entry.word}_nf_${index}`}
+                            className="hover:bg-blue-50/50 transition-colors group"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                            {/* 1. Palavra / Word */}
+                            <td className="py-3 px-4 sm:px-6 align-top">
+                              <div className="flex flex-col items-start gap-1">
+                                <span className="text-sm font-bold text-[#000035] tracking-tight group-hover:text-[#1C4C96] transition-colors">
+                                  {entry.word}
+                                </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {entry.cefrLevel && (
+                                    <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                      {entry.cefrLevel}
+                                    </span>
+                                  )}
+                                  {entry.partOfSpeech && (
+                                    <span
+                                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+                                        entry.partOfSpeech.toLowerCase().includes('pronounc')
+                                          ? 'text-purple-800 bg-purple-50 border-purple-200'
+                                          : 'text-[#1C4C96] bg-blue-50 border-blue-200'
+                                      }`}
+                                    >
+                                      {entry.partOfSpeech.toLowerCase().includes('pronounc')
+                                        ? '🎯 Pronounce'
+                                        : entry.partOfSpeech}
+                                    </span>
+                                  )}
+                                  {entry.phonetic && (
+                                    <span className="text-[10px] font-mono text-slate-400">
+                                      {entry.phonetic}
+                                    </span>
+                                  )}
+                                  {typeof entry.practiceCount === 'number' && entry.practiceCount > 0 && (
+                                    <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
+                                      {entry.practiceCount}x {isEn ? 'practiced' : 'praticada'}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 2. Significado / Meaning */}
+                            <td className="py-3 px-4 sm:px-6 align-top">
+                              {entry.notFound ? (
+                                <span className="text-xs text-amber-700 italic">
+                                  {isEn ? 'Word not found in dictionary.' : 'Palavra não encontrada no dicionário.'}
+                                </span>
+                              ) : entry.definitionEn ? (
+                                <p className="text-xs text-slate-700 leading-relaxed">
+                                  {entry.definitionEn}
+                                </p>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">
+                                  {isEn ? 'Definition pending' : 'Definição pendente'}
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 3. Exemplo / Example */}
+                            <td className="py-3 px-4 sm:px-6 align-top">
+                              {entry.exampleSentenceEn ? (
+                                <p className="text-xs text-slate-600 italic leading-relaxed">
+                                  “{entry.exampleSentenceEn}”
+                                </p>
+                              ) : (
+                                <span className="text-xs text-slate-300 italic">—</span>
+                              )}
+                            </td>
+
+                            {/* 4. Audio Pronunciation & Delete Buttons */}
+                            <td className="py-3 px-3 align-top text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => speakText(entry.word)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-[#1C4C96] hover:bg-blue-50 transition cursor-pointer"
+                                  title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
+                                >
+                                  <Volume2 className="w-4 h-4" />
+                                </button>
+                                {onDeleteEntry && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteEntry(entry.word)}
+                                    className="p-1.5 rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                                    title={isEn ? 'Remove word' : 'Remover palavra'}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+
+              {/* SECTION 2: MY WORDS */}
+              {(filteredMyWordsEntries.length > 0 || !searchTerm) && (
+                <div className="space-y-0">
+                  <div className="bg-gradient-to-r from-amber-50/80 to-slate-100 px-4 sm:px-6 py-3 border-y border-amber-200/80 flex items-center justify-between sticky top-0 z-20 backdrop-blur-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-6 h-6 rounded-lg bg-[#000035] text-white flex items-center justify-center shadow-2xs">
+                        <Bookmark className="w-3.5 h-3.5 text-[#F4CA54]" />
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <h3 className="text-xs font-black text-[#000035] uppercase tracking-wider">
+                        {isEn ? 'My Words' : 'Minhas Palavras'}
+                      </h3>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[#000035] text-white shadow-2xs">
+                        {filteredMyWordsEntries.length}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
+                      {isEn ? 'Daily routines & personal additions' : 'Rotinas diárias e adições pessoais'}
+                    </span>
+                  </div>
+
+                  {filteredMyWordsEntries.length === 0 ? (
+                    <div className="p-6 text-center bg-slate-50/50 text-slate-400 text-xs italic">
+                      {isEn
+                        ? 'No personal words recorded yet. Use Add Word above or complete daily routines.'
+                        : 'Nenhuma palavra pessoal registrada ainda. Use Nova Palavra acima ou complete rotinas.'}
+                    </div>
+                  ) : (
+                    <table className="w-full border-collapse text-left">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                          <th className="py-2.5 px-4 sm:px-6 w-1/4">
+                            {isEn ? 'Word' : 'Palavra'}
+                          </th>
+                          <th className="py-2.5 px-4 sm:px-6 w-2/5">
+                            {isEn ? 'Meaning' : 'Significado'}
+                          </th>
+                          <th className="py-2.5 px-4 sm:px-6 w-1/3">
+                            {isEn ? 'Example in a Sentence' : 'Exemplo em uma Frase'}
+                          </th>
+                          <th className="py-2.5 px-3 text-right w-16">
+                            {isEn ? 'Audio' : 'Áudio'}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {filteredMyWordsEntries.map((entry, index) => (
+                          <tr
+                            key={entry.id || `${entry.word}_my_${index}`}
+                            className="hover:bg-amber-50/40 transition-colors group"
+                          >
+                            {/* 1. Palavra / Word */}
+                            <td className="py-3 px-4 sm:px-6 align-top">
+                              <div className="flex flex-col items-start gap-1">
+                                <span className="text-sm font-bold text-[#000035] tracking-tight group-hover:text-[#1C4C96] transition-colors">
+                                  {entry.word}
+                                </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {entry.cefrLevel && (
+                                    <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                      {entry.cefrLevel}
+                                    </span>
+                                  )}
+                                  {entry.partOfSpeech && (
+                                    <span
+                                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+                                        entry.partOfSpeech.toLowerCase().includes('pronounc')
+                                          ? 'text-purple-800 bg-purple-50 border-purple-200'
+                                          : 'text-[#1C4C96] bg-blue-50 border-blue-200'
+                                      }`}
+                                    >
+                                      {entry.partOfSpeech.toLowerCase().includes('pronounc')
+                                        ? '🎯 Pronounce'
+                                        : entry.partOfSpeech}
+                                    </span>
+                                  )}
+                                  {entry.phonetic && (
+                                    <span className="text-[10px] font-mono text-slate-400">
+                                      {entry.phonetic}
+                                    </span>
+                                  )}
+                                  {typeof entry.practiceCount === 'number' && entry.practiceCount > 0 && (
+                                    <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                      {entry.practiceCount}x {isEn ? 'practiced' : 'praticada'}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 2. Significado / Meaning */}
+                            <td className="py-3 px-4 sm:px-6 align-top">
+                              {entry.notFound ? (
+                                <span className="text-xs text-amber-700 italic">
+                                  {isEn ? 'Word not found in dictionary.' : 'Palavra não encontrada no dicionário.'}
+                                </span>
+                              ) : entry.definitionEn ? (
+                                <p className="text-xs text-slate-700 leading-relaxed">
+                                  {entry.definitionEn}
+                                </p>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">
+                                  {isEn ? 'Definition pending' : 'Definição pendente'}
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 3. Exemplo / Example */}
+                            <td className="py-3 px-4 sm:px-6 align-top">
+                              {entry.exampleSentenceEn ? (
+                                <p className="text-xs text-slate-600 italic leading-relaxed">
+                                  “{entry.exampleSentenceEn}”
+                                </p>
+                              ) : (
+                                <span className="text-xs text-slate-300 italic">—</span>
+                              )}
+                            </td>
+
+                            {/* 4. Audio Pronunciation & Delete Buttons */}
+                            <td className="py-3 px-3 align-top text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => speakText(entry.word)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-[#1C4C96] hover:bg-blue-50 transition cursor-pointer"
+                                  title={isEn ? 'Listen to pronunciation' : 'Ouvir pronúncia'}
+                                >
+                                  <Volume2 className="w-4 h-4" />
+                                </button>
+                                {onDeleteEntry && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteEntry(entry.word)}
+                                    className="p-1.5 rounded-lg text-slate-300 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                                    title={isEn ? 'Remove word' : 'Remover palavra'}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
