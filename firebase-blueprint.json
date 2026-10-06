@@ -247,9 +247,10 @@
         "learnedAt": { "type": "string", "format": "date-time", "description": "When word was saved" },
         "addedAt": { "type": "string", "format": "date-time", "description": "When word was saved" },
         "studentEmail": { "type": "string", "format": "email" },
-        "studentUid": { "type": "string" }
-      },
-      "required": ["word"]
+        "studentUid": { "type": "string" },
+        "practiceCount": { "type": "number", "description": "Number of times practiced in daily memorization activity" },
+        "lastPracticedAt": { "type": "string", "format": "date-time", "description": "Timestamp when last practiced in daily memorization activity" }      },
+       "required": ["word"]
     },
     "StudentJournalEntry": {
       "title": "StudentJournalEntry",
