@@ -92,6 +92,7 @@ import { StudentJournalModal } from './components/StudentJournalModal';
 import {
   saveStudentVocabularyToFirestore,
   fetchStudentVocabularyFromFirestore,
+  markVocabularyWordsPracticedInFirestore,
   subscribeToStudentVocabulary,
   getCachedLocalVocabulary,
   cacheVocabularyLocally,
@@ -799,12 +800,17 @@ export default function App() {
   // Generate Weekly Homework automatically whenever routines, dictionary, or targetDay change
   useEffect(() => {
     const customWordList = studentDictionaryEntries.map((e) => ({
+      id: e.id,
       word: e.word,
       definitionEn: e.definitionEn,
       exampleSentence: e.exampleSentenceEn,
       translationPt: e.translationPt || '',
-      sourceActivityName: e.sourceActivityName || 'Live Session',
+      sourceActivityName: e.sourceActivityName || 'Personal Dictionary',
       sourceDay: (e as any).sourceDay,
+      source: e.source,
+      learnedAt: e.learnedAt,
+      practiceCount: e.practiceCount,
+      lastPracticedAt: e.lastPracticedAt,
     }));
 
     const generated = generateWeeklyHomeworkFromRoutines({
@@ -910,12 +916,17 @@ export default function App() {
         weeklyCycle: userProfile?.weeklyCycle || 1,
         userProfile,
         customWords: studentDictionaryEntries.map((e) => ({
+          id: e.id,
           word: e.word,
           definitionEn: e.definitionEn,
           exampleSentence: e.exampleSentenceEn,
           translationPt: e.translationPt || '',
-          sourceActivityName: e.sourceActivityName || 'Live Session',
+          sourceActivityName: e.sourceActivityName || 'Personal Dictionary',
           sourceDay: (e as any).sourceDay,
+          source: e.source,
+          learnedAt: e.learnedAt,
+          practiceCount: e.practiceCount,
+          lastPracticedAt: e.lastPracticedAt,
         })),
       });
       if (generated) {
@@ -2871,6 +2882,44 @@ export default function App() {
     },
     [currentAccount?.uid, currentAccount?.email, userProfile?.id, userProfile?.email, userProfile?.weeklyNativeLessonsTarget, userProfile?.weeklyStudyDaysTarget, currentLanguage, handleBehavioralActivityComplete]
   );
+
+  // Phase 1B: Track completed daily memorization activity per cycle day to prevent duplicate increments
+  const completedMemorizationDaysRef = useRef<Set<string>>(new Set());
+
+  const handleMarkDailyMemorizationPracticed = useCallback(
+    async (day: DayOfWeek, wordsUsed: string[]) => {
+      const studentUid = currentAccount?.uid || userProfile?.id || (userProfile as any)?.uid || '';
+      const studentEmail = currentAccount?.email || userProfile?.email || '';
+      const sessionKey = `${day}_${userProfile?.weeklyCycle || 1}`;
+
+      const persistedCheckKey = `memorization_${day}`;
+
+      if (
+      completedMemorizationDaysRef.current.has(sessionKey) ||
+      weeklyChecks[persistedCheckKey] === true
+      ) {
+      return;
+      }
+
+      completedMemorizationDaysRef.current.add(sessionKey);
+
+      if (!studentUid && !studentEmail) return;
+      if (!wordsUsed || wordsUsed.length === 0) return;
+
+      try {
+        const updatedVocab = await markVocabularyWordsPracticedInFirestore(
+          studentUid,
+          wordsUsed,
+          studentEmail
+        );
+        if (Array.isArray(updatedVocab) && updatedVocab.length > 0) {
+          setStudentDictionaryEntries(updatedVocab);
+        }
+      } catch (err) {
+        console.warn('Failed to mark daily memorization words practiced:', err);
+      }
+    },
+[currentAccount?.uid, userProfile?.id, currentAccount?.email, userProfile?.email, userProfile?.weeklyCycle, weeklyChecks]  );
 
   // Handler: Toggle activity completed status
   const handleToggleActivityComplete = async (activityId: string) => {
@@ -5845,6 +5894,10 @@ export default function App() {
       isGeneratingAi={isGeneratingHomeworkAi}
       onCompleteTodayPart={(partKey, day) => {
         handleUpdateSPathCheck('memorization', day, true);
+        const wordsUsed = weeklyHomework?.vocabularyList?.map((w) => w.word) || [];
+        if (wordsUsed.length > 0) {
+          handleMarkDailyMemorizationPracticed(day, wordsUsed);
+        }
       }}
       onSubmitToTeacher={(updated) => {
         setWeeklyHomework(updated);
@@ -5858,6 +5911,10 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ weeklyHomework: updated }),
           }).catch(() => {});
+        }
+        const wordsUsed = updated?.vocabularyList?.map((w) => w.word) || [];
+        if (wordsUsed.length > 0) {
+          handleMarkDailyMemorizationPracticed(homeworkTargetDay, wordsUsed);
         }
         setNotifications((prev) => [
           {
