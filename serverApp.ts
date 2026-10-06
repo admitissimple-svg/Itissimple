@@ -6980,6 +6980,10 @@ app.post('/api/student-dictionary', async (req, res) => {
       teacherName: teacherName || item.teacherName,
       studentEmail: cleanEmail,
       studentUid,
+      practiceCount: typeof item.practiceCount === 'number'
+      ? item.practiceCount
+      : dictMap.get(lower)?.practiceCount,
+      lastPracticedAt: item.lastPracticedAt || dictMap.get(lower)?.lastPracticedAt,
     });
   });
 
@@ -9884,7 +9888,7 @@ app.post('/api/homework/generate-ai', async (req, res) => {
           .map((item: any) => (typeof item === 'string' ? item : item?.word || '').trim())
           .filter((w: string) => Boolean(w))
       )
-    );
+    ).slice(0, 5);
 
     // Anti-generic rule: if no words provided, return clean empty notice immediately
     if (cleanWords.length === 0) {
