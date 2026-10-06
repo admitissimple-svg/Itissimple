@@ -112,8 +112,9 @@ export interface StudentDictionaryEntry {
   customNotes?: string;
   notFound?: boolean;
   cefrLevel?: string;
+  practiceCount?: number;
+  lastPracticedAt?: string;
 }
-
 export interface GoogleAccount {
   id?: string;
   uid?: string;
