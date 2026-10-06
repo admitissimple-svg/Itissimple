@@ -295,12 +295,206 @@ const DAY_LABELS_EN: Record<DayOfWeek, string> = {
   sunday: 'Sunday',
 };
 
+/**
+ * Classify an entry as Native Friend vocabulary:
+ * entry.source === 'live_lesson'
+ * OR (for legacy compatibility only) sourceActivityName contains:
+ * - "Native Friends Notes"
+ * - "Live Session"
+ */
+export function isNativeFriendVocabulary(entry: {
+  source?: string;
+  sourceActivityName?: string;
+}): boolean {
+  if (entry?.source === 'live_lesson') return true;
+  const act = entry?.sourceActivityName || '';
+  if (act.includes('Native Friends Notes') || act.includes('Live Session')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Phase 1B: Build the deterministic Daily Memorization Queue (max 5 words).
+ *
+ * FIRST PRIORITY:
+ * Native Friend words never practiced:
+ * practiceCount missing/0 OR lastPracticedAt missing.
+ * Sort oldest first using best existing timestamp: learnedAt first, with stable fallback.
+ *
+ * SECOND PRIORITY:
+ * Student/My Words never practiced.
+ * Sort oldest first using the same deterministic strategy.
+ * Fill until reaching 5 total.
+ *
+ * If fewer than 5 never-practiced words exist, fill remaining slots from previously practiced vocabulary:
+ * - prioritize Native Friend vocabulary,
+ * - then Student vocabulary,
+ * and within each category select the LEAST RECENTLY PRACTICED first using lastPracticedAt.
+ *
+ * Deterministic tie-breaking (learnedAt, then normalized word/id).
+ * No random selection.
+ * No newest-first selection.
+ * No duplicate normalized words.
+ * Absolute maximum = 5.
+ */
+export function buildDailyMemorizationQueue(
+  candidates: HomeworkVocabItem[]
+): HomeworkVocabItem[] {
+  // 1. Deduplicate by normalized word (word.trim().toLowerCase())
+  const uniqueMap = new Map<string, HomeworkVocabItem>();
+  for (const item of candidates) {
+    if (!item || !item.word || !item.word.trim()) continue;
+    const norm = item.word.trim().toLowerCase();
+    const existing = uniqueMap.get(norm);
+    if (!existing) {
+      uniqueMap.set(norm, { ...item, word: item.word.trim() });
+    } else {
+      // Merge metadata preferring existing with richer details
+      uniqueMap.set(norm, {
+        ...existing,
+        id: existing.id || item.id,
+        source: existing.source || item.source,
+        sourceActivityName: existing.sourceActivityName || item.sourceActivityName,
+        learnedAt: existing.learnedAt || item.learnedAt,
+        practiceCount:
+          existing.practiceCount !== undefined ? existing.practiceCount : item.practiceCount,
+        lastPracticedAt: existing.lastPracticedAt || item.lastPracticedAt,
+        definitionEn: existing.definitionEn || item.definitionEn,
+        translationPt: existing.translationPt || item.translationPt,
+        exampleSentence: existing.exampleSentence || item.exampleSentence,
+      });
+    }
+  }
+
+  const uniqueList = Array.from(uniqueMap.values());
+  if (uniqueList.length === 0) return [];
+
+  // Helper: check if never practiced
+  const isNeverPracticed = (entry: HomeworkVocabItem): boolean => {
+    const count = typeof entry.practiceCount === 'number' ? entry.practiceCount : 0;
+    return count === 0 || !entry.lastPracticedAt;
+  };
+
+  // Helper: timestamp parser with fallback
+  const parseTimestamp = (iso?: string): number => {
+    if (!iso) return NaN;
+    const t = new Date(iso).getTime();
+    return isNaN(t) ? NaN : t;
+  };
+
+  // Helper: deterministic comparison for never-practiced words (oldest learnedAt first)
+  const compareNeverPracticed = (a: HomeworkVocabItem, b: HomeworkVocabItem): number => {
+    const tA = parseTimestamp(a.learnedAt);
+    const tB = parseTimestamp(b.learnedAt);
+    const hasA = !isNaN(tA);
+    const hasB = !isNaN(tB);
+
+    if (hasA && hasB && tA !== tB) {
+      return tA - tB; // oldest first
+    }
+    if (hasA && !hasB) return -1;
+    if (!hasA && hasB) return 1;
+
+    // Stable deterministic fallback: normalized word, then id
+    const normA = a.word.trim().toLowerCase();
+    const normB = b.word.trim().toLowerCase();
+    const wordCmp = normA.localeCompare(normB);
+    if (wordCmp !== 0) return wordCmp;
+    return (a.id || '').localeCompare(b.id || '');
+  };
+
+  // Helper: deterministic comparison for practiced words (least recently practiced first using lastPracticedAt)
+  const comparePracticed = (a: HomeworkVocabItem, b: HomeworkVocabItem): number => {
+    const tA = parseTimestamp(a.lastPracticedAt);
+    const tB = parseTimestamp(b.lastPracticedAt);
+    const hasA = !isNaN(tA);
+    const hasB = !isNaN(tB);
+
+    if (hasA && hasB && tA !== tB) {
+      return tA - tB; // oldest lastPracticedAt first = least recently practiced
+    }
+    if (hasA && !hasB) return -1;
+    if (!hasA && hasB) return 1;
+
+    // Tie-break 1: learnedAt oldest first
+    const lA = parseTimestamp(a.learnedAt);
+    const lB = parseTimestamp(b.learnedAt);
+    if (!isNaN(lA) && !isNaN(lB) && lA !== lB) {
+      return lA - lB;
+    }
+
+    // Tie-break 2: normalized word, then id
+    const normA = a.word.trim().toLowerCase();
+    const normB = b.word.trim().toLowerCase();
+    const wordCmp = normA.localeCompare(normB);
+    if (wordCmp !== 0) return wordCmp;
+    return (a.id || '').localeCompare(b.id || '');
+  };
+
+  // Partition into the 4 deterministic buckets
+  const bucket1NfNever: HomeworkVocabItem[] = [];
+  const bucket2MyNever: HomeworkVocabItem[] = [];
+  const bucket3NfPracticed: HomeworkVocabItem[] = [];
+  const bucket4MyPracticed: HomeworkVocabItem[] = [];
+
+  for (const item of uniqueList) {
+    const isNf = isNativeFriendVocabulary(item);
+    const never = isNeverPracticed(item);
+
+    if (isNf && never) {
+      bucket1NfNever.push(item);
+    } else if (!isNf && never) {
+      bucket2MyNever.push(item);
+    } else if (isNf && !never) {
+      bucket3NfPracticed.push(item);
+    } else {
+      bucket4MyPracticed.push(item);
+    }
+  }
+
+  // Sort each bucket deterministically
+  bucket1NfNever.sort(compareNeverPracticed);
+  bucket2MyNever.sort(compareNeverPracticed);
+  bucket3NfPracticed.sort(comparePracticed);
+  bucket4MyPracticed.sort(comparePracticed);
+
+  // Fill up to 5 words strictly in priority order
+  const queue: HomeworkVocabItem[] = [];
+
+  // Priority 1: Native Friend words never practiced
+  for (const item of bucket1NfNever) {
+    if (queue.length >= 5) break;
+    queue.push(item);
+  }
+
+  // Priority 2: Student/My Words never practiced
+  for (const item of bucket2MyNever) {
+    if (queue.length >= 5) break;
+    queue.push(item);
+  }
+
+  // Priority 3: Practiced Native Friend words (least recently practiced first)
+  for (const item of bucket3NfPracticed) {
+    if (queue.length >= 5) break;
+    queue.push(item);
+  }
+
+  // Priority 4: Practiced Student words (least recently practiced first)
+  for (const item of bucket4MyPracticed) {
+    if (queue.length >= 5) break;
+    queue.push(item);
+  }
+
+  return queue;
+}
+
 export function generateWeeklyHomework(
   routinesByDay: Record<DayOfWeek, RoutineItem[]>,
   userProfile?: UserProfile,
   studentEmail?: string,
   studentName?: string,
-  customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>,
+  customWords?: Array<Partial<HomeworkVocabItem> & { word: string }>,
   studentLevel?: string,
   targetDay?: DayOfWeek
 ): WeeklyHomeworkData {
@@ -316,26 +510,30 @@ export function generateWeeklyHomework(
     ? getDailyMemorizationSchedule(targetDay, userProfile?.weeklyStudyDays, userProfile?.weeklyCycle || 1)
     : null;
 
-  // 1. Gather ONLY words typed for the target day (or across week if targetDay not specified)
-  const rawWords: HomeworkVocabItem[] = [];
-  const seenWords = new Set<string>();
+  // 1. Gather all candidate vocabulary available to the student
+  const candidateItems: HomeworkVocabItem[] = [];
+  const seenCandidates = new Set<string>();
 
-  // Filter custom words from dictionary / live sessions: only if targetDay is not specified OR cw.sourceDay === targetDay
+  // A. Words from student dictionary / custom words
   if (Array.isArray(customWords)) {
     customWords.forEach((cw) => {
-      if (targetDay && cw.sourceDay && cw.sourceDay !== targetDay) return;
       const trimmed = (cw?.word || '').trim();
-      if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
-        seenWords.add(trimmed.toLowerCase());
+      if (trimmed && !seenCandidates.has(trimmed.toLowerCase())) {
+        seenCandidates.add(trimmed.toLowerCase());
         const prof = profileWord(trimmed, {
           definitionEn: cw.definitionEn,
           translationPt: cw.translationPt,
           exampleSentence: cw.exampleSentence,
         });
-        rawWords.push({
+        candidateItems.push({
+          id: (cw as any).id,
           word: trimmed,
-          sourceActivityName: cw.sourceActivityName || 'Live Session',
+          source: (cw as any).source,
+          sourceActivityName: cw.sourceActivityName || 'Personal Dictionary',
           sourceDay: cw.sourceDay || targetDay || 'monday',
+          learnedAt: (cw as any).learnedAt,
+          practiceCount: (cw as any).practiceCount,
+          lastPracticedAt: (cw as any).lastPracticedAt,
           definitionEn: prof.definitionEn,
           translationPt: prof.translationPt,
           exampleSentence: prof.exampleSentenceEn,
@@ -344,17 +542,15 @@ export function generateWeeklyHomework(
     });
   }
 
-  // Days to inspect: ONLY targetDay if provided!
-  const daysToInspect: DayOfWeek[] = targetDay ? [targetDay] : DAYS_OF_WEEK;
-
-  for (const d of daysToInspect) {
+  // B. Words from routinesByDay
+  for (const d of DAYS_OF_WEEK) {
     const items = routinesByDay[d] || [];
     for (const item of items) {
       if (item.learnedWords && Array.isArray(item.learnedWords)) {
         for (const w of item.learnedWords) {
           const trimmed = (w || '').trim();
-          if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
-            seenWords.add(trimmed.toLowerCase());
+          if (trimmed && !seenCandidates.has(trimmed.toLowerCase())) {
+            seenCandidates.add(trimmed.toLowerCase());
             const lower = trimmed.toLowerCase();
             const dictMatch = ROUTINE_VOCAB_DICT[lower];
             const prof = profileWord(trimmed, dictMatch ? {
@@ -363,10 +559,12 @@ export function generateWeeklyHomework(
               exampleSentence: dictMatch.exampleSentence,
             } : undefined);
 
-            rawWords.push({
+            candidateItems.push({
               word: trimmed,
               sourceActivityName: item.activityName,
               sourceDay: d,
+              source: 'routine',
+              practiceCount: 0,
               definitionEn: prof.definitionEn,
               translationPt: prof.translationPt,
               exampleSentence: prof.exampleSentenceEn,
@@ -377,63 +575,8 @@ export function generateWeeklyHomework(
     }
   }
 
-  // 1.1 Proper Session Words Fallback: If targetDay has no words registered yet,
-  // fallback to the proper session words from the student's active week / routines
-  // rather than generating generic boilerplate exercises.
-  if (rawWords.length === 0 && targetDay) {
-    for (const d of DAYS_OF_WEEK) {
-      if (d === targetDay) continue;
-      const items = routinesByDay[d] || [];
-      for (const item of items) {
-        if (item.learnedWords && Array.isArray(item.learnedWords)) {
-          for (const w of item.learnedWords) {
-            const trimmed = (w || '').trim();
-            if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
-              seenWords.add(trimmed.toLowerCase());
-              const lower = trimmed.toLowerCase();
-              const dictMatch = ROUTINE_VOCAB_DICT[lower];
-              const prof = profileWord(trimmed, dictMatch ? {
-                definitionEn: dictMatch.definitionEn,
-                translationPt: dictMatch.translationPt,
-                exampleSentence: dictMatch.exampleSentence,
-              } : undefined);
-
-              rawWords.push({
-                word: trimmed,
-                sourceActivityName: `${item.activityName} (${DAY_LABELS_PT[d] || d})`,
-                sourceDay: d,
-                definitionEn: prof.definitionEn,
-                translationPt: prof.translationPt,
-                exampleSentence: prof.exampleSentenceEn,
-              });
-            }
-          }
-        }
-      }
-    }
-
-    if (Array.isArray(customWords)) {
-      customWords.forEach((cw) => {
-        const trimmed = (cw?.word || '').trim();
-        if (trimmed && !seenWords.has(trimmed.toLowerCase())) {
-          seenWords.add(trimmed.toLowerCase());
-          const prof = profileWord(trimmed, {
-            definitionEn: cw.definitionEn,
-            translationPt: cw.translationPt,
-            exampleSentence: cw.exampleSentence,
-          });
-          rawWords.push({
-            word: trimmed,
-            sourceActivityName: cw.sourceActivityName || 'Session Vocabulary',
-            sourceDay: cw.sourceDay || targetDay,
-            definitionEn: prof.definitionEn,
-            translationPt: prof.translationPt,
-            exampleSentence: prof.exampleSentenceEn,
-          });
-        }
-      });
-    }
-  }
+  // Phase 1B: Deterministic selection of <= 5 words according to priority rule
+  const rawWords: HomeworkVocabItem[] = buildDailyMemorizationQueue(candidateItems);
 
   const dayNamePt = targetDay ? DAY_LABELS_PT[targetDay] : '';
   const dayNameEn = targetDay ? DAY_LABELS_EN[targetDay] : '';
@@ -578,7 +721,7 @@ export function generateWeeklyHomeworkFromRoutines(params: {
   studentName?: string;
   studentLevel?: string;
   studentEmail?: string;
-  customWords?: Array<{ word: string; translationPt?: string; definitionEn?: string; exampleSentence?: string; sourceActivityName?: string; sourceDay?: DayOfWeek }>;
+  customWords?: Array<Partial<HomeworkVocabItem> & { word: string }>;
   targetDay?: DayOfWeek;
   activeStudyDays?: DayOfWeek[];
   weeklyCycle?: number;
@@ -612,14 +755,7 @@ export async function generateWeeklyHomeworkWithAi(params: {
   studentName?: string;
   studentLevel?: string;
   studentEmail?: string;
-  customWords?: Array<{
-    word: string;
-    translationPt?: string;
-    definitionEn?: string;
-    exampleSentence?: string;
-    sourceActivityName?: string;
-    sourceDay?: DayOfWeek;
-  }>;
+  customWords?: Array<Partial<HomeworkVocabItem> & { word: string }>;
   targetDay?: DayOfWeek;
   activeStudyDays?: DayOfWeek[];
   weeklyCycle?: number;
