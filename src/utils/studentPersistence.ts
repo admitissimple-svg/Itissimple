@@ -39,16 +39,30 @@ const inMemoryWeeklyChecksCache = new Map<string, Record<string, boolean>>();
 
 export { migrateLegacyLocalStorageToFirestore };
 
+/**
+ * Validates whether an identity represents an explicit canonical Firebase Auth UID.
+ * Rejects empty strings, emails, synthesized usr-* IDs, temporary prefixes, and placeholders.
+ */
+export function isValidCanonicalUid(uid?: string | null): boolean {
+  if (!uid || typeof uid !== 'string') return false;
+  const clean = uid.trim();
+  if (!clean) return false;
+  if (clean.includes('@')) return false;
+  if (clean.startsWith('usr-')) return false;
+  if (clean.startsWith('teacher-') || clean.startsWith('st-') || clean.startsWith('lesson-')) return false;
+  if (clean === 'user-default' || clean === 'anonymous_student' || clean === 'undefined' || clean === 'null') return false;
+  return true;
+}
+
 export function normalizeUid(rawId?: string | null, email?: string | null): string {
   const cleanRawId = (rawId || '').trim();
   const rawIsEmail = cleanRawId.includes('@');
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const currentAuthUid = auth?.currentUser?.uid || '';
+  const currentAuthEmail = (auth?.currentUser?.email || '').toLowerCase().trim();
 
-  // 1. Single source of truth: ALWAYS prioritize Firebase Auth UID (auth.currentUser.uid)
-  if (auth?.currentUser?.uid) {
-    return auth.currentUser.uid;
-  }
-
-  // 2. If a valid, non-placeholder, non-email UID was provided, use it
+  // 1. If an explicit valid canonical UID was provided, prioritize and return it directly.
+  // CRITICAL: An explicit valid UID must NEVER be overwritten by auth.currentUser.uid!
   if (
     cleanRawId &&
     !rawIsEmail &&
@@ -59,6 +73,16 @@ export function normalizeUid(rawId?: string | null, email?: string | null): stri
     cleanRawId !== 'null'
   ) {
     return cleanRawId;
+  }
+
+  // 2. Only prioritize Firebase Auth UID (auth.currentUser.uid) if:
+  // - No email was provided (assumed self-context), OR
+  // - The provided email explicitly matches the current authenticated user's email.
+  // This CRITICALLY prevents a logged-in Student's auth.currentUser.uid from being resolved as a Native Friend's UID!
+  if (currentAuthUid) {
+    if (!cleanEmail || (currentAuthEmail && cleanEmail === currentAuthEmail)) {
+      return currentAuthUid;
+    }
   }
 
   // Never fall back to email as document ID in Firestore
@@ -855,27 +879,72 @@ export async function scheduleLessonWithTransaction(params: ScheduleLessonTransa
   const { lesson, isTrialLesson } = params;
   const cleanStudentEmail = (lesson.studentEmail || '').toLowerCase().trim();
   const cleanTeacherEmail = (lesson.teacherEmail || '').toLowerCase().trim();
-  const studentUid = normalizeUid(lesson.studentUid, cleanStudentEmail);
-  const teacherUid =
-    normalizeUid(lesson.teacherUid, cleanTeacherEmail) ||
-    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
 
-  if (!studentUid) {
+  // Canonical Student UID resolution (explicit canonical UID, never manufactured from email)
+  const studentUid =
+    (lesson.studentUid && isValidCanonicalUid(lesson.studentUid) ? lesson.studentUid.trim() : '') ||
+    (auth?.currentUser?.uid && (!cleanStudentEmail || (auth.currentUser.email || '').toLowerCase().trim() === cleanStudentEmail)
+      ? auth.currentUser.uid
+      : '');
+
+  if (!studentUid || !isValidCanonicalUid(studentUid)) {
     return { success: false, error: 'Student UID missing' };
+  }
+
+  // Canonical Native Friend UID resolution: MUST be explicit canonical UID, NEVER derived from email or auth.currentUser
+  const teacherUid =
+    lesson.teacherUid && isValidCanonicalUid(lesson.teacherUid) ? lesson.teacherUid.trim() : '';
+
+  if (!teacherUid) {
+    return { success: false, error: 'Canonical Native Friend UID missing' };
+  }
+
+  // Auth Context Safety: Student and Native Friend cannot have the same UID
+  if (studentUid === teacherUid) {
+    return { success: false, error: 'Student UID and Native Friend UID cannot be identical' };
   }
 
   const nowIso = new Date().toISOString();
   const lessonRef = doc(db, 'lessons', lesson.id);
   const studentRef = doc(db, 'users', studentUid);
-  const teacherRef = teacherUid ? doc(db, 'users', teacherUid) : null;
+  const teacherRef = doc(db, 'users', teacherUid);
   const studentSubLessonRef = doc(db, 'users', studentUid, 'lessons', lesson.id);
 
   try {
     const result = await runTransaction(db, async (transaction) => {
       // 1. All transaction reads first
       const studentSnap = await transaction.get(studentRef);
-      const teacherSnap = teacherRef ? await transaction.get(teacherRef) : null;
+      const teacherSnap = await transaction.get(teacherRef);
       const lessonSnap = await transaction.get(lessonRef);
+
+      // Validate teacher account existence in users/{teacherUid}
+      if (!teacherSnap.exists()) {
+        throw new Error('Native Friend UID does not resolve to an existing user');
+      }
+
+      const teacherData = (teacherSnap.data() || {}) as Record<string, any>;
+
+      // Validate teacher role convention
+      const isTeacherRole =
+        teacherData.role === 'teacher' ||
+        teacherData.role === 'admin' ||
+        teacherData.isTeacher === true;
+
+      if (!isTeacherRole) {
+        throw new Error('User account is not a Native Friend');
+      }
+
+      // Validate teacher approval status
+      const isApproved =
+        teacherData.approvalStatus === 'approved' ||
+        teacherData.isApproved === true ||
+        teacherData.status === 'approved' ||
+        teacherData.approved === true ||
+        (teacherData.approvalStatus === undefined && teacherData.isApproved === undefined && teacherData.status === 'active');
+
+      if (!isApproved || teacherData.approvalStatus === 'rejected' || teacherData.approvalStatus === 'pending') {
+        throw new Error('Native Friend account is not approved');
+      }
 
       const studentData = studentSnap.exists() ? (studentSnap.data() as Partial<UserProfile>) : {};
       const currentContracted = Number(studentData.contractedLessons ?? 0);
@@ -896,10 +965,9 @@ export async function scheduleLessonWithTransaction(params: ScheduleLessonTransa
       }
 
       // Resolve authoritative teacher details from teacher user document if available
-      const teacherData = teacherSnap && teacherSnap.exists() ? teacherSnap.data() : null;
-      const effectiveTeacherName = lesson.teacherName || teacherData?.name || studentData.teacherName || null;
-      const effectiveTeacherEmail = cleanTeacherEmail || teacherData?.email || studentData.teacherEmail || null;
-      const effectiveTeacherMeet = lesson.meetLink || teacherData?.meetUrl || teacherData?.meetLink || '';
+      const effectiveTeacherName = lesson.teacherName || teacherData.name || studentData.teacherName || null;
+      const effectiveTeacherEmail = cleanTeacherEmail || teacherData.email || studentData.teacherEmail || null;
+      const effectiveTeacherMeet = lesson.meetLink || teacherData.meetUrl || teacherData.meetLink || '';
 
       const sanitizedLesson: LiveLesson = stampSchemaVersion({
         ...lesson,
@@ -907,7 +975,7 @@ export async function scheduleLessonWithTransaction(params: ScheduleLessonTransa
         studentUid,
         studentEmail: cleanStudentEmail,
         studentName: lesson.studentName || studentData.name || cleanStudentEmail.split('@')[0],
-        teacherUid: teacherUid || null,
+        teacherUid,
         teacherEmail: effectiveTeacherEmail,
         teacherName: effectiveTeacherName,
         meetLink: effectiveTeacherMeet || lesson.meetLink || '',
@@ -921,28 +989,26 @@ export async function scheduleLessonWithTransaction(params: ScheduleLessonTransa
       transaction.set(lessonRef, sanitizedLesson, { merge: true });
       transaction.set(studentSubLessonRef, sanitizedLesson, { merge: true });
 
-      // Student main document update with decremented balance and exact teacher ID binding
+      // Student main document update with decremented balance and canonical teacher UID binding
       const studentUpdate: Record<string, any> = stampSchemaVersion({
         contractedLessons: newContracted,
         availableLessons: newAvailable,
-        teacherUid: teacherUid || null,
+        teacherUid,
         teacherEmail: effectiveTeacherEmail,
         teacherName: effectiveTeacherName,
         teacherMeetUrl: effectiveTeacherMeet,
-        assignedNativeFriendUID: teacherUid || null,
-        nativeFriendUID: teacherUid || null,
+        assignedNativeFriendUID: teacherUid,
+        nativeFriendUID: teacherUid,
         enrollmentStatus: 'active',
         hasCompletedTrialLesson: isTrialLesson ? true : (studentData.hasCompletedTrialLesson ?? false),
         updatedAt: nowIso,
       });
       transaction.set(studentRef, studentUpdate, { merge: true });
 
-      // Teacher user doc update if teacher doc exists in `users`
-      if (teacherRef && teacherSnap && teacherSnap.exists()) {
-        const teacherSubLessonRef = doc(db, 'users', teacherUid, 'lessons', lesson.id);
-        transaction.set(teacherSubLessonRef, sanitizedLesson, { merge: true });
-        transaction.set(teacherRef, { updatedAt: nowIso }, { merge: true });
-      }
+      // Teacher user doc update
+      const teacherSubLessonRef = doc(db, 'users', teacherUid, 'lessons', lesson.id);
+      transaction.set(teacherSubLessonRef, sanitizedLesson, { merge: true });
+      transaction.set(teacherRef, { updatedAt: nowIso }, { merge: true });
 
       return {
         lesson: sanitizedLesson,
@@ -958,11 +1024,18 @@ export async function scheduleLessonWithTransaction(params: ScheduleLessonTransa
       remainingLessons: result.remainingLessons,
     };
   } catch (error) {
-    console.error('Error in scheduleLessonWithTransaction:', error);
-    handleFirestoreError(error, OperationType.WRITE, `lessons/${lesson.id}`);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error in scheduleLessonWithTransaction:', errorMsg);
+    if (
+      !errorMsg.includes('Native Friend UID does not resolve') &&
+      !errorMsg.includes('Native Friend account is not approved') &&
+      !errorMsg.includes('User account is not a Native Friend')
+    ) {
+      handleFirestoreError(error, OperationType.WRITE, `lessons/${lesson.id}`);
+    }
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMsg,
     };
   }
 }
@@ -993,14 +1066,31 @@ export async function purchasePackageWithTransaction(params: PurchasePackageTran
 
   const cleanStudentEmail = (params.studentEmail || '').toLowerCase().trim();
   const cleanTeacherEmail = (params.teacherEmail || '').toLowerCase().trim();
-  const studentUid = normalizeUid(params.studentUid, cleanStudentEmail);
+
+  const studentUid =
+    (params.studentUid && isValidCanonicalUid(params.studentUid) ? params.studentUid.trim() : '') ||
+    (auth?.currentUser?.uid && (!cleanStudentEmail || (auth.currentUser.email || '').toLowerCase().trim() === cleanStudentEmail)
+      ? auth.currentUser.uid
+      : '');
+
+  if (!studentUid || !isValidCanonicalUid(studentUid)) {
+    return { success: false, error: 'Student UID missing' };
+  }
+
+  // Canonical Native Friend UID: MUST be explicit canonical UID, NEVER derived from email or auth.currentUser
   const teacherUid =
-    params.teacherUid ||
-    normalizeUid(null, cleanTeacherEmail) ||
-    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+    params.teacherUid && isValidCanonicalUid(params.teacherUid) ? params.teacherUid.trim() : '';
+
+  if (!teacherUid) {
+    return { success: false, error: 'Canonical Native Friend UID missing' };
+  }
+
+  if (studentUid === teacherUid) {
+    return { success: false, error: 'Student UID and Native Friend UID cannot be identical' };
+  }
 
   const studentRef = doc(db, 'users', studentUid);
-  const teacherRef = teacherUid ? doc(db, 'users', teacherUid) : null;
+  const teacherRef = doc(db, 'users', teacherUid);
   const nowIso = new Date().toISOString();
 
   // Align weekly live lesson target with purchased frequency (4 -> 1x, 8 -> 2x, 12 -> 3x)
@@ -1013,7 +1103,33 @@ export async function purchasePackageWithTransaction(params: PurchasePackageTran
   try {
     const result = await runTransaction(db, async (transaction) => {
       const studentSnap = await transaction.get(studentRef);
-      const teacherSnap = teacherRef ? await transaction.get(teacherRef) : null;
+      const teacherSnap = await transaction.get(teacherRef);
+
+      // Validate teacher account existence in users/{teacherUid}
+      if (!teacherSnap.exists()) {
+        throw new Error('Native Friend UID does not resolve to an existing user');
+      }
+
+      const teacherData = (teacherSnap.data() || {}) as Record<string, any>;
+      const isTeacherRole =
+        teacherData.role === 'teacher' ||
+        teacherData.role === 'admin' ||
+        teacherData.isTeacher === true;
+
+      if (!isTeacherRole) {
+        throw new Error('User account is not a Native Friend');
+      }
+
+      const isApproved =
+        teacherData.approvalStatus === 'approved' ||
+        teacherData.isApproved === true ||
+        teacherData.status === 'approved' ||
+        teacherData.approved === true ||
+        (teacherData.approvalStatus === undefined && teacherData.isApproved === undefined && teacherData.status === 'active');
+
+      if (!isApproved || teacherData.approvalStatus === 'rejected' || teacherData.approvalStatus === 'pending') {
+        throw new Error('Native Friend account is not approved');
+      }
 
       const studentData = studentSnap.exists() ? (studentSnap.data() as Partial<UserProfile>) : {};
       const currentContracted = Number(studentData.contractedLessons ?? 0);
@@ -1026,11 +1142,11 @@ export async function purchasePackageWithTransaction(params: PurchasePackageTran
       const studentUpdate: Record<string, any> = stampSchemaVersion({
         contractedLessons: newContracted,
         availableLessons: newAvailable,
-        teacherUid: teacherUid || studentData.teacherUid || null,
-        teacherEmail: cleanTeacherEmail,
-        teacherName: params.teacherName,
-        assignedNativeFriendUID: teacherUid || studentData.assignedNativeFriendUID || null,
-        nativeFriendUID: teacherUid || studentData.nativeFriendUID || null,
+        teacherUid,
+        teacherEmail: cleanTeacherEmail || teacherData.email || '',
+        teacherName: params.teacherName || teacherData.name || '',
+        assignedNativeFriendUID: teacherUid,
+        nativeFriendUID: teacherUid,
         enrollmentStatus: 'active',
         weeklyNativeLessonsTarget: newWeeklyTarget,
         subscriptionType: 'package',
@@ -1038,10 +1154,7 @@ export async function purchasePackageWithTransaction(params: PurchasePackageTran
       });
 
       transaction.set(studentRef, studentUpdate, { merge: true });
-
-      if (teacherRef && teacherSnap && teacherSnap.exists()) {
-        transaction.set(teacherRef, { updatedAt: nowIso }, { merge: true });
-      }
+      transaction.set(teacherRef, { updatedAt: nowIso }, { merge: true });
 
       return {
         contractedLessons: newContracted,
@@ -1055,11 +1168,18 @@ export async function purchasePackageWithTransaction(params: PurchasePackageTran
       availableLessons: result.availableLessons,
     };
   } catch (error) {
-    console.error('Error in purchasePackageWithTransaction:', error);
-    handleFirestoreError(error, OperationType.WRITE, `users/${studentUid}`);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error in purchasePackageWithTransaction:', errorMsg);
+    if (
+      !errorMsg.includes('Native Friend UID does not resolve') &&
+      !errorMsg.includes('Native Friend account is not approved') &&
+      !errorMsg.includes('User account is not a Native Friend')
+    ) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${studentUid}`);
+    }
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMsg,
     };
   }
 }
@@ -1342,34 +1462,51 @@ export async function saveStudentNativeFriendToFirestore(
   if (!db) return false;
   const cleanEmail = (studentEmail || '').toLowerCase().trim();
   const cleanUid = normalizeUid(studentUid, cleanEmail);
-  if (!cleanUid) return false;
+  if (!cleanUid) {
+    console.error('[Firestore Error] Student UID missing');
+    return false;
+  }
+
+  // Resolve canonical Native Friend UID strictly from explicit UID fields - NEVER manufacture from email!
+  const explicitTeacherUid =
+    (teacherData?.teacherUid && isValidCanonicalUid(teacherData.teacherUid) ? teacherData.teacherUid.trim() : null) ||
+    (teacherData?.assignedNativeFriendUID && isValidCanonicalUid(teacherData.assignedNativeFriendUID) ? teacherData.assignedNativeFriendUID.trim() : null) ||
+    (teacherData?.nativeFriendUID && isValidCanonicalUid(teacherData.nativeFriendUID) ? teacherData.nativeFriendUID.trim() : null);
+
+  const isBecomingActive = teacherData?.enrollmentStatus === 'active';
+
+  // Business rule: Every active Student must be associated with a real, existing canonical Native Friend UID.
+  // If enrollmentStatus is becoming "active" and no canonical Native Friend UID is supplied, reject safely.
+  if (isBecomingActive && !explicitTeacherUid) {
+    console.error('[Firestore Error] Canonical Native Friend UID missing for active enrollment');
+    return false;
+  }
+
+  // Auth Context Safety: Student UID and Native Friend UID must never be identical
+  if (explicitTeacherUid && explicitTeacherUid === cleanUid) {
+    console.error('[Firestore Error] Student UID and Native Friend UID cannot be identical');
+    return false;
+  }
 
   const payload: Record<string, any> = {
     updatedAt: new Date().toISOString(),
   };
 
   if (teacherData?.teacherEmail !== undefined) {
-    payload.teacherEmail = teacherData.teacherEmail;
+    payload.teacherEmail = teacherData.teacherEmail ? teacherData.teacherEmail.trim().toLowerCase() : null;
   }
   if (teacherData?.teacherName !== undefined) {
-    payload.teacherName = teacherData.teacherName;
+    payload.teacherName = teacherData.teacherName ? teacherData.teacherName.trim() : null;
   }
 
-  const cleanTeacherEmail = (teacherData?.teacherEmail || '').toLowerCase().trim();
-  const cleanTeacherUid =
-    teacherData?.teacherUid ||
-    teacherData?.assignedNativeFriendUID ||
-    teacherData?.nativeFriendUID ||
-    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
-
-  if (cleanTeacherUid) {
-    payload.teacherUid = cleanTeacherUid;
-    payload.assignedNativeFriendUID = cleanTeacherUid;
-    payload.nativeFriendUID = cleanTeacherUid;
-  } else if (teacherData?.teacherUid !== undefined) {
-    payload.teacherUid = teacherData.teacherUid;
-    payload.assignedNativeFriendUID = teacherData.assignedNativeFriendUID || teacherData.teacherUid;
-    payload.nativeFriendUID = teacherData.nativeFriendUID || teacherData.teacherUid;
+  if (explicitTeacherUid) {
+    payload.teacherUid = explicitTeacherUid;
+    payload.assignedNativeFriendUID = explicitTeacherUid;
+    payload.nativeFriendUID = explicitTeacherUid;
+  } else if (teacherData?.enrollmentStatus === 'cancelled' || teacherData?.teacherUid === null) {
+    payload.teacherUid = null;
+    payload.assignedNativeFriendUID = null;
+    payload.nativeFriendUID = null;
   }
 
   if (teacherData?.enrollmentStatus !== undefined) {
@@ -1399,15 +1536,30 @@ export async function saveStudentProfileToFirestore(
   const db = getDb();
   if (!db) return false;
   const cleanEmail = (profile.email || studentEmail || '').toLowerCase().trim();
-  const cleanUid = auth?.currentUser?.uid || normalizeUid(studentUid, cleanEmail);
+  const cleanUid = normalizeUid(studentUid, cleanEmail);
   if (!cleanUid) return false;
 
   const cleanTeacherEmail = (profile.teacherEmail || '').toLowerCase().trim();
-  const cleanTeacherUid =
-    profile.teacherUid ||
-    profile.assignedNativeFriendUID ||
-    profile.nativeFriendUID ||
-    (cleanTeacherEmail ? `usr-${cleanTeacherEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
+  
+  // Resolve canonical Native Friend UID strictly from explicit UID fields - NEVER manufacture from email!
+  const explicitTeacherUid =
+    (profile.teacherUid && isValidCanonicalUid(profile.teacherUid) ? profile.teacherUid.trim() : null) ||
+    (profile.assignedNativeFriendUID && isValidCanonicalUid(profile.assignedNativeFriendUID) ? profile.assignedNativeFriendUID.trim() : null) ||
+    (profile.nativeFriendUID && isValidCanonicalUid(profile.nativeFriendUID) ? profile.nativeFriendUID.trim() : null);
+
+  const isTeacherAssignment =
+    profile.teacherEmail !== undefined || profile.teacherName !== undefined || profile.teacherUid !== undefined;
+
+  // For NEW active assignments, require a canonical Native Friend UID
+  if (profile.enrollmentStatus === 'active' && isTeacherAssignment && !explicitTeacherUid) {
+    console.error('[Firestore Error] Canonical Native Friend UID missing for active student assignment');
+    return false;
+  }
+
+  if (explicitTeacherUid && explicitTeacherUid === cleanUid) {
+    console.error('[Firestore Error] Student UID and Native Friend UID cannot be identical');
+    return false;
+  }
 
   const sanitized = JSON.parse(JSON.stringify(profile));
   const payload: Record<string, any> = {
@@ -1421,26 +1573,33 @@ export async function saveStudentProfileToFirestore(
     payload.email = cleanEmail || sanitized.email;
   }
   if (profile.teacherEmail !== undefined) {
-    payload.teacherEmail = profile.teacherEmail;
+    payload.teacherEmail = cleanTeacherEmail || null;
   }
   if (profile.teacherName !== undefined) {
-    payload.teacherName = profile.teacherName;
+    payload.teacherName = profile.teacherName ? profile.teacherName.trim() : null;
   }
-  if (profile.teacherUid !== undefined) {
-    payload.teacherUid = profile.teacherUid;
-  } else if (cleanTeacherUid) {
-    payload.teacherUid = cleanTeacherUid;
+
+  if (explicitTeacherUid) {
+    payload.teacherUid = explicitTeacherUid;
+    payload.assignedNativeFriendUID = explicitTeacherUid;
+    payload.nativeFriendUID = explicitTeacherUid;
+  } else if (profile.enrollmentStatus === 'cancelled' || profile.teacherUid === null) {
+    payload.teacherUid = null;
+    payload.assignedNativeFriendUID = null;
+    payload.nativeFriendUID = null;
+  } else {
+    // Strip non-canonical teacher UIDs from new payload to prevent persisting manufactured UIDs
+    if (payload.teacherUid && !isValidCanonicalUid(payload.teacherUid)) {
+      delete payload.teacherUid;
+    }
+    if (payload.assignedNativeFriendUID && !isValidCanonicalUid(payload.assignedNativeFriendUID)) {
+      delete payload.assignedNativeFriendUID;
+    }
+    if (payload.nativeFriendUID && !isValidCanonicalUid(payload.nativeFriendUID)) {
+      delete payload.nativeFriendUID;
+    }
   }
-  if (profile.assignedNativeFriendUID !== undefined) {
-    payload.assignedNativeFriendUID = profile.assignedNativeFriendUID;
-  } else if (cleanTeacherUid) {
-    payload.assignedNativeFriendUID = cleanTeacherUid;
-  }
-  if (profile.nativeFriendUID !== undefined) {
-    payload.nativeFriendUID = profile.nativeFriendUID;
-  } else if (cleanTeacherUid) {
-    payload.nativeFriendUID = cleanTeacherUid;
-  }
+
   if (profile.enrollmentStatus !== undefined) {
     payload.enrollmentStatus = profile.enrollmentStatus;
   }
