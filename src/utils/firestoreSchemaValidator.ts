@@ -81,6 +81,8 @@ export const SCHEMA_DEFINITIONS: Record<string, SchemaValidationRule> = {
       studentUid: 'string',
       updatedAt: 'string',
       notFound: 'boolean',
+      practiceCount: 'number',
+      lastPracticedAt: 'string',
       _schemaVersion: 'number',
     },
     immutableFields: ['id'],
