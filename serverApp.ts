@@ -5523,8 +5523,7 @@ app.post(['/api/lessons', '/api/live-lessons'], async (req, res) => {
       const foundTutor = (db.tutorsList || []).find((t: any) => (t.email || '').toLowerCase().trim() === tEmail)
         || (allUsers as any[]).find((u: any) => (u.email || '').toLowerCase().trim() === tEmail)
         || (db.teachers || []).find((t: any) => (t.email || '').toLowerCase().trim() === tEmail);
-      newLesson.teacherUid = foundTutor?.uid || foundTutor?.id || (tEmail ? `usr-${tEmail.replace(/[^a-zA-Z0-9]/g, '-')}` : '');
-    }
+        newLesson.teacherUid = foundTutor?.uid || foundTutor?.id || '';    }
 
     // Conflict Check (Strict Anti-Duplicity Rule - Individualized by teacher and student UIDs/emails)
     const proposedTeacher = (newLesson.teacherEmail || newLesson.tutorEmail || '').toLowerCase().trim();
