@@ -30,6 +30,7 @@ import {
   DEFAULT_STUDENT_TIMEZONE,
   DEFAULT_TEACHER_TIMEZONE,
 } from '../utils/timezone';
+import { isValidCanonicalUid } from '../utils/studentPersistence';
 
 interface LiveLessonScheduleModalProps {
   isOpen: boolean;
@@ -283,13 +284,12 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   };
 
   const effectiveTeacherUid = useMemo(() => {
-    if ((selectedTeacherObj as any)?.uid) return (selectedTeacherObj as any).uid;
-    if ((selectedTeacherObj as any)?.id && !(selectedTeacherObj as any).id.startsWith('teacher-')) return (selectedTeacherObj as any).id;
-    if (selectedTeacherEmail) {
-      return `usr-${selectedTeacherEmail.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-')}`;
-    }
-    return `usr-teacher-${Date.now()}`;
-  }, [selectedTeacherObj, selectedTeacherEmail]);
+    if ((selectedTeacherObj as any)?.uid && isValidCanonicalUid((selectedTeacherObj as any).uid)) return (selectedTeacherObj as any).uid;
+    if ((selectedTeacherObj as any)?.id && isValidCanonicalUid((selectedTeacherObj as any).id)) return (selectedTeacherObj as any).id;
+    if (matchedTutor?.uid && isValidCanonicalUid(matchedTutor.uid)) return matchedTutor.uid;
+    if (matchedTutor?.id && isValidCanonicalUid(matchedTutor.id)) return matchedTutor.id;
+    return '';
+  }, [selectedTeacherObj, matchedTutor]);
 
   const effectiveStudentEmail = (
     (isStudentBookingMode && candidateStudentEmail)
@@ -319,21 +319,21 @@ export const LiveLessonScheduleModal: React.FC<LiveLessonScheduleModalProps> = (
   }, [initialStudentName, userProfile, currentAccount, effectiveStudentEmail, matchedStudent]);
 
   const effectiveStudentUid = useMemo(() => {
-    if (initialStudentUid && initialStudentUid.trim() !== '') return initialStudentUid.trim();
+    if (initialStudentUid && isValidCanonicalUid(initialStudentUid)) return initialStudentUid.trim();
     if (userProfile?.email && userProfile.email.toLowerCase().trim() === effectiveStudentEmail) {
-      if (userProfile.id) return userProfile.id;
-      if ((userProfile as any).uid) return (userProfile as any).uid;
+      if (userProfile.id && isValidCanonicalUid(userProfile.id)) return userProfile.id;
+      if ((userProfile as any).uid && isValidCanonicalUid((userProfile as any).uid)) return (userProfile as any).uid;
     }
-    if (currentAccount?.role === 'student' && currentAccount?.uid) {
+    if (currentAccount?.role === 'student' && currentAccount?.uid && isValidCanonicalUid(currentAccount.uid)) {
       return currentAccount.uid;
     }
-    if ((matchedStudent as any)?.uid) {
+    if ((matchedStudent as any)?.uid && isValidCanonicalUid((matchedStudent as any).uid)) {
       return (matchedStudent as any).uid;
     }
-    if (effectiveStudentEmail) {
-      return `usr-${effectiveStudentEmail.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    if (matchedStudent?.id && isValidCanonicalUid(matchedStudent.id)) {
+      return matchedStudent.id;
     }
-    return `usr-student-${Date.now()}`;
+    return '';
   }, [initialStudentUid, userProfile, currentAccount, effectiveStudentEmail, matchedStudent]);
 
   const selectedStudentObj = {
