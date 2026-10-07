@@ -66,7 +66,7 @@ import {
   profileWord,
 } from './src/utils/pedagogicalStorySynthesizer';
 import { analyzeSentenceGrammarDeterministic } from './src/utils/writingChecker';
-
+import { firebaseAuthMiddleware } from './src/middleware/firebaseAuth';
 const rawEnvModel = (process.env.GEMINI_MODEL || '').trim();
 const isInvalidEnvModel = !rawEnvModel || rawEnvModel.includes('1.5') || rawEnvModel.includes('2.0') || rawEnvModel.startsWith('emini');
 const GEMINI_TEXT_MODEL = isInvalidEnvModel ? 'gemini-3.6-flash' : rawEnvModel;
@@ -917,6 +917,20 @@ async function initCloudPersistence() {
 // 1. Health Endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Phase 1C-A: backend Firebase ID token verification and trusted role inspection
+app.get('/api/auth/verify-session', firebaseAuthMiddleware, (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ authenticated: false, error: 'Unauthorized' });
+  }
+
+  return res.json({
+    authenticated: true,
+    uid: req.user.uid,
+    emailVerified: req.user.email_verified,
+    role: req.user.role,
+  });
 });
 
 // 1.1 Auth Endpoints (Preply-style Login & Registration)
